@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.friday-agent-os.dev/v1/artifact/artifact.json",
+  "title": "Artifact",
+  "description": "Metadata for a produced output or referenced external resource. Mirrors friday.domain.artifact.Artifact.",
+  "type": "object",
+  "properties": {
+    "id": { "$ref": "../definitions/identifier.json" },
+    "run_id": { "$ref": "../definitions/identifier.json" },
+    "step_id": {
+      "anyOf": [
+        { "$ref": "../definitions/identifier.json" },
+        { "type": "null" }
+      ]
+    },
+    "kind": {
+      "enum": ["text", "file", "directory", "url", "json", "image", "other"]
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "media_type": { "type": "string" },
+    "location": { "type": "string", "minLength": 1 },
+    "created_at": { "$ref": "../definitions/timestamp.json" },
+    "size": {
+      "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }]
+    },
+    "checksum": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+    "metadata": { "$ref": "../definitions/json_value.json" }
+  },
+  "required": [
+    "id",
+    "run_id",
+    "step_id",
+    "kind",
+    "name",
+    "media_type",
+    "location",
+    "created_at",
+    "size",
+    "checksum",
+    "metadata"
+  ],
+  "additionalProperties": false
+}

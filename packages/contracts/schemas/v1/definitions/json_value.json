@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.friday-agent-os.dev/v1/definitions/json_value.json",
+  "title": "JsonValue",
+  "description": "Any JSON-compatible value: null, boolean, number, string, an array of JsonValue, or an object with string keys and JsonValue values. Mirrors friday.domain.json_value.ensure_json_value's contract.",
+  "anyOf": [
+    { "type": "null" },
+    { "type": "boolean" },
+    { "type": "number" },
+    { "type": "string" },
+    { "type": "array", "items": { "$ref": "#" } },
+    { "type": "object", "additionalProperties": { "$ref": "#" } }
+  ]
+}

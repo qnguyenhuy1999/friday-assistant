@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.friday-agent-os.dev/v1/run/run.json",
+  "title": "Run",
+  "description": "One execution attempt for a Task. Mirrors friday.domain.run.Run.",
+  "type": "object",
+  "properties": {
+    "id": { "$ref": "../definitions/identifier.json" },
+    "task_id": { "$ref": "../definitions/identifier.json" },
+    "status": {
+      "enum": [
+        "queued",
+        "running",
+        "waiting_for_approval",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "created_at": { "$ref": "../definitions/timestamp.json" },
+    "started_at": {
+      "anyOf": [{ "$ref": "../definitions/timestamp.json" }, { "type": "null" }]
+    },
+    "ended_at": {
+      "anyOf": [{ "$ref": "../definitions/timestamp.json" }, { "type": "null" }]
+    },
+    "failure": {
+      "anyOf": [{ "$ref": "../definitions/failure.json" }, { "type": "null" }]
+    },
+    "approval_request_id": {
+      "anyOf": [
+        { "$ref": "../definitions/identifier.json" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "task_id",
+    "status",
+    "created_at",
+    "started_at",
+    "ended_at",
+    "failure",
+    "approval_request_id"
+  ],
+  "additionalProperties": false
+}

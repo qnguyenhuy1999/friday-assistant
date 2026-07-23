@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.friday-agent-os.dev/v1/event/run_event.json",
+  "title": "RunEvent",
+  "description": "An append-only fact emitted during Run execution, ordered by sequence. Mirrors friday.domain.event.RunEvent.",
+  "type": "object",
+  "properties": {
+    "id": { "$ref": "../definitions/identifier.json" },
+    "run_id": { "$ref": "../definitions/identifier.json" },
+    "type": {
+      "enum": [
+        "run_created",
+        "run_started",
+        "run_waiting_for_approval",
+        "run_resumed",
+        "run_succeeded",
+        "run_failed",
+        "run_cancelled",
+        "step_created",
+        "step_started",
+        "step_succeeded",
+        "step_failed",
+        "approval_requested",
+        "approval_resolved",
+        "tool_invocation_requested",
+        "tool_invocation_started",
+        "tool_invocation_succeeded",
+        "tool_invocation_failed",
+        "artifact_created"
+      ]
+    },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurred_at": { "$ref": "../definitions/timestamp.json" },
+    "payload": { "$ref": "../definitions/json_value.json" },
+    "step_id": {
+      "anyOf": [
+        { "$ref": "../definitions/identifier.json" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "run_id",
+    "type",
+    "sequence",
+    "occurred_at",
+    "payload",
+    "step_id"
+  ],
+  "additionalProperties": false
+}

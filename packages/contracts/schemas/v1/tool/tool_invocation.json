@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.friday-agent-os.dev/v1/tool/tool_invocation.json",
+  "title": "ToolInvocation",
+  "description": "An attempt to invoke a tool or external capability. Mirrors friday.domain.tool.ToolInvocation.",
+  "type": "object",
+  "properties": {
+    "id": { "$ref": "../definitions/identifier.json" },
+    "run_id": { "$ref": "../definitions/identifier.json" },
+    "step_id": {
+      "anyOf": [
+        { "$ref": "../definitions/identifier.json" },
+        { "type": "null" }
+      ]
+    },
+    "tool_name": { "type": "string", "minLength": 1 },
+    "requested_input": { "$ref": "../definitions/json_value.json" },
+    "status": {
+      "enum": ["requested", "running", "succeeded", "failed", "cancelled"]
+    },
+    "requested_at": { "$ref": "../definitions/timestamp.json" },
+    "approval_request_id": {
+      "anyOf": [
+        { "$ref": "../definitions/identifier.json" },
+        { "type": "null" }
+      ]
+    },
+    "started_at": {
+      "anyOf": [{ "$ref": "../definitions/timestamp.json" }, { "type": "null" }]
+    },
+    "completed_at": {
+      "anyOf": [{ "$ref": "../definitions/timestamp.json" }, { "type": "null" }]
+    },
+    "output": { "$ref": "../definitions/json_value.json" },
+    "output_set": { "type": "boolean" },
+    "failure": {
+      "anyOf": [{ "$ref": "../definitions/failure.json" }, { "type": "null" }]
+    }
+  },
+  "required": [
+    "id",
+    "run_id",
+    "step_id",
+    "tool_name",
+    "requested_input",
+    "status",
+    "requested_at",
+    "approval_request_id",
+    "started_at",
+    "completed_at",
+    "output",
+    "output_set",
+    "failure"
+  ],
+  "additionalProperties": false
+}

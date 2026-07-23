@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.friday-agent-os.dev/v1/definitions/identifier.json",
+  "title": "Identifier",
+  "description": "A canonical UUID-string identifier, shared shape for every domain identifier type (TaskId, RunId, ...). Wire-level identity of which entity an identifier names is carried by context (the field it appears in), not by this schema.",
+  "type": "string",
+  "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+}

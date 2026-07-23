@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.friday-agent-os.dev/v1/definitions/failure.json",
+  "title": "Failure",
+  "description": "A structured failure record, shared by every entity that can fail. Mirrors friday.domain.failure.Failure.",
+  "type": "object",
+  "properties": {
+    "code": { "type": "string", "minLength": 1 },
+    "message": { "type": "string", "minLength": 1 },
+    "retryable": { "type": "boolean" },
+    "cause": {
+      "enum": [
+        "validation",
+        "tool",
+        "runtime",
+        "approval",
+        "cancelled",
+        "timeout",
+        "internal"
+      ]
+    },
+    "details": { "$ref": "json_value.json" }
+  },
+  "required": ["code", "message", "retryable", "cause", "details"],
+  "additionalProperties": false
+}

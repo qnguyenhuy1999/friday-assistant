@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.friday-agent-os.dev/v1/step/run_step.json",
+  "title": "RunStep",
+  "description": "An ordered logical unit of execution within a Run. Mirrors friday.domain.step.RunStep.",
+  "type": "object",
+  "properties": {
+    "id": { "$ref": "../definitions/identifier.json" },
+    "run_id": { "$ref": "../definitions/identifier.json" },
+    "name": { "type": "string", "minLength": 1 },
+    "position": { "type": "integer", "minimum": 0 },
+    "status": {
+      "enum": [
+        "pending",
+        "running",
+        "waiting_for_approval",
+        "succeeded",
+        "failed",
+        "skipped",
+        "cancelled"
+      ]
+    },
+    "created_at": { "$ref": "../definitions/timestamp.json" },
+    "started_at": {
+      "anyOf": [{ "$ref": "../definitions/timestamp.json" }, { "type": "null" }]
+    },
+    "ended_at": {
+      "anyOf": [{ "$ref": "../definitions/timestamp.json" }, { "type": "null" }]
+    },
+    "failure": {
+      "anyOf": [{ "$ref": "../definitions/failure.json" }, { "type": "null" }]
+    },
+    "approval_request_id": {
+      "anyOf": [
+        { "$ref": "../definitions/identifier.json" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "run_id",
+    "name",
+    "position",
+    "status",
+    "created_at",
+    "started_at",
+    "ended_at",
+    "failure",
+    "approval_request_id"
+  ],
+  "additionalProperties": false
+}

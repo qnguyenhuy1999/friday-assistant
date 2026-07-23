@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.friday-agent-os.dev/v1/definitions/timestamp.json",
+  "title": "Timestamp",
+  "description": "An RFC 3339 date-time string normalized to UTC. The domain rejects naive datetimes and converts every aware datetime to UTC before it can cross the wire, so the offset here is always 'Z' or '+00:00'.",
+  "type": "string",
+  "format": "date-time",
+  "pattern": "(Z|\\+00:00)$"
+}

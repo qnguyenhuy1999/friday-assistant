@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.friday-agent-os.dev/v1/approval/approval_request.json",
+  "title": "ApprovalRequest",
+  "description": "A pending or resolved request for human authorization. Mirrors friday.domain.approval.ApprovalRequest.",
+  "type": "object",
+  "properties": {
+    "id": { "$ref": "../definitions/identifier.json" },
+    "run_id": { "$ref": "../definitions/identifier.json" },
+    "step_id": {
+      "anyOf": [
+        { "$ref": "../definitions/identifier.json" },
+        { "type": "null" }
+      ]
+    },
+    "category": {
+      "enum": [
+        "tool_execution",
+        "filesystem_write",
+        "network_access",
+        "computer_use",
+        "other"
+      ]
+    },
+    "summary": { "type": "string", "minLength": 1 },
+    "reason": { "type": "string" },
+    "requested_action": { "type": "string", "minLength": 1 },
+    "requested_input": { "$ref": "../definitions/json_value.json" },
+    "status": {
+      "enum": ["pending", "approved", "rejected", "cancelled", "expired"]
+    },
+    "requested_at": { "$ref": "../definitions/timestamp.json" },
+    "resolved_at": {
+      "anyOf": [{ "$ref": "../definitions/timestamp.json" }, { "type": "null" }]
+    },
+    "resolution_note": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+    "resolver": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+  },
+  "required": [
+    "id",
+    "run_id",
+    "step_id",
+    "category",
+    "summary",
+    "reason",
+    "requested_action",
+    "requested_input",
+    "status",
+    "requested_at",
+    "resolved_at",
+    "resolution_note",
+    "resolver"
+  ],
+  "additionalProperties": false
+}

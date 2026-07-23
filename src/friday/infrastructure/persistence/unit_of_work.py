@@ -90,19 +90,19 @@ class SqlAlchemyUnitOfWork:
             self._session.commit()
         except StaleDataError as exc:
             self._rollback_quietly()
-            raise ConcurrencyConflict(str(exc)) from exc
+            raise ConcurrencyConflict("commit lost an optimistic-concurrency race") from exc
         except IntegrityError as exc:
             self._rollback_quietly()
-            raise EntityConflict(str(exc)) from exc
+            raise EntityConflict("commit violated a uniqueness or state constraint") from exc
         except (OperationalError, SQLAlchemyError) as exc:
             self._rollback_quietly()
-            raise TransactionFailure(str(exc)) from exc
+            raise TransactionFailure("commit failed") from exc
 
     def rollback(self) -> None:
         try:
             self._session.rollback()
         except SQLAlchemyError as exc:
-            raise TransactionFailure(str(exc)) from exc
+            raise TransactionFailure("rollback failed") from exc
 
     def _rollback_quietly(self) -> None:
         with contextlib.suppress(SQLAlchemyError):

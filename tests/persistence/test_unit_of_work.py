@@ -92,6 +92,28 @@ def test_commit_failure_raises_transaction_failure_and_rolls_back(
         assert new_uow.tasks.get(task.id) is None
 
 
+def test_commit_failure_message_excludes_raw_db_detail(
+    session_factory: sessionmaker[Session],
+) -> None:
+    task = _task()
+    with SqlAlchemyUnitOfWork(session_factory()) as uow:
+        uow.tasks.add(task)
+
+        def _broken_commit() -> None:
+            raise OperationalError(
+                "INSERT INTO tasks (id) VALUES (?)", {"id": "secret-value"}, Exception("disk full")
+            )
+
+        uow._session.commit = _broken_commit  # type: ignore[method-assign]
+        with pytest.raises(TransactionFailure) as exc_info:
+            uow.commit()
+
+    message = str(exc_info.value)
+    assert "disk full" not in message
+    assert "INSERT INTO" not in message
+    assert "secret-value" not in message
+
+
 def test_exit_closes_the_session(session_factory: sessionmaker[Session]) -> None:
     with SqlAlchemyUnitOfWork(session_factory()) as uow:
         session = uow.tasks._session

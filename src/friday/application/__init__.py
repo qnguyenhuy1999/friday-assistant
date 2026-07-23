@@ -5,6 +5,7 @@ May import friday.domain. Must not import friday.infrastructure or any apps.* mo
 
 from __future__ import annotations
 
+from friday.application.commands import CreateTaskCommand, StartRunCommand
 from friday.application.errors import (
     ApplicationError,
     ConcurrencyConflict,
@@ -25,6 +26,7 @@ from friday.application.ports import (
     UnitOfWork,
     UnitOfWorkFactory,
 )
+from friday.application.results import CreateTaskResult, StartRunResult
 
 __all__ = [
     "ApplicationError",
@@ -32,11 +34,15 @@ __all__ = [
     "ArtifactRepository",
     "Clock",
     "ConcurrencyConflict",
+    "CreateTaskCommand",
+    "CreateTaskResult",
     "EntityConflict",
     "RunEventStore",
     "RunNotFound",
     "RunRepository",
     "RunStepRepository",
+    "StartRunCommand",
+    "StartRunResult",
     "TaskNotFound",
     "TaskRepository",
     "ToolInvocationRepository",

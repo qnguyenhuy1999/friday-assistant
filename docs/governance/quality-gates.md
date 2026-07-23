@@ -85,13 +85,18 @@ implemented.
 ## Python Architecture
 
 - **Purpose:** enforce `domain <- application <- infrastructure` import
-  direction.
+  direction, and keep `friday.domain` free of any third-party dependency
+  (Pydantic, `jsonschema`, an ORM, ...).
 - **Implementation:** `tests/architecture/test_python_boundaries.py`
-  (`ast`-based import scan) and
-  `tests/policy/test_repository_policy.py::test_domain_layers_contain_only_init_modules`
-  (structural proxy for "no real domain/contract model exists yet").
-- **Command:** `just architecture-check` (boundaries) /
-  `just policy-check` (structural proxy).
+  (`ast`-based import scan) —
+  `test_domain_has_no_outward_dependency` / `test_application_depends_only_on_domain`
+  / `test_infrastructure_does_not_depend_on_apps` enforce layer direction;
+  `test_domain_uses_only_standard_library` enforces the stdlib-only rule.
+  Phase 3's `test_domain_layers_contain_only_init_modules` (a structural
+  proxy for "no real domain model exists yet") was deleted in Phase 4 once
+  real domain entities were introduced — see
+  [domain-model.md](../architecture/domain-model.md).
+- **Command:** `just architecture-check`.
 - **Runs:** local, pre-commit (default stage), CI.
 
 ## TypeScript Architecture

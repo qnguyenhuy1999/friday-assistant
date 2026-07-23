@@ -12,6 +12,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Auto-generated planning documents embed illustrative Markdown-link syntax
+# inside fenced code blocks (as example content, not real prose links), so
+# they're excluded here the same way they're excluded from markdownlint.
+EXCLUDED_LINK_SCAN_PREFIXES = ("docs/superpowers/plans/",)
+
 LINK_PATTERN = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 
 
@@ -19,7 +24,11 @@ def tracked_markdown_files() -> list[str]:
     result = subprocess.run(
         ["git", "ls-files", "*.md"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
     )
-    return [line for line in result.stdout.splitlines() if line]
+    return [
+        line
+        for line in result.stdout.splitlines()
+        if line and not line.startswith(EXCLUDED_LINK_SCAN_PREFIXES)
+    ]
 
 
 def find_broken_relative_links(markdown_path: Path, text: str) -> list[str]:

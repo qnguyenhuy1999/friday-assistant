@@ -12,6 +12,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Auto-generated planning documents contain illustrative code fixtures (this
+# detector's own plan, for instance, shows the private-key test fixture as
+# example text) rather than real content, so they're excluded from the
+# content scan the same way they're excluded from markdownlint.
+EXCLUDED_CONTENT_SCAN_PREFIXES = ("docs/superpowers/plans/",)
+
 SENSITIVE_NAME_MARKERS = ("id_rsa", "id_ed25519", "credentials.json")
 SENSITIVE_SUFFIXES = (".pem", ".key")
 
@@ -43,6 +49,8 @@ def find_sensitive_tracked_paths(paths: list[str]) -> list[str]:
 def find_private_key_contents(paths: list[str]) -> list[str]:
     offenders: list[str] = []
     for path in paths:
+        if path.startswith(EXCLUDED_CONTENT_SCAN_PREFIXES):
+            continue
         full = REPO_ROOT / path
         if not full.is_file():
             continue

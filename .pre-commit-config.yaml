@@ -1,0 +1,83 @@
+# Fast, deterministic gates only. Every custom hook below is a thin wrapper
+# around a `just` recipe so pre-commit, `just check`/`just ci`, and CI all
+# invoke the exact same command — see docs/governance/quality-gates.md.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: detect-private-key
+        # These two paths intentionally contain private-key-shaped fixture
+        # text: tests/policy/test_sensitive_files.py exercises the repo's own
+        # content-scanning policy check, and the Phase 3 plan document shows
+        # that same fixture as an illustrative code sample. Neither is a real
+        # secret — see docs/governance/quality-gates.md.
+        exclude: ^(tests/policy/test_sensitive_files\.py|docs/superpowers/plans/.*)$
+
+  - repo: local
+    hooks:
+      - id: format-check
+        name: format-check (ruff format + prettier)
+        entry: just format-check
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: lint
+        name: lint (ruff + eslint + markdownlint)
+        entry: just lint
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: shellcheck
+        name: shellcheck
+        entry: just shellcheck
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: architecture-check
+        name: architecture-check
+        entry: just architecture-check
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: policy-check
+        name: policy-check
+        entry: just policy-check
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: typecheck
+        name: typecheck (mypy + tsc)
+        entry: just typecheck
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
+      - id: test-cov
+        name: test-cov (pytest + coverage threshold)
+        entry: just test-cov
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
+      - id: lock-check
+        name: lock-check (frozen install, no lockfile drift)
+        entry: just lock-check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

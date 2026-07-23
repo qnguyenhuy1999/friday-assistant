@@ -1,9 +1,9 @@
-"""Enforces Phase 3 Python dependency-manifest policy against pyproject.toml.
+"""Enforces Python dependency-manifest policy against pyproject.toml.
 
-Rules: [project.dependencies] stays empty; all quality tooling lives in the
-dev dependency group; build-system requirements are exactly pinned; no
-direct URL/git/editable/local-path or wildcard/prerelease dependency
-specifiers.
+Rules: [project.dependencies] is allowlisted to sqlalchemy and alembic only;
+all other quality tooling lives in the dev dependency group; build-system
+requirements are exactly pinned; no direct URL/git/editable/local-path or
+wildcard/prerelease dependency specifiers.
 """
 
 from __future__ import annotations
@@ -23,18 +23,39 @@ FORBIDDEN_SPEC_PATTERNS = (
 )
 PRERELEASE_MARKERS = re.compile(r"\d(a|b|rc)\d|\.dev\d|\.post\d")
 WILDCARD_MARKERS = ("*",)
+ALLOWED_PROJECT_DEPENDENCY_NAMES = frozenset({"sqlalchemy", "alembic"})
 
 
 def _load(text: str) -> dict[str, Any]:
     return tomllib.loads(text)
 
 
+def _dependency_name(spec: str) -> str:
+    return re.split(r"[<>=!~;\[\s@]", spec, maxsplit=1)[0].strip()
+
+
+def _check_specifier_rules(spec: str, source: str) -> list[str]:
+    violations: list[str] = []
+    if any(pattern.search(spec) for pattern in FORBIDDEN_SPEC_PATTERNS):
+        violations.append(f"forbidden direct/URL/local dependency spec ({source}): {spec}")
+    if any(marker in spec for marker in WILDCARD_MARKERS):
+        violations.append(f"wildcard dependency version ({source}): {spec}")
+    if PRERELEASE_MARKERS.search(spec):
+        violations.append(f"undocumented prerelease dependency ({source}): {spec}")
+    return violations
+
+
 def check_python_dependency_policy(data: dict[str, Any]) -> list[str]:
     violations: list[str] = []
 
     project = data.get("project", {})
-    if project.get("dependencies"):
-        violations.append("project.dependencies must remain empty in Phase 3")
+    for spec in project.get("dependencies", []):
+        name = _dependency_name(spec)
+        if name not in ALLOWED_PROJECT_DEPENDENCY_NAMES:
+            violations.append(
+                f"project.dependencies: {name!r} is not an approved production dependency"
+            )
+        violations.extend(_check_specifier_rules(spec, source="project.dependencies"))
 
     build_requires = data.get("build-system", {}).get("requires", [])
     for req in build_requires:
@@ -45,12 +66,7 @@ def check_python_dependency_policy(data: dict[str, Any]) -> list[str]:
     for spec in dev_deps:
         if not isinstance(spec, str):
             continue
-        if any(pattern.search(spec) for pattern in FORBIDDEN_SPEC_PATTERNS):
-            violations.append(f"forbidden direct/URL/local dependency spec: {spec}")
-        if any(marker in spec for marker in WILDCARD_MARKERS):
-            violations.append(f"wildcard dependency version: {spec}")
-        if PRERELEASE_MARKERS.search(spec):
-            violations.append(f"undocumented prerelease dependency: {spec}")
+        violations.extend(_check_specifier_rules(spec, source="dependency-groups.dev"))
 
     return violations
 
@@ -113,3 +129,21 @@ def test_detector_flags_prerelease_dependency() -> None:
     )
     violations = check_python_dependency_policy(data)
     assert any("prerelease" in v for v in violations)
+
+
+def test_project_dependencies_allow_only_sqlalchemy_and_alembic() -> None:
+    data = _load((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    violations = check_python_dependency_policy(data)
+    assert violations == []
+
+
+def test_detector_flags_an_unlisted_project_dependency() -> None:
+    data = {"project": {"dependencies": ["sqlalchemy>=2.0.51", "fastapi>=0.115.0"]}}
+    violations = check_python_dependency_policy(data)
+    assert any("fastapi" in v for v in violations)
+
+
+def test_detector_flags_a_wildcard_project_dependency() -> None:
+    data = {"project": {"dependencies": ["sqlalchemy==*"]}}
+    violations = check_python_dependency_policy(data)
+    assert any("wildcard" in v for v in violations)

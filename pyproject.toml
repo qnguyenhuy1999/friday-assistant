@@ -8,7 +8,10 @@ version = "0.0.0"
 description = "Local-first engineering agent operating system."
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "sqlalchemy>=2.0.51",
+    "alembic>=1.18.5",
+]
 
 [dependency-groups]
 dev = [

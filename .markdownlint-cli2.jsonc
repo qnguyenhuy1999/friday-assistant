@@ -14,6 +14,10 @@
     // Auto-generated planning documents from the superpowers writing-plans
     // skill use their own checkbox/fenced-code layout convention, not
     // hand-authored governance prose subject to house Markdown style.
-    "docs/superpowers/plans/**"
+    "docs/superpowers/plans/**",
+    // Git-ignored scratch briefs/reports/ledger written by the
+    // subagent-driven-development skill during execution — not
+    // hand-authored, not tracked, not subject to house Markdown style.
+    ".superpowers/**"
   ]
 }

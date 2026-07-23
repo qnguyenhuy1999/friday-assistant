@@ -1,8 +1,7 @@
 """In-memory fakes for application use-case tests.
 
-`FakeUnitOfWork` implements the full `UnitOfWork` protocol but only the
-repositories the current use cases touch (tasks, runs, events) hold real
-in-memory state; the rest raise if accessed, which would flag scope creep."""
+`FakeUnitOfWork` implements the full `UnitOfWork` protocol; every
+repository holds real in-memory state as of Phase 8."""
 
 from __future__ import annotations
 
@@ -20,8 +19,17 @@ from friday.application.ports import (
     TaskRepository,
     ToolInvocationRepository,
 )
+from friday.domain.approval import ApprovalRequest, ApprovalStatus
+from friday.domain.artifact import Artifact
 from friday.domain.event import RunEvent
-from friday.domain.identifiers import RunId, RunStepId, TaskId, ToolInvocationId
+from friday.domain.identifiers import (
+    ApprovalRequestId,
+    ArtifactId,
+    RunId,
+    RunStepId,
+    TaskId,
+    ToolInvocationId,
+)
 from friday.domain.run import Run
 from friday.domain.step import RunStep
 from friday.domain.task import Task
@@ -149,6 +157,45 @@ class FakeToolInvocationRepository:
         )
 
 
+class FakeApprovalRepository:
+    def __init__(self) -> None:
+        self.items: dict[ApprovalRequestId, ApprovalRequest] = {}
+
+    def add(self, approval: ApprovalRequest) -> None:
+        self.items[approval.id] = approval
+
+    def get(self, approval_id: ApprovalRequestId) -> ApprovalRequest | None:
+        return self.items.get(approval_id)
+
+    def save(self, approval: ApprovalRequest) -> None:
+        self.items[approval.id] = approval
+
+    def list_pending_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
+        matching = [
+            a
+            for a in self.items.values()
+            if a.run_id == run_id and a.status is ApprovalStatus.PENDING
+        ]
+        return sorted(matching, key=lambda a: (a.requested_at, str(a.id)))
+
+
+class FakeArtifactRepository:
+    def __init__(self) -> None:
+        self.items: dict[ArtifactId, Artifact] = {}
+
+    def add(self, artifact: Artifact) -> None:
+        self.items[artifact.id] = artifact
+
+    def get(self, artifact_id: ArtifactId) -> Artifact | None:
+        return self.items.get(artifact_id)
+
+    def list_for_run(self, run_id: RunId) -> list[Artifact]:
+        return sorted(
+            (a for a in self.items.values() if a.run_id == run_id),
+            key=lambda a: (a.created_at, str(a.id)),
+        )
+
+
 class FakeUnitOfWork:
     def __init__(self) -> None:
         self.task_repo = FakeTaskRepository()
@@ -157,6 +204,8 @@ class FakeUnitOfWork:
         self.task_event_store = FakeTaskEventStore()
         self.step_repo = FakeRunStepRepository()
         self.tool_repo = FakeToolInvocationRepository()
+        self.approval_repo = FakeApprovalRepository()
+        self.artifact_repo = FakeArtifactRepository()
         self.commit_count = 0
         self.rollback_count = 0
         self.closed = False
@@ -175,11 +224,11 @@ class FakeUnitOfWork:
 
     @property
     def approvals(self) -> ApprovalRepository:
-        raise NotImplementedError("approvals are not part of Phase 6 use cases")
+        return self.approval_repo
 
     @property
     def artifacts(self) -> ArtifactRepository:
-        raise NotImplementedError("artifacts are not part of Phase 6 use cases")
+        return self.artifact_repo
 
     @property
     def tool_invocations(self) -> ToolInvocationRepository:

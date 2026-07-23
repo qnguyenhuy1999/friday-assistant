@@ -15,6 +15,8 @@ from friday.domain import (
     RunStepId,
     Task,
     TaskId,
+    ToolInvocation,
+    ToolInvocationId,
 )
 from friday.infrastructure.persistence.mappers import (
     approval_from_row,
@@ -27,6 +29,8 @@ from friday.infrastructure.persistence.mappers import (
     run_to_row,
     task_from_row,
     task_to_row,
+    tool_invocation_from_row,
+    tool_invocation_to_row,
 )
 from friday.infrastructure.persistence.models import (
     ApprovalRequestRow,
@@ -34,6 +38,7 @@ from friday.infrastructure.persistence.models import (
     RunRow,
     RunStepRow,
     TaskRow,
+    ToolInvocationRow,
 )
 
 
@@ -142,3 +147,26 @@ class ArtifactRepository:
             .order_by(ArtifactRow.created_at, ArtifactRow.id)
         )
         return [artifact_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+
+class ToolInvocationRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, invocation: ToolInvocation) -> None:
+        self._session.add(tool_invocation_to_row(invocation))
+
+    def get(self, invocation_id: ToolInvocationId) -> ToolInvocation | None:
+        row = self._session.get(ToolInvocationRow, str(invocation_id))
+        return tool_invocation_from_row(row) if row is not None else None
+
+    def save(self, invocation: ToolInvocation) -> None:
+        self._session.merge(tool_invocation_to_row(invocation))
+
+    def list_for_run(self, run_id: RunId) -> list[ToolInvocation]:
+        stmt = (
+            select(ToolInvocationRow)
+            .where(ToolInvocationRow.run_id == str(run_id))
+            .order_by(ToolInvocationRow.requested_at, ToolInvocationRow.id)
+        )
+        return [tool_invocation_from_row(row) for row in self._session.execute(stmt).scalars()]

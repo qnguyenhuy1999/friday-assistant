@@ -4,9 +4,37 @@ Local-first engineering agent operating system.
 
 ## Status
 
-**Pre-implementation — repository foundation only.** This repository
-currently contains only the repository foundation. No runtime, API,
-frontend, AI integration, or tool execution exists yet.
+**Phase 2 — clean source organization.** The repository now has an
+official source layout, package boundaries, dependency-direction
+enforcement, and minimal importable application shells. No business
+logic, framework, database, or AI integration exists yet — the shells
+return only static identification values.
+
+## Repository Structure
+
+```text
+apps/
+├── api/        Python API delivery process (composition root)
+├── worker/     Python worker delivery process (composition root)
+└── web/        TypeScript browser control-plane shell (@friday/web)
+src/friday/
+├── domain/         business types and rules — no outward dependency
+├── application/     use cases — may depend on domain only
+└── infrastructure/  adapters — may depend on application and domain
+packages/
+├── contracts/  language-neutral protocol definitions (@friday/contracts)
+└── sdk-ts/     TypeScript client SDK surface (@friday/sdk)
+tests/
+├── architecture/  import-boundary and repository-layout checks
+└── toolchain/     Phase 1 toolchain smoke test
+```
+
+Dependency direction: `apps/*` and `infrastructure` may depend on
+`application`, which may depend on `domain`; the arrow never points the
+other way. `packages/sdk-ts` consumes `packages/contracts`, never
+`apps/web` internals. See
+[docs/architecture/README.md](docs/architecture/README.md) for the full
+diagram and enforcement mechanism.
 
 ## Greenfield Implementation
 
@@ -69,9 +97,10 @@ sidecar). None of this is implemented yet.
 
 ## Development
 
-**Phase status:** Phase 1 — toolchain and workspace bootstrap only. No
-application runtime exists yet (no API, no frontend, no database, no AI
-integration).
+**Phase status:** Phase 2 — clean source organization. No application
+runtime exists yet (no API, no frontend, no database, no AI
+integration) — only structure, dependency boundaries, and static
+composition-root shells.
 
 Required runtimes:
 

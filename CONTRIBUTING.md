@@ -13,6 +13,22 @@ to every phase unless a specific phase's documentation says otherwise.
   without a clear, specific owner and purpose.
 - Do not mix unrelated changes into a single commit or pull request.
 
+## Source Organization
+
+- Domain logic goes in `src/friday/domain`, use cases in
+  `src/friday/application`, adapters in `src/friday/infrastructure`.
+  Deployable apps (`apps/api`, `apps/worker`, `apps/web`) stay thin
+  composition roots — they wire lower layers together, they do not
+  contain reusable domain or infrastructure logic.
+- Language-neutral protocol definitions go in `packages/contracts`;
+  the TypeScript client SDK goes in `packages/sdk-ts`. `sdk-ts` may
+  depend on `contracts`; neither may depend on `apps/web`.
+- A change to `tests/architecture/test_python_boundaries.py` or the
+  TypeScript workspace boundary rules must be accompanied by a passing
+  (and, for a rule change, a deliberately-failing-then-fixed) test run
+  demonstrating the new rule is actually enforced — do not loosen a
+  boundary rule without evidence it still catches a violation.
+
 ## Commits
 
 - Use conventional commit-style messages: `type: description`
@@ -52,7 +68,8 @@ to every phase unless a specific phase's documentation says otherwise.
 
 ## Current Limitations
 
-This repository is at the Phase 1 (toolchain and workspace bootstrap)
-stage. There is no application build, API, frontend, or database — none of
-that is documented here because none of it exists. Later phases will extend this document as real
-tooling is introduced.
+This repository is at the Phase 2 (clean source organization) stage.
+There is no business logic, framework code, database, or AI integration —
+only structure, dependency boundaries, and static composition-root
+shells. Later phases will extend this document as real behavior is
+introduced.

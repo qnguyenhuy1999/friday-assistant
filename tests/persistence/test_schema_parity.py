@@ -49,9 +49,7 @@ def _metadata_snapshot() -> dict[str, dict[str, Any]]:
                 "type": _normalize_type(column.type),
                 "nullable": column.nullable,
                 "primary_key": column.primary_key,
-                "default": _normalize_default(
-                    column.server_default.arg if column.server_default is not None else None
-                ),
+                "default": _normalize_default(getattr(column.server_default, "arg", None)),
             }
             for column in table.columns
         }

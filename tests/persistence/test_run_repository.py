@@ -58,3 +58,19 @@ def test_list_for_task_orders_by_created_at_then_id(session: Session) -> None:
     session.flush()
     result = repo.list_for_task(task_id)
     assert [r.id for r in result] == [run_a.id, run_b.id]
+
+
+def test_timestamps_are_tz_aware_utc_after_db_round_trip(session: Session) -> None:
+    task_id = _make_task(session)
+    repo = RunRepository(session)
+    run = Run.new(id=RunId.new(), task_id=task_id, created_at=T0)
+    run.start(T0)
+    repo.add(run)
+    session.flush()
+    session.expire_all()  # force re-read from SQLite, not the identity map
+    fetched = repo.get(run.id)
+    assert fetched is not None
+    assert fetched.created_at == T0
+    assert fetched.created_at.tzinfo is UTC
+    assert fetched.started_at == T0
+    assert fetched.started_at.tzinfo is UTC

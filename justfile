@@ -17,13 +17,15 @@ lint:
 
 typecheck:
     uv run mypy
-    pnpm exec tsc --build tsconfig.json
+    pnpm exec tsc -p apps/web/tsconfig.typecheck.json
+    pnpm exec tsc -p packages/contracts/tsconfig.typecheck.json
+    pnpm exec tsc -p packages/sdk-ts/tsconfig.typecheck.json
 
 test:
     uv run pytest
 
 test-cov:
-    uv run pytest --cov=src --cov=apps --cov=tests --cov-report=term-missing
+    uv run pytest --cov=src/friday --cov=apps/api --cov=apps/worker --cov-report=term-missing
 
 check: format-check lint typecheck test
 

@@ -10,7 +10,7 @@
     "format": "prettier --write \"**/*.{json,yaml,yml}\" \"apps/**/*.ts\" \"packages/**/*.ts\" eslint.config.mjs",
     "format:check": "prettier --check \"**/*.{json,yaml,yml}\" \"apps/**/*.ts\" \"packages/**/*.ts\" eslint.config.mjs",
     "lint": "eslint .",
-    "typecheck": "tsc --build tsconfig.json"
+    "typecheck": "tsc -p apps/web/tsconfig.typecheck.json && tsc -p packages/contracts/tsconfig.typecheck.json && tsc -p packages/sdk-ts/tsconfig.typecheck.json"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

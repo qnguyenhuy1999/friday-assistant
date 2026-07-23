@@ -57,6 +57,10 @@ class RunEventId(_Id):
     pass
 
 
+class TaskEventId(_Id):
+    pass
+
+
 class ApprovalRequestId(_Id):
     pass
 

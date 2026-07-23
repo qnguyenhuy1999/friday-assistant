@@ -15,20 +15,24 @@ def _alembic_config(db_path: Path) -> Config:
     return config
 
 
-def test_upgrade_creates_all_seven_tables(tmp_path: Path) -> None:
+def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
     db_path = tmp_path / "migrate.db"
     command.upgrade(_alembic_config(db_path), "head")
-    inspector = inspect(create_engine(f"sqlite:///{db_path}"))
-    assert set(inspector.get_table_names()) == {
-        "tasks",
-        "runs",
-        "run_steps",
-        "approval_requests",
-        "artifacts",
-        "tool_invocations",
-        "run_events",
-        "alembic_version",
-    }
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        assert set(inspect(engine).get_table_names()) == {
+            "tasks",
+            "task_events",
+            "runs",
+            "run_steps",
+            "approval_requests",
+            "artifacts",
+            "tool_invocations",
+            "run_events",
+            "alembic_version",
+        }
+    finally:
+        engine.dispose()
 
 
 def test_downgrade_then_upgrade_is_idempotent(tmp_path: Path) -> None:
@@ -36,11 +40,17 @@ def test_downgrade_then_upgrade_is_idempotent(tmp_path: Path) -> None:
     config = _alembic_config(db_path)
     command.upgrade(config, "head")
     command.downgrade(config, "base")
-    inspector = inspect(create_engine(f"sqlite:///{db_path}"))
-    # Alembic's online downgrade clears the alembic_version table's rows but
-    # doesn't drop the table itself (upstream issue sqlalchemy/alembic#545);
-    # only the --sql/offline path drops it. All 7 domain tables must be gone.
-    assert set(inspector.get_table_names()) <= {"alembic_version"}
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        # Alembic's online downgrade clears the alembic_version table's rows but
+        # doesn't drop the table itself (upstream issue sqlalchemy/alembic#545);
+        # only the --sql/offline path drops it. All 8 domain tables must be gone.
+        assert set(inspect(engine).get_table_names()) <= {"alembic_version"}
+    finally:
+        engine.dispose()
     command.upgrade(config, "head")
-    inspector = inspect(create_engine(f"sqlite:///{db_path}"))
-    assert "tasks" in inspector.get_table_names()
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        assert "tasks" in inspect(engine).get_table_names()
+    finally:
+        engine.dispose()

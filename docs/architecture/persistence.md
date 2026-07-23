@@ -30,10 +30,12 @@ mapper pair, not the engine setup.
 
 ## Schema and Foreign-Key Graph
 
-Seven tables, created via Alembic migration `migrations/versions/0001_initial_schema.py`:
+The original seven tables plus the Phase 7 `task_events` table are created
+through Alembic migrations:
 
 ```text
 tasks
+  └─< task_events (task_id -> tasks.id)
   └─< runs (task_id -> tasks.id)
         ├─< run_steps (run_id -> runs.id)
         ├─< approval_requests (run_id -> runs.id, step_id -> run_steps.id)

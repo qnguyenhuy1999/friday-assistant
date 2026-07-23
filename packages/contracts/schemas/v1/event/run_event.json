@@ -20,12 +20,15 @@
         "step_started",
         "step_succeeded",
         "step_failed",
+        "step_skipped",
+        "step_cancelled",
         "approval_requested",
         "approval_resolved",
         "tool_invocation_requested",
         "tool_invocation_started",
         "tool_invocation_succeeded",
         "tool_invocation_failed",
+        "tool_invocation_cancelled",
         "artifact_created"
       ]
     },

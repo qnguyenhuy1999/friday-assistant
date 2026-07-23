@@ -15,6 +15,7 @@ from friday.domain import (
     RunStep,
     RunStepId,
     Task,
+    TaskEvent,
     TaskId,
     ToolInvocation,
     ToolInvocationId,
@@ -30,6 +31,7 @@ from friday.infrastructure.persistence.mappers import (
     run_step_from_row,
     run_step_to_row,
     run_to_row,
+    task_event_to_row,
     task_from_row,
     task_to_row,
     tool_invocation_from_row,
@@ -41,6 +43,7 @@ from friday.infrastructure.persistence.models import (
     RunEventRow,
     RunRow,
     RunStepRow,
+    TaskEventRow,
     TaskRow,
     ToolInvocationRow,
 )
@@ -59,6 +62,10 @@ class TaskRepository:
 
     def save(self, task: Task) -> None:
         self._session.merge(task_to_row(task))
+
+    def list(self, limit: int) -> list[Task]:
+        stmt = select(TaskRow).order_by(TaskRow.created_at, TaskRow.id).limit(limit)
+        return [task_from_row(row) for row in self._session.execute(stmt).scalars()]
 
 
 class RunRepository:
@@ -175,6 +182,14 @@ class ToolInvocationRepository:
         )
         return [tool_invocation_from_row(row) for row in self._session.execute(stmt).scalars()]
 
+    def list_for_step(self, step_id: RunStepId) -> list[ToolInvocation]:
+        stmt = (
+            select(ToolInvocationRow)
+            .where(ToolInvocationRow.step_id == str(step_id))
+            .order_by(ToolInvocationRow.requested_at, ToolInvocationRow.id)
+        )
+        return [tool_invocation_from_row(row) for row in self._session.execute(stmt).scalars()]
+
 
 class RunEventStore:
     def __init__(self, session: Session) -> None:
@@ -195,3 +210,15 @@ class RunEventStore:
         stmt = select(func.max(RunEventRow.sequence)).where(RunEventRow.run_id == str(run_id))
         current_max = self._session.execute(stmt).scalar()
         return (current_max or 0) + 1
+
+
+class TaskEventStore:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def append(self, event: TaskEvent) -> None:
+        self._session.add(task_event_to_row(event))
+
+    def next_sequence(self, task_id: TaskId) -> int:
+        stmt = select(func.max(TaskEventRow.sequence)).where(TaskEventRow.task_id == str(task_id))
+        return (self._session.execute(stmt).scalar() or 0) + 1

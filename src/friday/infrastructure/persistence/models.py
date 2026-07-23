@@ -25,6 +25,20 @@ class TaskRow(Base):
     failure: Mapped[dict[str, object] | None] = mapped_column(JSON)
 
 
+class TaskEventRow(Base):
+    __tablename__ = "task_events"
+    __table_args__ = (
+        Index("ix_task_events_task_id", "task_id"),
+        UniqueConstraint("task_id", "sequence", name="uq_task_events_task_id_sequence"),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"))
+    type: Mapped[str]
+    sequence: Mapped[int]
+    occurred_at: Mapped[datetime]
+    payload: Mapped[object | None] = mapped_column(JSON)
+
+
 class RunRow(Base):
     __tablename__ = "runs"
     __table_args__ = (Index("ix_runs_task_id", "task_id"),)

@@ -7,7 +7,7 @@ code raises and catches only these.
 
 from __future__ import annotations
 
-from friday.domain.identifiers import RunId, TaskId
+from friday.domain.identifiers import RunId, RunStepId, TaskId
 
 
 class ApplicationError(Exception):
@@ -24,6 +24,12 @@ class RunNotFound(ApplicationError):
     def __init__(self, run_id: RunId) -> None:
         self.run_id = run_id
         super().__init__(f"Run not found: {run_id}")
+
+
+class RunStepNotFound(ApplicationError):
+    def __init__(self, step_id: RunStepId) -> None:
+        self.step_id = step_id
+        super().__init__(f"Run step not found: {step_id}")
 
 
 class EntityConflict(ApplicationError):

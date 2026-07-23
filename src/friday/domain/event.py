@@ -30,12 +30,15 @@ class RunEventType(StrEnum):
     STEP_STARTED = "step_started"
     STEP_SUCCEEDED = "step_succeeded"
     STEP_FAILED = "step_failed"
+    STEP_SKIPPED = "step_skipped"
+    STEP_CANCELLED = "step_cancelled"
     APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_RESOLVED = "approval_resolved"
     TOOL_INVOCATION_REQUESTED = "tool_invocation_requested"
     TOOL_INVOCATION_STARTED = "tool_invocation_started"
     TOOL_INVOCATION_SUCCEEDED = "tool_invocation_succeeded"
     TOOL_INVOCATION_FAILED = "tool_invocation_failed"
+    TOOL_INVOCATION_CANCELLED = "tool_invocation_cancelled"
     ARTIFACT_CREATED = "artifact_created"
 
 

@@ -16,13 +16,17 @@ from friday.application.ports import (
     RunEventStore,
     RunRepository,
     RunStepRepository,
+    TaskEventStore,
     TaskRepository,
     ToolInvocationRepository,
 )
 from friday.domain.event import RunEvent
-from friday.domain.identifiers import RunId, TaskId
+from friday.domain.identifiers import RunId, RunStepId, TaskId, ToolInvocationId
 from friday.domain.run import Run
+from friday.domain.step import RunStep
 from friday.domain.task import Task
+from friday.domain.task_event import TaskEvent
+from friday.domain.tool import ToolInvocation
 
 T0 = datetime(2026, 1, 2, 3, tzinfo=UTC)
 
@@ -49,6 +53,9 @@ class FakeTaskRepository:
     def save(self, task: Task) -> None:
         self.items[task.id] = task
         self.saved.append(task.id)
+
+    def list(self, limit: int) -> list[Task]:
+        return sorted(self.items.values(), key=lambda task: (task.created_at, str(task.id)))[:limit]
 
 
 class FakeRunRepository:
@@ -85,11 +92,71 @@ class FakeRunEventStore:
         return max(sequences, default=0) + 1
 
 
+class FakeTaskEventStore:
+    def __init__(self) -> None:
+        self.appended: list[TaskEvent] = []
+
+    def append(self, event: TaskEvent) -> None:
+        self.appended.append(event)
+
+    def next_sequence(self, task_id: TaskId) -> int:
+        return sum(event.task_id == task_id for event in self.appended) + 1
+
+
+class FakeRunStepRepository:
+    def __init__(self) -> None:
+        self.items: dict[RunStepId, RunStep] = {}
+
+    def add(self, step: RunStep) -> None:
+        self.items[step.id] = step
+
+    def get(self, step_id: RunStepId) -> RunStep | None:
+        return self.items.get(step_id)
+
+    def save(self, step: RunStep) -> None:
+        self.items[step.id] = step
+
+    def list_for_run(self, run_id: RunId) -> list[RunStep]:
+        return sorted(
+            (s for s in self.items.values() if s.run_id == run_id),
+            key=lambda s: (s.position, str(s.id)),
+        )
+
+
+class FakeToolInvocationRepository:
+    def __init__(self) -> None:
+        self.items: dict[ToolInvocationId, ToolInvocation] = {}
+
+    def add(self, item: ToolInvocation) -> None:
+        self.items[item.id] = item
+
+    def get(self, item_id: ToolInvocationId) -> ToolInvocation | None:
+        return self.items.get(item_id)
+
+    def save(self, item: ToolInvocation) -> None:
+        self.items[item.id] = item
+
+    def list_for_run(self, run_id: RunId) -> list[ToolInvocation]:
+        return sorted(
+            (i for i in self.items.values() if i.run_id == run_id),
+            key=lambda i: (i.requested_at, str(i.id)),
+        )
+
+    def list_for_step(self, step_id: RunStepId) -> list[ToolInvocation]:
+        return sorted(
+            (i for i in self.items.values() if i.step_id == step_id),
+            key=lambda i: (i.requested_at, str(i.id)),
+        )
+
+
 class FakeUnitOfWork:
     def __init__(self) -> None:
         self.task_repo = FakeTaskRepository()
         self.run_repo = FakeRunRepository()
         self.event_store = FakeRunEventStore()
+        self.task_event_store = FakeTaskEventStore()
+        self.step_repo = FakeRunStepRepository()
+        self.tool_repo = FakeToolInvocationRepository()
         self.commit_count = 0
         self.rollback_count = 0
         self.closed = False
@@ -104,7 +171,7 @@ class FakeUnitOfWork:
 
     @property
     def steps(self) -> RunStepRepository:
-        raise NotImplementedError("steps are not part of Phase 6 use cases")
+        return self.step_repo
 
     @property
     def approvals(self) -> ApprovalRepository:
@@ -116,11 +183,15 @@ class FakeUnitOfWork:
 
     @property
     def tool_invocations(self) -> ToolInvocationRepository:
-        raise NotImplementedError("tool invocations are not part of Phase 6 use cases")
+        return self.tool_repo
 
     @property
     def events(self) -> RunEventStore:
         return self.event_store
+
+    @property
+    def task_events(self) -> TaskEventStore:
+        return self.task_event_store
 
     def __enter__(self) -> Self:
         return self

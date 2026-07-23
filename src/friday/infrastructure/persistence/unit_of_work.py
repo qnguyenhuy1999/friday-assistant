@@ -33,6 +33,7 @@ from friday.infrastructure.persistence.repositories import (
     RunEventStore,
     RunRepository,
     RunStepRepository,
+    TaskEventStore,
     TaskRepository,
     ToolInvocationRepository,
 )
@@ -58,6 +59,7 @@ class SqlAlchemyUnitOfWork:
         self._artifacts = ArtifactRepository(session)
         self._tool_invocations = ToolInvocationRepository(session)
         self._events = RunEventStore(session)
+        self._task_events = TaskEventStore(session)
 
     @property
     def tasks(self) -> TaskRepository:
@@ -86,6 +88,10 @@ class SqlAlchemyUnitOfWork:
     @property
     def events(self) -> RunEventStore:
         return self._events
+
+    @property
+    def task_events(self) -> TaskEventStore:
+        return self._task_events
 
     def __enter__(self) -> Self:
         return self

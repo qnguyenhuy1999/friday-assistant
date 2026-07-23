@@ -60,6 +60,11 @@ class _FakeTaskRepository:
     def save(self, task: Task) -> None:
         self._tasks[task.id] = task
 
+    def list(self, limit: int) -> list[Task]:
+        return sorted(self._tasks.values(), key=lambda task: (task.created_at, task.id.value))[
+            :limit
+        ]
+
 
 @dataclass
 class _FakeRunRepository:
@@ -145,6 +150,10 @@ class _FakeToolInvocationRepository:
 
     def list_for_run(self, run_id: RunId) -> list[ToolInvocation]:
         matches = [i for i in self._invocations.values() if i.run_id == run_id]
+        return sorted(matches, key=lambda i: (i.requested_at, i.id.value))
+
+    def list_for_step(self, step_id: RunStepId) -> list[ToolInvocation]:
+        matches = [i for i in self._invocations.values() if i.step_id == step_id]
         return sorted(matches, key=lambda i: (i.requested_at, i.id.value))
 
 

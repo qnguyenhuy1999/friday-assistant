@@ -17,14 +17,22 @@ import pytest
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
-from friday.application.commands import CreateTaskCommand, StartRunCommand
+from friday.application.commands import (
+    CancelTaskCommand,
+    CreateOrderedStepCommand,
+    CreateTaskCommand,
+    StartQueuedRunCommand,
+    StartRunCommand,
+)
 from friday.application.create_task import CreateTask
 from friday.application.errors import TransactionFailure
+from friday.application.lifecycle import CancelTask, CreateOrderedStep, StartQueuedRun
 from friday.application.start_run import StartRun
 from friday.domain.event import RunEvent, RunEventType
-from friday.domain.identifiers import RunId, TaskId
+from friday.domain.identifiers import RunId, TaskId, ToolInvocationId
 from friday.domain.run import Run, RunStatus
 from friday.domain.task import TaskStatus
+from friday.domain.tool import ToolInvocation, ToolInvocationStatus
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.models import Base
 from friday.infrastructure.persistence.unit_of_work import (
@@ -204,3 +212,49 @@ def test_failure_during_commit_rolls_back_all(
     exc_info = _sabotaged_start_run(session_factory, sabotage, task_id)
     assert isinstance(exc_info.value, TransactionFailure)
     _assert_nothing_became_durable(session_factory, task_id)
+
+
+def test_cancel_task_event_append_failure_rolls_back_the_entire_persisted_hierarchy(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A fresh session sees no partial Task/Run/Step/Tool mutation after failure."""
+    task_id = _create_pending_task(session_factory)
+    factory = create_unit_of_work_factory(session_factory)
+    run_id = StartRun(factory, FakeClock(T0)).execute(StartRunCommand(task_id)).run_id
+    StartQueuedRun(factory, FakeClock(T1)).execute(StartQueuedRunCommand(run_id))
+    step_id = (
+        CreateOrderedStep(factory, FakeClock(T1))
+        .execute(CreateOrderedStepCommand(run_id, "ordered"))
+        .step_id
+    )
+    with SqlAlchemyUnitOfWork(session_factory()) as uow:
+        uow.tool_invocations.add(
+            ToolInvocation.new(
+                id=ToolInvocationId.new(),
+                run_id=run_id,
+                step_id=step_id,
+                tool_name="metadata-only",
+                requested_input=None,
+                requested_at=T1,
+            )
+        )
+        uow.commit()
+
+    sabotaged = SqlAlchemyUnitOfWork(session_factory())
+
+    def failing_append(event: RunEvent) -> None:
+        raise RuntimeError("event append failed")
+
+    sabotaged.events.append = failing_append  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError):
+        CancelTask(lambda: sabotaged, FakeClock(T1)).execute(CancelTaskCommand(task_id))
+
+    with SqlAlchemyUnitOfWork(session_factory()) as fresh:
+        task = fresh.tasks.get(task_id)
+        run = fresh.runs.get(run_id)
+        step = fresh.steps.get(step_id)
+        tools = fresh.tool_invocations.list_for_step(step_id)
+        assert task is not None and task.status is TaskStatus.ACTIVE
+        assert run is not None and run.status is RunStatus.RUNNING
+        assert step is not None and step.status.value == "pending"
+        assert [tool.status for tool in tools] == [ToolInvocationStatus.REQUESTED]

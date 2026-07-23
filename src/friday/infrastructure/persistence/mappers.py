@@ -31,6 +31,9 @@ from friday.domain import (
     RunStepId,
     RunStepStatus,
     Task,
+    TaskEvent,
+    TaskEventId,
+    TaskEventType,
     TaskId,
     TaskStatus,
     ToolInvocation,
@@ -44,6 +47,7 @@ from friday.infrastructure.persistence.models import (
     RunEventRow,
     RunRow,
     RunStepRow,
+    TaskEventRow,
     TaskRow,
     ToolInvocationRow,
 )
@@ -99,6 +103,28 @@ def task_from_row(row: TaskRow) -> Task:
         _failed_at=_read_back_utc(row.failed_at) if row.failed_at is not None else None,
         _cancelled_at=_read_back_utc(row.cancelled_at) if row.cancelled_at is not None else None,
         _failure=_failure_from_dict(row.failure),
+    )
+
+
+def task_event_to_row(event: TaskEvent) -> TaskEventRow:
+    return TaskEventRow(
+        id=str(event.id),
+        task_id=str(event.task_id),
+        type=event.type.value,
+        sequence=event.sequence,
+        occurred_at=event.occurred_at,
+        payload=event.payload,
+    )
+
+
+def task_event_from_row(row: TaskEventRow) -> TaskEvent:
+    return TaskEvent(
+        id=TaskEventId.parse(row.id),
+        task_id=TaskId.parse(row.task_id),
+        type=TaskEventType(row.type),
+        sequence=row.sequence,
+        occurred_at=_read_back_utc(row.occurred_at),
+        payload=cast(JsonValue, row.payload),
     )
 
 

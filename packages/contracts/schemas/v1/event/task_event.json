@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.friday-agent-os.dev/v1/event/task_event.json",
+  "title": "TaskEvent",
+  "type": "object",
+  "properties": {
+    "id": { "$ref": "../definitions/identifier.json" },
+    "task_id": { "$ref": "../definitions/identifier.json" },
+    "type": { "enum": ["task_completed", "task_failed", "task_cancelled"] },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurred_at": { "$ref": "../definitions/timestamp.json" },
+    "payload": { "$ref": "../definitions/json_value.json" }
+  },
+  "required": ["id", "task_id", "type", "sequence", "occurred_at", "payload"],
+  "additionalProperties": false
+}

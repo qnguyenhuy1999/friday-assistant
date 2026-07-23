@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+import pytest
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
@@ -158,3 +160,19 @@ def test_alembic_head_matches_sqlalchemy_metadata(tmp_path: Path) -> None:
         assert actual == expected
     finally:
         engine.dispose()
+
+
+def test_schema_snapshot_comparison_detects_representative_drift() -> None:
+    """The parity comparison must fail when a schema snapshot gains a column."""
+    expected = _metadata_snapshot()
+    drifted = deepcopy(expected)
+    table_name = next(iter(drifted))
+    drifted[table_name]["columns"]["schema_drift_probe"] = {
+        "type": "INTEGER",
+        "nullable": True,
+        "primary_key": False,
+        "default": None,
+    }
+
+    with pytest.raises(AssertionError):
+        assert drifted == expected

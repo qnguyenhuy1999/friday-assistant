@@ -84,21 +84,20 @@ as a backstop — a duplicate-sequence append for the same run fails at
 flush time with `IntegrityError` rather than silently corrupting event
 order (see `tests/persistence/test_run_event_store.py::test_duplicate_sequence_for_same_run_is_rejected_at_db_level`).
 
-## Transaction Boundary Status Before Phase 6
+## Transaction Boundary
 
-`ports.py`'s module docstring states the reasoning directly:
+Phase 5 did not provide an application transaction boundary: callers shared
+a single `Session` and called `session.flush()`/commit at the call site
+(`ports.py`'s module docstring stated at the time that a `UnitOfWork` port
+would be speculative until a concrete need appeared).
 
-> No UnitOfWork port: nothing in this phase requires multiple repository
-> writes inside one shared transaction boundary, and adding one now would
-> be speculative. Introduce it once persistence in a later phase
-> demonstrates a concrete need.
-
-Phase 5 does not provide an application transaction boundary: callers share
-a single `Session` and call `session.flush()`/commit at the call site. In
-particular, there is no `UnitOfWork` port or infrastructure implementation
-in the delivered pre-Phase-6 persistence adapter. Any Phase 6 transaction
-boundary must therefore be reviewed against the application-layer contract
-and this adapter rather than inferred from the Phase 5 repositories.
+Phase 6 added that boundary: `friday.application.ports.UnitOfWork` is the
+application-owned protocol, and
+`friday.infrastructure.persistence.unit_of_work.SqlAlchemyUnitOfWork` is the
+implementation. One shared `Session` backs every repository in a Unit of
+Work; only the Unit of Work commits, rolls back, and closes, and SQLAlchemy
+exceptions are translated into the stable application error hierarchy at
+this boundary (see `tests/persistence/test_unit_of_work.py`).
 
 ## Schema Source of Truth
 

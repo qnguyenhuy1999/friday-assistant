@@ -8,6 +8,7 @@ site, not inside a shared reflection-based converter.
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from friday.domain import (
@@ -50,6 +51,13 @@ from friday.infrastructure.persistence.models import (
 
 def _failure_to_dict(failure: Failure | None) -> dict[str, Any] | None:
     return asdict(failure) if failure is not None else None
+
+
+def _read_back_utc(value: datetime) -> datetime:
+    """Reattach UTC tzinfo SQLite drops on read-back (values are always
+    written UTC-normalized, so a naive read-back is safely reinterpreted).
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _failure_from_dict(data: dict[str, Any] | None) -> Failure | None:
@@ -215,7 +223,7 @@ def artifact_from_row(row: ArtifactRow) -> Artifact:
         name=row.name,
         media_type=row.media_type,
         location=row.location,
-        created_at=row.created_at,
+        created_at=_read_back_utc(row.created_at),
         size=row.size,
         checksum=row.checksum,
         metadata=cast(JsonValue, row.artifact_metadata),

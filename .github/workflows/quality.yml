@@ -1,0 +1,65 @@
+# Splits `just ci` into separate steps (rather than one opaque call) so a
+# failure's log location tells you which gate broke. See
+# docs/governance/quality-gates.md for what each `just` recipe checks.
+name: quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv (manages the pinned Python version itself)
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: ".node-version"
+
+      - name: Set up just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      - name: Cache pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Frozen install + lockfile drift check
+        run: just lock-check
+
+      - name: Fast local gate (format, lint, typecheck, tests, architecture, policy)
+        run: just check
+
+      - name: Coverage
+        run: just test-cov
+
+      - name: Pre-commit (all hooks, all stages)
+        run: just pre-commit
+
+      - name: Verify working tree is clean
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain)"

@@ -37,9 +37,22 @@ to every phase unless a specific phase's documentation says otherwise.
 - Each phase requires review before the next phase begins. Do not start the
   next phase's work inside a change intended for the current phase.
 
+## Local Development
+
+- Bootstrap: `just bootstrap`. Validate: `just check`.
+- Lockfiles (`uv.lock`, `pnpm-lock.yaml`) are committed and must stay in
+  sync — re-run `just bootstrap` after changing a manifest and commit the
+  resulting lockfile diff.
+- Adding a dependency requires a stated purpose in the commit/PR
+  description and must go in the dev-dependency group unless a later
+  phase specifically requires it as a production dependency.
+- Tooling changes (lint rules, formatting config, CI-equivalent scripts)
+  must include the validation command output (or a summary of it) in the
+  PR description.
+
 ## Current Limitations
 
-This repository is at the Phase 0 (repository foundation) stage. There is no
-build, test, lint, or run tooling yet — none of that is documented here
-because none of it exists. Later phases will extend this document as real
+This repository is at the Phase 1 (toolchain and workspace bootstrap)
+stage. There is no application build, API, frontend, or database — none of
+that is documented here because none of it exists. Later phases will extend this document as real
 tooling is introduced.

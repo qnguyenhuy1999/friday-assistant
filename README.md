@@ -67,6 +67,34 @@ sidecar). None of this is implemented yet.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to contribute
 - [SECURITY.md](SECURITY.md) — security policy
 
+## Development
+
+**Phase status:** Phase 1 — toolchain and workspace bootstrap only. No
+application runtime exists yet (no API, no frontend, no database, no AI
+integration).
+
+Required runtimes:
+
+- Python 3.14+ (managed via [uv](https://docs.astral.sh/uv/))
+- Node.js 22.23.1+ (LTS "Jod") with Corepack enabled
+- pnpm 11.16.0 (activated via Corepack from `packageManager` in
+  `package.json`)
+- [`just`](https://just.systems) as the local command runner
+
+Bootstrap the toolchain:
+
+```bash
+just bootstrap
+```
+
+Run the full validation suite (format check, lint, typecheck, tests):
+
+```bash
+just check
+```
+
+See `justfile` for the complete list of available commands.
+
 ## Development Status Disclaimer
 
 This project is in an early, pre-release state. Interfaces, structure, and

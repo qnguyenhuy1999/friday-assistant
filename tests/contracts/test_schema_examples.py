@@ -68,6 +68,7 @@ VALID_EXAMPLES: dict[str, dict[str, Any]] = {
         "requested_input": None,
         "status": "pending",
         "requested_at": "2026-01-01T00:00:00Z",
+        "expires_at": None,
         "resolved_at": None,
         "resolution_note": None,
         "resolver": None,

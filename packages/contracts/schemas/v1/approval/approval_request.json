@@ -5,12 +5,20 @@
   "description": "A pending or resolved request for human authorization. Mirrors friday.domain.approval.ApprovalRequest.",
   "type": "object",
   "properties": {
-    "id": { "$ref": "../definitions/identifier.json" },
-    "run_id": { "$ref": "../definitions/identifier.json" },
+    "id": {
+      "$ref": "../definitions/identifier.json"
+    },
+    "run_id": {
+      "$ref": "../definitions/identifier.json"
+    },
     "step_id": {
       "anyOf": [
-        { "$ref": "../definitions/identifier.json" },
-        { "type": "null" }
+        {
+          "$ref": "../definitions/identifier.json"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "category": {
@@ -22,19 +30,66 @@
         "other"
       ]
     },
-    "summary": { "type": "string", "minLength": 1 },
-    "reason": { "type": "string" },
-    "requested_action": { "type": "string", "minLength": 1 },
-    "requested_input": { "$ref": "../definitions/json_value.json" },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reason": {
+      "type": "string"
+    },
+    "requested_action": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requested_input": {
+      "$ref": "../definitions/json_value.json"
+    },
     "status": {
       "enum": ["pending", "approved", "rejected", "cancelled", "expired"]
     },
-    "requested_at": { "$ref": "../definitions/timestamp.json" },
-    "resolved_at": {
-      "anyOf": [{ "$ref": "../definitions/timestamp.json" }, { "type": "null" }]
+    "requested_at": {
+      "$ref": "../definitions/timestamp.json"
     },
-    "resolution_note": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
-    "resolver": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+    "expires_at": {
+      "anyOf": [
+        {
+          "$ref": "../definitions/timestamp.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resolved_at": {
+      "anyOf": [
+        {
+          "$ref": "../definitions/timestamp.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resolution_note": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resolver": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
   },
   "required": [
     "id",
@@ -47,6 +102,7 @@
     "requested_input",
     "status",
     "requested_at",
+    "expires_at",
     "resolved_at",
     "resolution_note",
     "resolver"

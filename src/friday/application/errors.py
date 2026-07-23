@@ -7,7 +7,14 @@ code raises and catches only these.
 
 from __future__ import annotations
 
-from friday.domain.identifiers import RunId, RunStepId, TaskId
+from friday.domain.identifiers import (
+    ApprovalRequestId,
+    ArtifactId,
+    RunId,
+    RunStepId,
+    TaskId,
+    ToolInvocationId,
+)
 
 
 class ApplicationError(Exception):
@@ -30,6 +37,24 @@ class RunStepNotFound(ApplicationError):
     def __init__(self, step_id: RunStepId) -> None:
         self.step_id = step_id
         super().__init__(f"Run step not found: {step_id}")
+
+
+class ApprovalNotFound(ApplicationError):
+    def __init__(self, approval_id: ApprovalRequestId) -> None:
+        self.approval_id = approval_id
+        super().__init__(f"Approval request not found: {approval_id}")
+
+
+class ToolInvocationNotFound(ApplicationError):
+    def __init__(self, invocation_id: ToolInvocationId) -> None:
+        self.invocation_id = invocation_id
+        super().__init__(f"Tool invocation not found: {invocation_id}")
+
+
+class ArtifactNotFound(ApplicationError):
+    def __init__(self, artifact_id: ArtifactId) -> None:
+        self.artifact_id = artifact_id
+        super().__init__(f"Artifact not found: {artifact_id}")
 
 
 class EntityConflict(ApplicationError):

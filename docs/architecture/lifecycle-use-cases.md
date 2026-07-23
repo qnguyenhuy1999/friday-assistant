@@ -54,6 +54,8 @@ event bus.
 
 ## Deferred boundaries
 
-Phase 8 owns approval, tool, and artifact use cases. Phase 10 owns durable
+Approval, tool-invocation, and artifact use cases are Phase 8 work — see
+[approval-tool-artifact-use-cases.md](approval-tool-artifact-use-cases.md).
+Phase 10 owns durable
 worker claiming, cross-worker event sequence allocation, retry scheduling,
 and backoff. Phase 11 owns actual tool execution/cancellation.

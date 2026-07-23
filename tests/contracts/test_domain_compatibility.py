@@ -182,6 +182,7 @@ def test_approval_request_projects_to_valid_wire_shape() -> None:
             "requested_input": approval.requested_input,
             "status": approval.status.value,
             "requested_at": approval.requested_at.isoformat(),
+            "expires_at": None,
             "resolved_at": None,
             "resolution_note": None,
             "resolver": None,

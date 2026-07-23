@@ -16,11 +16,16 @@ import contextlib
 from types import TracebackType
 from typing import Self
 
-from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.orm.exc import StaleDataError
 
-from friday.application.errors import ConcurrencyConflict, EntityConflict, TransactionFailure
+from friday.application.errors import (
+    ApplicationError,
+    ConcurrencyConflict,
+    EntityConflict,
+    TransactionFailure,
+)
 from friday.application.ports import UnitOfWork, UnitOfWorkFactory
 from friday.infrastructure.persistence.repositories import (
     ApprovalRepository,
@@ -31,6 +36,16 @@ from friday.infrastructure.persistence.repositories import (
     TaskRepository,
     ToolInvocationRepository,
 )
+
+
+def _translated(exc: SQLAlchemyError) -> ApplicationError:
+    """Map a SQLAlchemy failure onto the stable application error hierarchy.
+    Messages are static; the original exception stays chained internally."""
+    if isinstance(exc, StaleDataError):
+        return ConcurrencyConflict("write lost an optimistic-concurrency race")
+    if isinstance(exc, IntegrityError):
+        return EntityConflict("write violated a uniqueness or state constraint")
+    return TransactionFailure("database transaction failed")
 
 
 class SqlAlchemyUnitOfWork:
@@ -84,19 +99,18 @@ class SqlAlchemyUnitOfWork:
         if exc_type is not None:
             self._rollback_quietly()
         self._session.close()
+        if isinstance(exc, SQLAlchemyError):
+            # Repository reads/writes inside the block (e.g. autoflush during
+            # a query) can raise before commit(); translate here so no
+            # SQLAlchemy exception ever crosses into application code.
+            raise _translated(exc) from exc
 
     def commit(self) -> None:
         try:
             self._session.commit()
-        except StaleDataError as exc:
+        except SQLAlchemyError as exc:
             self._rollback_quietly()
-            raise ConcurrencyConflict("commit lost an optimistic-concurrency race") from exc
-        except IntegrityError as exc:
-            self._rollback_quietly()
-            raise EntityConflict("commit violated a uniqueness or state constraint") from exc
-        except (OperationalError, SQLAlchemyError) as exc:
-            self._rollback_quietly()
-            raise TransactionFailure("commit failed") from exc
+            raise _translated(exc) from exc
 
     def rollback(self) -> None:
         try:

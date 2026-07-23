@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
-from friday.application.errors import TransactionFailure
+from friday.application.errors import EntityConflict, TransactionFailure
 from friday.domain import Task, TaskId
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.models import Base
@@ -131,3 +131,18 @@ def test_factory_produces_independent_units_of_work(
 
     with factory() as new_uow:
         assert new_uow.tasks.get(task.id) is not None
+
+
+def test_duplicate_primary_key_translates_to_entity_conflict(
+    session_factory: sessionmaker[Session],
+) -> None:
+    task = _task()
+    with SqlAlchemyUnitOfWork(session_factory()) as uow:
+        uow.tasks.add(task)
+        uow.commit()
+
+    duplicate = Task.new(id=task.id, title="again", description="d", created_at=T0)
+    with SqlAlchemyUnitOfWork(session_factory()) as second_uow:
+        second_uow.tasks.add(duplicate)
+        with pytest.raises(EntityConflict):
+            second_uow.commit()

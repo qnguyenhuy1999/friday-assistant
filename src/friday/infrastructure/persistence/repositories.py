@@ -3,8 +3,20 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from friday.domain import Run, RunId, RunStep, RunStepId, Task, TaskId
+from friday.domain import (
+    ApprovalRequest,
+    ApprovalRequestId,
+    ApprovalStatus,
+    Run,
+    RunId,
+    RunStep,
+    RunStepId,
+    Task,
+    TaskId,
+)
 from friday.infrastructure.persistence.mappers import (
+    approval_from_row,
+    approval_to_row,
     run_from_row,
     run_step_from_row,
     run_step_to_row,
@@ -12,7 +24,12 @@ from friday.infrastructure.persistence.mappers import (
     task_from_row,
     task_to_row,
 )
-from friday.infrastructure.persistence.models import RunRow, RunStepRow, TaskRow
+from friday.infrastructure.persistence.models import (
+    ApprovalRequestRow,
+    RunRow,
+    RunStepRow,
+    TaskRow,
+)
 
 
 class TaskRepository:
@@ -74,3 +91,29 @@ class RunStepRepository:
             .order_by(RunStepRow.position, RunStepRow.id)
         )
         return [run_step_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+
+class ApprovalRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, approval: ApprovalRequest) -> None:
+        self._session.add(approval_to_row(approval))
+
+    def get(self, approval_id: ApprovalRequestId) -> ApprovalRequest | None:
+        row = self._session.get(ApprovalRequestRow, str(approval_id))
+        return approval_from_row(row) if row is not None else None
+
+    def save(self, approval: ApprovalRequest) -> None:
+        self._session.merge(approval_to_row(approval))
+
+    def list_pending_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
+        stmt = (
+            select(ApprovalRequestRow)
+            .where(
+                ApprovalRequestRow.run_id == str(run_id),
+                ApprovalRequestRow.status == ApprovalStatus.PENDING.value,
+            )
+            .order_by(ApprovalRequestRow.requested_at, ApprovalRequestRow.id)
+        )
+        return [approval_from_row(row) for row in self._session.execute(stmt).scalars()]

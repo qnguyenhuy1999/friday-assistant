@@ -1,0 +1,19 @@
+{
+  // Minimal deviations from markdownlint defaults, chosen to match this
+  // repository's existing Markdown style rather than impose new style.
+  "config": {
+    "default": true,
+    "MD013": false, // no hard line-length limit; docs use long descriptive lines
+    "MD033": false, // inline HTML not currently used, but not worth banning
+    "MD041": false // first line doesn't have to be a top-level heading (not true for every doc here)
+  },
+  "globs": ["**/*.md"],
+  "ignores": [
+    "node_modules/**",
+    ".venv/**",
+    // Auto-generated planning documents from the superpowers writing-plans
+    // skill use their own checkbox/fenced-code layout convention, not
+    // hand-authored governance prose subject to house Markdown style.
+    "docs/superpowers/plans/**"
+  ]
+}

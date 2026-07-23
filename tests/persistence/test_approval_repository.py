@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy.orm import Session
+
 from friday.domain import (
     ApprovalCategory,
     ApprovalRequest,
@@ -20,7 +22,7 @@ from friday.infrastructure.persistence.repositories import (
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def _make_run(session) -> RunId:
+def _make_run(session: Session) -> RunId:
     task = Task.new(id=TaskId.new(), title="t", description="d", created_at=T0)
     TaskRepository(session).add(task)
     session.flush()
@@ -43,7 +45,7 @@ def _make_approval(run_id: RunId, requested_at: datetime) -> ApprovalRequest:
     )
 
 
-def test_add_then_get_round_trips(session) -> None:
+def test_add_then_get_round_trips(session: Session) -> None:
     run_id = _make_run(session)
     repo = ApprovalRepository(session)
     approval = _make_approval(run_id, T0)
@@ -55,12 +57,12 @@ def test_add_then_get_round_trips(session) -> None:
     assert fetched.run_id == approval.run_id
 
 
-def test_get_returns_none_for_missing_id(session) -> None:
+def test_get_returns_none_for_missing_id(session: Session) -> None:
     repo = ApprovalRepository(session)
     assert repo.get(ApprovalRequestId.new()) is None
 
 
-def test_save_persists_status_transition(session) -> None:
+def test_save_persists_status_transition(session: Session) -> None:
     run_id = _make_run(session)
     repo = ApprovalRepository(session)
     approval = _make_approval(run_id, T0)
@@ -75,7 +77,7 @@ def test_save_persists_status_transition(session) -> None:
 
 
 def test_list_pending_for_run_orders_by_requested_at_then_id_and_excludes_resolved(
-    session,
+    session: Session,
 ) -> None:
     run_id = _make_run(session)
     repo = ApprovalRepository(session)

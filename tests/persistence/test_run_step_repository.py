@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from sqlalchemy.orm import Session
+
 from friday.domain import Run, RunId, RunStep, RunStepId, Task, TaskId
 from friday.infrastructure.persistence.repositories import (
     RunRepository,
@@ -12,7 +14,7 @@ from friday.infrastructure.persistence.repositories import (
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def _make_run(session) -> RunId:
+def _make_run(session: Session) -> RunId:
     task = Task.new(id=TaskId.new(), title="t", description="d", created_at=T0)
     TaskRepository(session).add(task)
     session.flush()
@@ -22,7 +24,7 @@ def _make_run(session) -> RunId:
     return run.id
 
 
-def test_add_then_get_round_trips(session) -> None:
+def test_add_then_get_round_trips(session: Session) -> None:
     run_id = _make_run(session)
     repo = RunStepRepository(session)
     step = RunStep.new(id=RunStepId.new(), run_id=run_id, name="s", position=0, created_at=T0)
@@ -34,12 +36,12 @@ def test_add_then_get_round_trips(session) -> None:
     assert fetched.run_id == step.run_id
 
 
-def test_get_returns_none_for_missing_id(session) -> None:
+def test_get_returns_none_for_missing_id(session: Session) -> None:
     repo = RunStepRepository(session)
     assert repo.get(RunStepId.new()) is None
 
 
-def test_save_persists_status_transition(session) -> None:
+def test_save_persists_status_transition(session: Session) -> None:
     run_id = _make_run(session)
     repo = RunStepRepository(session)
     step = RunStep.new(id=RunStepId.new(), run_id=run_id, name="s", position=0, created_at=T0)
@@ -53,7 +55,7 @@ def test_save_persists_status_transition(session) -> None:
     assert fetched.status == step.status
 
 
-def test_list_for_run_orders_by_position_then_id(session) -> None:
+def test_list_for_run_orders_by_position_then_id(session: Session) -> None:
     run_id = _make_run(session)
     repo = RunStepRepository(session)
     step_a = RunStep.new(id=RunStepId.new(), run_id=run_id, name="a", position=0, created_at=T0)

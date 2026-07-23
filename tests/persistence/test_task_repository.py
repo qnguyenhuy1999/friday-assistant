@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from sqlalchemy.orm import Session
+
 from friday.domain import Task, TaskId
 from friday.infrastructure.persistence.repositories import TaskRepository
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def test_add_then_get_round_trips(session) -> None:
+def test_add_then_get_round_trips(session: Session) -> None:
     repo = TaskRepository(session)
     task = Task.new(id=TaskId.new(), title="t", description="d", created_at=T0)
     repo.add(task)
@@ -19,12 +21,12 @@ def test_add_then_get_round_trips(session) -> None:
     assert fetched.title == "t"
 
 
-def test_get_returns_none_for_missing_id(session) -> None:
+def test_get_returns_none_for_missing_id(session: Session) -> None:
     repo = TaskRepository(session)
     assert repo.get(TaskId.new()) is None
 
 
-def test_save_persists_status_transition(session) -> None:
+def test_save_persists_status_transition(session: Session) -> None:
     repo = TaskRepository(session)
     task = Task.new(id=TaskId.new(), title="t", description="d", created_at=T0)
     repo.add(task)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy.orm import Session
+
 from friday.domain import Run, RunId, Task, TaskId, ToolInvocation, ToolInvocationId
 from friday.infrastructure.persistence.repositories import (
     RunRepository,
@@ -12,7 +14,7 @@ from friday.infrastructure.persistence.repositories import (
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def _make_run(session) -> RunId:
+def _make_run(session: Session) -> RunId:
     task = Task.new(id=TaskId.new(), title="t", description="d", created_at=T0)
     TaskRepository(session).add(task)
     session.flush()
@@ -32,7 +34,7 @@ def _make_invocation(run_id: RunId, requested_at: datetime) -> ToolInvocation:
     )
 
 
-def test_add_then_get_round_trips(session) -> None:
+def test_add_then_get_round_trips(session: Session) -> None:
     run_id = _make_run(session)
     repo = ToolInvocationRepository(session)
     invocation = _make_invocation(run_id, T0)
@@ -44,12 +46,12 @@ def test_add_then_get_round_trips(session) -> None:
     assert fetched.run_id == invocation.run_id
 
 
-def test_get_returns_none_for_missing_id(session) -> None:
+def test_get_returns_none_for_missing_id(session: Session) -> None:
     repo = ToolInvocationRepository(session)
     assert repo.get(ToolInvocationId.new()) is None
 
 
-def test_save_persists_status_transition(session) -> None:
+def test_save_persists_status_transition(session: Session) -> None:
     run_id = _make_run(session)
     repo = ToolInvocationRepository(session)
     invocation = _make_invocation(run_id, T0)
@@ -63,7 +65,7 @@ def test_save_persists_status_transition(session) -> None:
     assert fetched.status == invocation.status
 
 
-def test_save_round_trips_output_set_flag_when_output_is_none(session) -> None:
+def test_save_round_trips_output_set_flag_when_output_is_none(session: Session) -> None:
     run_id = _make_run(session)
     repo = ToolInvocationRepository(session)
     invocation = _make_invocation(run_id, T0)
@@ -79,7 +81,7 @@ def test_save_round_trips_output_set_flag_when_output_is_none(session) -> None:
     assert fetched.output is None
 
 
-def test_list_for_run_orders_by_requested_at_then_id(session) -> None:
+def test_list_for_run_orders_by_requested_at_then_id(session: Session) -> None:
     run_id = _make_run(session)
     repo = ToolInvocationRepository(session)
     invocation_b = _make_invocation(run_id, T0 + timedelta(seconds=1))

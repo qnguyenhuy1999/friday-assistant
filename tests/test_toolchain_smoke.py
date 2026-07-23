@@ -13,8 +13,8 @@ def _load_pyproject() -> dict[str, Any]:
 def test_python_version_matches_pyproject_requirement() -> None:
     data = _load_pyproject()
     requires_python: str = data["project"]["requires-python"]
-    assert requires_python.startswith(">=3.14")
-    assert sys.version_info >= (3, 14)
+    assert requires_python.startswith(">=3.13")
+    assert sys.version_info >= (3, 13)
 
 
 def test_repository_root_contains_expected_toolchain_files() -> None:

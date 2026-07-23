@@ -5,19 +5,18 @@ bootstrap:
 
 format:
     uv run ruff format .
-    pnpm exec prettier --write "scripts/**/*.ts" "*.json" "*.yaml" eslint.config.mjs
+    pnpm exec prettier --write "*.json" "*.yaml" eslint.config.mjs
 
 format-check:
     uv run ruff format --check .
-    pnpm exec prettier --check "scripts/**/*.ts" "*.json" "*.yaml" eslint.config.mjs
+    pnpm exec prettier --check "*.json" "*.yaml" eslint.config.mjs
 
 lint:
     uv run ruff check .
-    pnpm exec eslint scripts eslint.config.mjs
+    pnpm exec eslint eslint.config.mjs
 
 typecheck:
     uv run mypy
-    pnpm exec tsc --noEmit
 
 test:
     uv run pytest

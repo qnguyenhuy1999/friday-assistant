@@ -18,7 +18,7 @@ require_command() {
 require_command uv "Install uv: https://docs.astral.sh/uv/getting-started/installation/"
 require_command node "Install Node.js 22 (LTS): https://nodejs.org/"
 require_command corepack "Corepack ships with Node.js >= 16.9; if missing, upgrade Node."
-require_command just "Install just: https://just.systems (e.g. 'brew install just')"
+require_command just "Install just: https://just.systems"
 
 echo "== Toolchain versions =="
 echo "python:   $(python3 --version)"

@@ -75,8 +75,8 @@ integration).
 
 Required runtimes:
 
-- Python 3.14+ (managed via [uv](https://docs.astral.sh/uv/))
-- Node.js 22.23.1+ (LTS "Jod") with Corepack enabled
+- Python 3.13+ (managed via [uv](https://docs.astral.sh/uv/))
+- Node.js >=22 <25 (installed via Corepack-managed pnpm; developed against 22.23.1 "Jod" LTS)
 - pnpm 11.16.0 (activated via Corepack from `packageManager` in
   `package.json`)
 - [`just`](https://just.systems) as the local command runner

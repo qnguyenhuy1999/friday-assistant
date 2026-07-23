@@ -46,8 +46,6 @@ This phase establishes only the repository foundation:
 - No Docker or CI configuration
 - No database code or domain models
 - No dependency manifests or lockfiles
-- No license file (see
-  [docs/governance/license-decision-required.md](docs/governance/license-decision-required.md))
 
 ## Planned Architecture Areas
 
@@ -65,8 +63,7 @@ sidecar). None of this is implemented yet.
   referencing or reusing external code
 - [docs/governance/repository-rules.md](docs/governance/repository-rules.md)
   — cross-phase contribution rules
-- [docs/governance/license-decision-required.md](docs/governance/license-decision-required.md)
-  — current license status
+- [LICENSE](LICENSE) — MIT License
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to contribute
 - [SECURITY.md](SECURITY.md) — security policy
 

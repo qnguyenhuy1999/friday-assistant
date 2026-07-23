@@ -8,11 +8,13 @@ version until the project reaches an initial release milestone.
 ## Reporting a Vulnerability
 
 Please report suspected vulnerabilities privately rather than opening a
-public issue. Contact:
+public issue. While this repository is private, report through the hosting
+platform's private channel to the repository owner (e.g. a private security
+advisory or a direct message) rather than a public issue or PR.
 
-**`<security-contact-placeholder@repository-owner.example>`**
-*(Repository owner: replace this with a real, monitored security contact
-before any public release.)*
+*(Repository owner: once this repository is public, replace this section
+with a monitored security contact — e.g. an email address or a hosting
+platform vulnerability-reporting feature.)*
 
 Include what you found, steps to reproduce, and potential impact. Do not
 include real credentials, tokens, or sensitive data in a report.

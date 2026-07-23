@@ -44,6 +44,6 @@ When licensing terms for a piece of external code or design are unclear or
 unverified, **clean-room reimplementation is the default**, not copying. This
 avoids inheriting unresolved legal risk into Friday Agent OS.
 
-See also [license-decision-required.md](license-decision-required.md) for the
-repository's current license status, and
-[repository-rules.md](repository-rules.md) for broader contribution rules.
+See also [../../LICENSE](../../LICENSE) for the repository's current license
+(MIT), and [repository-rules.md](repository-rules.md) for broader
+contribution rules.

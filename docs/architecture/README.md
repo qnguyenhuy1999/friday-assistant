@@ -1,9 +1,10 @@
 # Architecture Overview
 
 This document describes the source organization established through
-Phase 4. It covers structure and dependency boundaries only — the domain
-model, application ports, and contracts are implemented; no framework,
-persistence, worker, AI integration, or frontend behavior exists yet.
+Phases 4 and 5. It covers structure and dependency boundaries — the domain
+model, application ports, contracts, and SQLite persistence adapter are
+implemented; no API routes, worker, AI integration, or frontend behavior
+exists yet.
 
 ## Source Tree
 
@@ -80,12 +81,12 @@ reverse.
 
 ## Status
 
-Phase 4 adds a framework-independent domain model, application ports,
-and JSON Schema contracts. Persistence adapters, routes, the worker, AI
-integration, and the frontend are introduced in later, separately
-reviewed phases.
+Phase 4 adds a framework-independent domain model, application ports, and
+JSON Schema contracts. Those domain and contract surfaces are complete for
+the entities documented in their respective modules and tests.
 
 Phase 5 adds a SQLite persistence adapter (see
 [persistence.md](persistence.md)) implementing all seven application
 ports via SQLAlchemy, with Alembic migrations as schema source of truth.
+The adapter and migration behavior are covered by `tests/persistence`.
 Routes, the worker, AI integration, and the frontend still do not exist.

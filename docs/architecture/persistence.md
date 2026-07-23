@@ -84,7 +84,7 @@ as a backstop — a duplicate-sequence append for the same run fails at
 flush time with `IntegrityError` rather than silently corrupting event
 order (see `tests/persistence/test_run_event_store.py::test_duplicate_sequence_for_same_run_is_rejected_at_db_level`).
 
-## No `UnitOfWork` Port
+## Transaction Boundary Status Before Phase 6
 
 `ports.py`'s module docstring states the reasoning directly:
 
@@ -93,8 +93,12 @@ order (see `tests/persistence/test_run_event_store.py::test_duplicate_sequence_f
 > be speculative. Introduce it once persistence in a later phase
 > demonstrates a concrete need.
 
-This phase does not add one either — callers share a single `Session` and
-call `session.flush()`/commit at the call site.
+Phase 5 does not provide an application transaction boundary: callers share
+a single `Session` and call `session.flush()`/commit at the call site. In
+particular, there is no `UnitOfWork` port or infrastructure implementation
+in the delivered pre-Phase-6 persistence adapter. Any Phase 6 transaction
+boundary must therefore be reviewed against the application-layer contract
+and this adapter rather than inferred from the Phase 5 repositories.
 
 ## Schema Source of Truth
 
@@ -103,7 +107,8 @@ schema source of truth, applied via `alembic upgrade head`. Application
 and production code never calls `Base.metadata.create_all()`. Tests use
 `Base.metadata.create_all()` only as a fast, migration-independent way to
 stand up a throwaway schema for unit-testing repositories
-(`tests/persistence/conftest.py`); `tests/persistence/test_migrations.py`
-separately proves the real Alembic migration produces the same seven
-tables (plus `alembic_version`) and that downgrade-then-upgrade is
-idempotent.
+(`tests/persistence/conftest.py`). `tests/persistence/test_migrations.py`
+proves upgrade/downgrade behavior, while
+`tests/persistence/test_schema_parity.py` upgrades a new database through
+Alembic and compares its owned tables, columns, types, nullability, keys,
+constraints, indexes, and defaults with `Base.metadata`.

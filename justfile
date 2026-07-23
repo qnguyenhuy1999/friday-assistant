@@ -43,6 +43,9 @@ domain-check:
 schema-check:
     uv run pytest tests/contracts
 
+schema-parity-check:
+    uv run pytest tests/persistence/test_schema_parity.py
+
 migration-check:
     uv run pytest tests/persistence/test_migrations.py
 
@@ -63,7 +66,7 @@ pre-commit:
 # they're re-run here individually so a contributor gets an explicit,
 # fast-failing signal naming exactly which dimension broke, at negligible
 # cost (each subset runs in well under a second).
-check: format-check lint typecheck test architecture-check policy-check domain-check schema-check migration-check persistence-check
+check: format-check lint typecheck test architecture-check policy-check domain-check schema-check schema-parity-check migration-check persistence-check
 
 # Full CI-equivalent gate. test-cov and lock-check are not part of `check`
 # because test-cov needs coverage instrumentation (slower, and duplicates

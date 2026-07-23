@@ -88,6 +88,7 @@ class ApprovalRequestRow(Base):
     requested_input: Mapped[object | None] = mapped_column(JSON)
     status: Mapped[str]
     requested_at: Mapped[datetime]
+    expires_at: Mapped[datetime | None]
     resolved_at: Mapped[datetime | None]
     resolution_note: Mapped[str | None]
     resolver: Mapped[str | None]

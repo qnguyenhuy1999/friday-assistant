@@ -56,6 +56,7 @@ class ApprovalRequest:
     _status: ApprovalStatus
     _requested_at: datetime
     _step_id: RunStepId | None = field(default=None)
+    _expires_at: datetime | None = field(default=None)
     _resolved_at: datetime | None = field(default=None)
     _resolution_note: str | None = field(default=None)
     _resolver: str | None = field(default=None)
@@ -73,6 +74,7 @@ class ApprovalRequest:
         requested_input: JsonValue,
         requested_at: datetime,
         step_id: RunStepId | None = None,
+        expires_at: datetime | None = None,
     ) -> ApprovalRequest:
         normalized_summary = summary.strip()
         normalized_action = requested_action.strip()
@@ -80,6 +82,9 @@ class ApprovalRequest:
             raise DomainValidationError("ApprovalRequest.summary must not be empty")
         if not normalized_action:
             raise DomainValidationError("ApprovalRequest.requested_action must not be empty")
+        normalized_expiry = ensure_utc(expires_at) if expires_at is not None else None
+        if normalized_expiry is not None and normalized_expiry <= ensure_utc(requested_at):
+            raise DomainValidationError("ApprovalRequest.expires_at must be after its requested_at")
         return cls(
             _id=id,
             _run_id=run_id,
@@ -93,6 +98,7 @@ class ApprovalRequest:
             _status=ApprovalStatus.PENDING,
             _requested_at=ensure_utc(requested_at),
             _step_id=step_id,
+            _expires_at=normalized_expiry,
         )
 
     @property
@@ -134,6 +140,10 @@ class ApprovalRequest:
     @property
     def requested_at(self) -> datetime:
         return self._requested_at
+
+    @property
+    def expires_at(self) -> datetime | None:
+        return self._expires_at
 
     @property
     def resolved_at(self) -> datetime | None:

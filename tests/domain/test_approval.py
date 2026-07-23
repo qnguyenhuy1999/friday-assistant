@@ -122,3 +122,54 @@ def test_terminal_statuses_reject_further_resolution(status: ApprovalStatus) -> 
         request.cancel(T1)
     with pytest.raises(InvalidStateTransition):
         request.expire(T1)
+
+
+def test_new_accepts_future_expiry_and_normalizes_to_utc() -> None:
+    request = ApprovalRequest.new(
+        id=ApprovalRequestId.new(),
+        run_id=RunId.new(),
+        category=ApprovalCategory.TOOL_EXECUTION,
+        summary="s",
+        reason="r",
+        requested_action="a",
+        requested_input=None,
+        requested_at=T0,
+        expires_at=T1,
+    )
+    assert request.expires_at == T1
+    assert request.expires_at is not None and request.expires_at.tzinfo is UTC
+
+
+def test_new_defaults_to_no_expiry() -> None:
+    assert _new_request().expires_at is None
+
+
+@pytest.mark.parametrize("expiry", [T0, datetime(2025, 12, 31, tzinfo=UTC)])
+def test_new_rejects_expiry_not_after_requested_at(expiry: datetime) -> None:
+    with pytest.raises(DomainValidationError):
+        ApprovalRequest.new(
+            id=ApprovalRequestId.new(),
+            run_id=RunId.new(),
+            category=ApprovalCategory.TOOL_EXECUTION,
+            summary="s",
+            reason="r",
+            requested_action="a",
+            requested_input=None,
+            requested_at=T0,
+            expires_at=expiry,
+        )
+
+
+def test_new_rejects_naive_expiry() -> None:
+    with pytest.raises(DomainValidationError):
+        ApprovalRequest.new(
+            id=ApprovalRequestId.new(),
+            run_id=RunId.new(),
+            category=ApprovalCategory.TOOL_EXECUTION,
+            summary="s",
+            reason="r",
+            requested_action="a",
+            requested_input=None,
+            requested_at=T0,
+            expires_at=T1.replace(tzinfo=None),
+        )

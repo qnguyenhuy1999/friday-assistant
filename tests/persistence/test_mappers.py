@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from friday.domain import (
     ApprovalCategory,
@@ -71,6 +71,22 @@ def test_run_step_round_trips_through_failed_state() -> None:
     assert restored.id == step.id
     assert restored.status == step.status
     assert restored.failure == step.failure
+
+
+def test_approval_request_round_trips_expiry_deadline() -> None:
+    approval = ApprovalRequest.new(
+        id=ApprovalRequestId.new(),
+        run_id=RunId.new(),
+        category=ApprovalCategory.TOOL_EXECUTION,
+        summary="s",
+        reason="r",
+        requested_action="a",
+        requested_input=None,
+        requested_at=T0,
+        expires_at=T0 + timedelta(hours=1),
+    )
+    restored = approval_from_row(approval_to_row(approval))
+    assert restored.expires_at == approval.expires_at
 
 
 def test_approval_request_round_trips_through_approved_state() -> None:

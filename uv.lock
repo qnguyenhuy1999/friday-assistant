@@ -113,7 +113,7 @@ wheels = [
 [[package]]
 name = "friday-agent-os"
 version = "0.0.0"
-source = { virtual = "." }
+source = { editable = "." }
 
 [package.dev-dependencies]
 dev = [

@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
 [project]
 name = "friday-agent-os"
 version = "0.0.0"
@@ -15,7 +19,10 @@ dev = [
 ]
 
 [tool.uv]
-package = false
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/friday"]
 
 [tool.ruff]
 target-version = "py313"
@@ -30,10 +37,13 @@ quote-style = "double"
 [tool.mypy]
 python_version = "3.13"
 strict = true
-files = ["tests"]
+files = ["tests", "src", "apps/api", "apps/worker"]
+mypy_path = ["src", "."]
+explicit_package_bases = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.coverage.run]
-source = ["tests"]
+source = ["src", "apps", "tests"]

@@ -1,17 +1,8 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ES2022",
-    "moduleResolution": "Bundler",
-    "lib": ["ES2022"],
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "isolatedModules": true,
-    "noEmit": true
-  },
-  "include": ["scripts/**/*.ts"]
+  "files": [],
+  "references": [
+    { "path": "apps/web" },
+    { "path": "packages/contracts" },
+    { "path": "packages/sdk-ts" }
+  ]
 }

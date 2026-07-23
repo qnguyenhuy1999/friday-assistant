@@ -24,6 +24,12 @@ importers:
         specifier: ^8.65.0
         version: 8.65.0(eslint@10.7.0)(typescript@6.0.3)
 
+  apps/web: {}
+
+  packages/contracts: {}
+
+  packages/sdk-ts: {}
+
 packages:
 
   '@eslint-community/eslint-utils@4.9.1':

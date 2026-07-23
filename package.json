@@ -7,10 +7,10 @@
     "node": ">=22 <25"
   },
   "scripts": {
-    "format": "prettier --write \"*.json\" \"*.yaml\" eslint.config.mjs",
-    "format:check": "prettier --check \"*.json\" \"*.yaml\" eslint.config.mjs",
-    "lint": "eslint eslint.config.mjs",
-    "typecheck": "tsc --noEmit"
+    "format": "prettier --write \"**/*.{json,yaml,yml}\" \"apps/**/*.ts\" \"packages/**/*.ts\" eslint.config.mjs",
+    "format:check": "prettier --check \"**/*.{json,yaml,yml}\" \"apps/**/*.ts\" \"packages/**/*.ts\" eslint.config.mjs",
+    "lint": "eslint .",
+    "typecheck": "tsc --build tsconfig.json"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

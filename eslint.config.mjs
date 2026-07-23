@@ -4,7 +4,13 @@ import tseslint from "typescript-eslint";
 
 export default defineConfig(
   {
-    ignores: ["node_modules/**", "pnpm-lock.yaml"],
+    ignores: [
+      "node_modules/**",
+      "pnpm-lock.yaml",
+      "**/dist/**",
+      ".venv/**",
+      "htmlcov/**",
+    ],
   },
   js.configs.recommended,
   tseslint.configs.recommended,

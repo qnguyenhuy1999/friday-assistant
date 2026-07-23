@@ -6,6 +6,7 @@ running as a non-mutating, anytime-runnable check.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -13,7 +14,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SENSITIVE_NAME_MARKERS = ("id_rsa", "id_ed25519", "credentials.json")
 SENSITIVE_SUFFIXES = (".pem", ".key")
-PRIVATE_KEY_HEADER = "-----BEGIN "
+
+# A real PEM private-key header is "-----BEGIN <TYPE> PRIVATE KEY-----" as one
+# contiguous line. Matching the full pattern (rather than checking for
+# "-----BEGIN " and "PRIVATE KEY" as two independent substrings) means this
+# detector's own source code never matches itself, since nowhere in this file
+# does that exact contiguous text appear outside of a deliberately
+# reconstructed test fixture (see test_detector_flags_private_key_contents).
+PRIVATE_KEY_PATTERN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 
 
 def tracked_files() -> list[str]:
@@ -42,7 +50,7 @@ def find_private_key_contents(paths: list[str]) -> list[str]:
             text = full.read_text(encoding="utf-8")
         except (UnicodeDecodeError, ValueError):
             continue
-        if PRIVATE_KEY_HEADER in text and "PRIVATE KEY" in text:
+        if PRIVATE_KEY_PATTERN.search(text):
             offenders.append(path)
     return offenders
 
@@ -69,9 +77,14 @@ def test_detector_flags_a_sensitive_filename() -> None:
 
 
 def test_detector_flags_private_key_contents() -> None:
-    fixture = "-----BEGIN RSA PRIVATE KEY-----\nMIIB...\n-----END RSA PRIVATE KEY-----\n"
+    # Built from separate parts, not a single literal, so this test file's
+    # own tracked source never contains the contiguous marker text it's
+    # testing for — otherwise the real repository scan would flag itself.
+    begin_marker = "-" * 5 + "BEGIN RSA PRIVATE KEY" + "-" * 5
+    end_marker = "-" * 5 + "END RSA PRIVATE KEY" + "-" * 5
+    fixture = f"{begin_marker}\nMIIB...\n{end_marker}\n"
     nonexistent_path = "does/not/exist/on/disk.txt"
-    assert PRIVATE_KEY_HEADER in fixture and "PRIVATE KEY" in fixture
+    assert PRIVATE_KEY_PATTERN.search(fixture)
     # A path that doesn't exist on disk must be skipped, not treated as a
     # false positive.
     assert find_private_key_contents([nonexistent_path]) == []

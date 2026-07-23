@@ -37,9 +37,8 @@ def check_manifest(manifest: dict[str, Any], *, is_root: bool) -> list[str]:
     if manifest.get("private") is not True:
         violations.append(f"{name}: must be private")
 
-    if not is_root:
-        if not isinstance(name, str) or not name.startswith("@friday/"):
-            violations.append(f"{name}: workspace package name must start with @friday/")
+    if not is_root and (not isinstance(name, str) or not name.startswith("@friday/")):
+        violations.append(f"{name}: workspace package name must start with @friday/")
 
     prod_deps = manifest.get("dependencies")
     if prod_deps:

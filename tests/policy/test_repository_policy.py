@@ -76,11 +76,11 @@ def find_forbidden_tracked_paths(paths: list[str]) -> list[str]:
     for path in paths:
         name = Path(path).name
         parts = Path(path).parts
-        if name in FORBIDDEN_TRACKED_NAMES:
-            offenders.append(path)
-        elif any(path.endswith(suffix) for suffix in FORBIDDEN_TRACKED_SUFFIXES):
-            offenders.append(path)
-        elif any(part in FORBIDDEN_TRACKED_DIR_PARTS for part in parts):
+        if (
+            name in FORBIDDEN_TRACKED_NAMES
+            or any(path.endswith(suffix) for suffix in FORBIDDEN_TRACKED_SUFFIXES)
+            or any(part in FORBIDDEN_TRACKED_DIR_PARTS for part in parts)
+        ):
             offenders.append(path)
     return offenders
 
@@ -95,7 +95,8 @@ def find_conflict_markers(paths: list[str]) -> list[str]:
             text = full.read_text(encoding="utf-8")
         except (UnicodeDecodeError, ValueError):
             continue
-        if any(line.startswith(marker) for marker in CONFLICT_MARKERS for line in text.splitlines()):
+        lines = text.splitlines()
+        if any(line.startswith(marker) for marker in CONFLICT_MARKERS for line in lines):
             offenders.append(path)
     return offenders
 

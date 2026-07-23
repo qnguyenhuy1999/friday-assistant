@@ -40,3 +40,7 @@ Thumbs.db
 # Temporary workspaces
 tmp/
 .tmp/
+
+# Claude
+.claude/settings.json
+.claude/settings.*.json

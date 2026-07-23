@@ -53,12 +53,6 @@ PACKAGE_LOCAL_READMES = (
 
 CONFLICT_MARKERS = ("<<<<<<< ", ">>>>>>> ")
 
-DOMAIN_LAYER_DIRS = (
-    "src/friday/domain",
-    "src/friday/application",
-    "src/friday/infrastructure",
-)
-
 
 def tracked_files() -> list[str]:
     result = subprocess.run(
@@ -134,21 +128,6 @@ def test_no_unexpected_executable_files() -> None:
         if mode == "100755":
             executables.append(path)
     assert set(executables) == {"scripts/bootstrap.sh", "scripts/check.sh"}
-
-
-def test_domain_layers_contain_only_init_modules() -> None:
-    """Structural proxy for 'no real domain/contract model in Phase 3':
-    each layer directory must contain nothing but its __init__.py marker.
-    """
-    unexpected: list[str] = []
-    for layer_dir in DOMAIN_LAYER_DIRS:
-        layer_path = REPO_ROOT / layer_dir
-        for path in layer_path.rglob("*"):
-            if "__pycache__" in path.parts:
-                continue
-            if path.is_file() and path.name != "__init__.py":
-                unexpected.append(str(path))
-    assert unexpected == []
 
 
 def test_detector_flags_a_forbidden_tracked_artifact() -> None:

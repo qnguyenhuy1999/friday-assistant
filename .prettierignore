@@ -3,3 +3,5 @@ node_modules/
 .venv/
 htmlcov/
 dist/
+.claude/settings.json
+.claude/settings.*.json

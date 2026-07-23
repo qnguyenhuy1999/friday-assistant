@@ -6,11 +6,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from friday.domain.approval import ApprovalCategory, ApprovalStatus
+from friday.domain.artifact import ArtifactKind
 from friday.domain.failure import Failure
-from friday.domain.identifiers import RunId, RunStepId, TaskId
+from friday.domain.identifiers import (
+    ApprovalRequestId,
+    ArtifactId,
+    RunId,
+    RunStepId,
+    TaskId,
+    ToolInvocationId,
+)
+from friday.domain.json_value import JsonValue
 from friday.domain.run import RunStatus
 from friday.domain.step import RunStepStatus
 from friday.domain.task import TaskStatus
+from friday.domain.tool import ToolInvocationStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,3 +62,50 @@ class RunStepResult:
     position: int
     status: RunStepStatus
     failure: Failure | None
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalRequestResult:
+    approval_id: ApprovalRequestId
+    run_id: RunId
+    step_id: RunStepId | None
+    category: ApprovalCategory
+    summary: str
+    reason: str
+    requested_action: str
+    requested_input: JsonValue
+    status: ApprovalStatus
+    requested_at: datetime
+    expires_at: datetime | None
+    resolved_at: datetime | None
+    resolution_note: str | None
+    resolver: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ToolInvocationResult:
+    invocation_id: ToolInvocationId
+    run_id: RunId
+    step_id: RunStepId | None
+    tool_name: str
+    status: ToolInvocationStatus
+    requested_at: datetime
+    approval_request_id: ApprovalRequestId | None
+    output: JsonValue
+    output_set: bool
+    failure: Failure | None
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactResult:
+    artifact_id: ArtifactId
+    run_id: RunId
+    step_id: RunStepId | None
+    kind: ArtifactKind
+    name: str
+    media_type: str
+    location: str
+    created_at: datetime
+    size: int | None
+    checksum: str | None
+    metadata: JsonValue

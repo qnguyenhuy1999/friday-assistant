@@ -64,7 +64,7 @@ to every phase unless a specific phase's documentation says otherwise.
   runs every configured hook (both stages) against all files.
 - See [docs/governance/quality-gates.md](docs/governance/quality-gates.md)
   for what each gate checks and how to change one safely.
-- Dependency policy: all Phase 3 tooling is dev-only (Python
+- Dependency policy: all tooling is dev-only (Python
   `dependency-groups.dev`, Node `devDependencies`); no wildcard, prerelease,
   or direct URL/git/local-path dependency specifiers.
 - Changing a detector in `tests/policy/*.py` (or the architecture boundary
@@ -86,8 +86,8 @@ to every phase unless a specific phase's documentation says otherwise.
 
 ## Current Limitations
 
-This repository is at the Phase 2 (clean source organization) stage.
-There is no business logic, framework code, database, or AI integration —
-only structure, dependency boundaries, and static composition-root
-shells. Later phases will extend this document as real behavior is
-introduced.
+This repository is at the Phase 4 (domain and contract freeze) stage.
+There is a framework-independent domain model, application ports, and
+JSON Schema contracts, but no persistence, worker, AI integration, or
+frontend behavior. Later phases will extend this document as real
+behavior is introduced.

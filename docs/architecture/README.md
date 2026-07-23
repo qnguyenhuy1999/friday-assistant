@@ -1,8 +1,9 @@
 # Architecture Overview
 
-This document describes the source organization established in Phase 2.
-It covers structure and dependency boundaries only — no business logic,
-framework, database, or AI integration exists yet.
+This document describes the source organization established through
+Phase 4. It covers structure and dependency boundaries only — the domain
+model, application ports, and contracts are implemented; no framework,
+persistence, worker, AI integration, or frontend behavior exists yet.
 
 ## Source Tree
 
@@ -17,12 +18,17 @@ framework, database, or AI integration exists yet.
 - **`apps/web`** — browser control-plane delivery. A thin TypeScript
   package shell (no React/Vite yet).
 - **`packages/contracts`** — language-neutral schemas and cross-process
-  protocol definitions. No real contracts exist yet.
+  protocol definitions (see [contracts.md](contracts.md)).
 - **`packages/sdk-ts`** — TypeScript client SDK surface. No generated
   client exists yet.
+- **`tests/domain`** — domain entity/value-object unit and state-machine
+  tests (see [domain-model.md](domain-model.md)).
+- **`tests/application`** — application port structural-typing tests.
+- **`tests/contracts`** — JSON Schema validity, reference, example, and
+  compatibility tests.
 - **`tests/architecture`** — import-boundary and repository-layout
   checks.
-- **`tests/policy`** — Phase 3 dependency, repository, provenance,
+- **`tests/policy`** — dependency, repository, provenance,
   sensitive-file, and Markdown-link policy checks. Structural, not
   architectural, but enforced the same way (see
   [../governance/quality-gates.md](../governance/quality-gates.md)).
@@ -69,6 +75,7 @@ reverse.
 
 ## Status
 
-Phase 2 is structure only. Real business models, use cases, adapters,
-routes, and contracts are introduced in later, separately reviewed
-phases.
+Phase 4 adds a framework-independent domain model, application ports,
+and JSON Schema contracts. Persistence adapters, routes, the worker, AI
+integration, and the frontend are introduced in later, separately
+reviewed phases.

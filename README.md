@@ -4,11 +4,16 @@ Local-first engineering agent operating system.
 
 ## Status
 
-**Phase 3 — quality gates and architecture hardening.** The repository now
-enforces formatting, linting, typing, tests, coverage, dependency/
-repository/provenance policy, lockfile reproducibility, and shell/Markdown
-hygiene locally (pre-commit), in a full local gate, and in CI — with no new
-business logic, framework, database, or AI integration.
+**Phase 4 — domain and contract freeze.** The repository now has a
+framework-independent domain model (`src/friday/domain`), application
+ports (`src/friday/application/ports.py`), and canonical JSON Schema
+contracts (`packages/contracts/schemas/v1`) — still with no persistence,
+worker, AI integration, or frontend behavior. All Phase 3 quality gates
+(formatting, linting, typing, tests, coverage, dependency/repository/
+provenance policy, lockfile reproducibility, shell/Markdown hygiene)
+continue to apply. See
+[docs/architecture/domain-model.md](docs/architecture/domain-model.md) and
+[docs/architecture/contracts.md](docs/architecture/contracts.md).
 
 ## Repository Structure
 
@@ -25,6 +30,9 @@ packages/
 ├── contracts/  language-neutral protocol definitions (@friday/contracts)
 └── sdk-ts/     TypeScript client SDK surface (@friday/sdk)
 tests/
+├── domain/        domain entity/value-object unit and state-machine tests
+├── application/   application port structural-typing tests
+├── contracts/     JSON Schema validity, reference, example, and compatibility tests
 ├── architecture/  import-boundary and repository-layout checks
 ├── policy/        dependency/repository/provenance/sensitive-file/link policy checks
 └── toolchain/     Phase 1 toolchain smoke test
@@ -70,11 +78,10 @@ This phase establishes only the repository foundation:
 
 ## Intentionally Not Implemented Yet
 
-- No application source code (Python, Node, or otherwise)
+- No persistence, worker, or AI/Claude runtime integration
 - No frameworks (FastAPI, React, or similar)
-- No Docker or CI configuration
-- No database code or domain models
-- No dependency manifests or lockfiles
+- No frontend or computer-use sidecar behavior
+- No infrastructure adapters implementing the application ports
 
 ## Planned Architecture Areas
 
@@ -82,12 +89,17 @@ See [docs/architecture/README.md](docs/architecture/README.md) for the
 planned high-level architectural boundaries (domain, application,
 infrastructure, contracts, SDK, worker, web control plane, tool gateway,
 Claude runtime, structural retrieval, curated memory, and a computer-use
-sidecar). None of this is implemented yet.
+sidecar). Only domain, application ports, and contracts are implemented so
+far.
 
 ## Documentation
 
-- [docs/architecture/README.md](docs/architecture/README.md) — future
-  architectural boundaries
+- [docs/architecture/README.md](docs/architecture/README.md) — source
+  organization and architectural boundaries
+- [docs/architecture/domain-model.md](docs/architecture/domain-model.md) —
+  domain entities, value objects, and lifecycle rules
+- [docs/architecture/contracts.md](docs/architecture/contracts.md) — JSON
+  Schema contract set and versioning policy
 - [docs/governance/provenance.md](docs/governance/provenance.md) — rules on
   referencing or reusing external code
 - [docs/governance/repository-rules.md](docs/governance/repository-rules.md)
@@ -98,10 +110,10 @@ sidecar). None of this is implemented yet.
 
 ## Development
 
-**Phase status:** Phase 3 — quality gates and architecture hardening. No
-application runtime exists yet (no API, no frontend, no database, no AI
-integration) — only structure, dependency boundaries, static
-composition-root shells, and the quality gates described below.
+**Phase status:** Phase 4 — domain and contract freeze. No application
+runtime exists yet (no API, no frontend, no database, no AI integration)
+— only the domain model, application ports, JSON Schema contracts, and the
+quality gates described below.
 
 Required runtimes:
 

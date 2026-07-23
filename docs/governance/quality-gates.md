@@ -66,6 +66,31 @@ implemented.
   subset runs in well under a second). This is intentional, not a bug — see
   the comment above `check:` in the `justfile`.
 
+## Persistence Migrations
+
+- **Purpose:** give a contributor a fast, explicit signal that the real
+  Alembic migration (not just the test-only `create_all()` schema) still
+  produces the correct seven-table schema.
+- **Implementation:** `tests/persistence/test_migrations.py` — runs
+  `alembic upgrade head` against a throwaway SQLite file and asserts all
+  seven domain tables (plus `alembic_version`) exist, then proves
+  downgrade-then-upgrade is idempotent.
+- **Command:** `just migration-check`.
+- **Runs:** local, CI (`just check`); a subset already exercised by
+  `just test` and by `just persistence-check`.
+
+## Persistence Layer
+
+- **Purpose:** verify the SQLite adapter (`src/friday/infrastructure/persistence`)
+  — repositories, mappers, engine/PRAGMA setup, and migrations — covering
+  all seven application ports (see
+  [../architecture/persistence.md](../architecture/persistence.md)).
+- **Implementation:** `pytest`, covering all of `tests/persistence`
+  (repository, mapper, database, and migration tests).
+- **Command:** `just persistence-check`.
+- **Runs:** local, CI (`just check`); a subset already exercised by
+  `just test`.
+
 ## Coverage
 
 - **Purpose:** prevent untested project code from silently accumulating.

@@ -13,6 +13,9 @@ persistence, worker, AI integration, or frontend behavior exists yet.
   on `domain` only.
 - **`src/friday/infrastructure`** — adapters to databases, external APIs,
   and the filesystem. May depend on `application` and `domain`.
+- **`src/friday/infrastructure/persistence`** — SQLite adapter via
+  SQLAlchemy/Alembic implementing the application ports (see
+  [persistence.md](persistence.md)).
 - **`apps/api`** — API delivery process. A thin composition root.
 - **`apps/worker`** — worker delivery process. A thin composition root.
 - **`apps/web`** — browser control-plane delivery. A thin TypeScript
@@ -33,6 +36,8 @@ persistence, worker, AI integration, or frontend behavior exists yet.
   architectural, but enforced the same way (see
   [../governance/quality-gates.md](../governance/quality-gates.md)).
 - **`tests/toolchain`** — Phase 1 toolchain smoke test.
+- **`tests/persistence`** — SQLite repository, mapper, database, and
+  migration tests (see [persistence.md](persistence.md)).
 
 ## Dependency Direction
 
@@ -79,3 +84,8 @@ Phase 4 adds a framework-independent domain model, application ports,
 and JSON Schema contracts. Persistence adapters, routes, the worker, AI
 integration, and the frontend are introduced in later, separately
 reviewed phases.
+
+Phase 5 adds a SQLite persistence adapter (see
+[persistence.md](persistence.md)) implementing all seven application
+ports via SQLAlchemy, with Alembic migrations as schema source of truth.
+Routes, the worker, AI integration, and the frontend still do not exist.

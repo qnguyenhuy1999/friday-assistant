@@ -86,8 +86,11 @@ to every phase unless a specific phase's documentation says otherwise.
 
 ## Current Limitations
 
-This repository is at the Phase 4 (domain and contract freeze) stage.
-There is a framework-independent domain model, application ports, and
-JSON Schema contracts, but no persistence, worker, AI integration, or
-frontend behavior. Later phases will extend this document as real
-behavior is introduced.
+This repository is at the Phase 5 (persistence foundation) stage. There
+is a framework-independent domain model, application ports, JSON Schema
+contracts, and a SQLite persistence adapter (see
+[docs/architecture/persistence.md](docs/architecture/persistence.md))
+implementing all seven application ports via SQLAlchemy, with Alembic
+migrations as schema source of truth, but no routes, worker, AI
+integration, or frontend behavior. Later phases will extend this document
+as real behavior is introduced.

@@ -1,0 +1,26 @@
+# Normalize all text files to LF on checkin
+* text=auto eol=lf
+
+# Windows scripts require CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Explicit text
+*.md text
+*.py text
+*.js text
+*.ts text
+*.json text
+*.yml text
+*.yaml text
+
+# Binary formats
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from friday.domain import (
@@ -10,6 +10,7 @@ from friday.domain import (
     Artifact,
     ArtifactId,
     Run,
+    RunEvent,
     RunId,
     RunStep,
     RunStepId,
@@ -23,6 +24,8 @@ from friday.infrastructure.persistence.mappers import (
     approval_to_row,
     artifact_from_row,
     artifact_to_row,
+    run_event_from_row,
+    run_event_to_row,
     run_from_row,
     run_step_from_row,
     run_step_to_row,
@@ -35,6 +38,7 @@ from friday.infrastructure.persistence.mappers import (
 from friday.infrastructure.persistence.models import (
     ApprovalRequestRow,
     ArtifactRow,
+    RunEventRow,
     RunRow,
     RunStepRow,
     TaskRow,
@@ -170,3 +174,24 @@ class ToolInvocationRepository:
             .order_by(ToolInvocationRow.requested_at, ToolInvocationRow.id)
         )
         return [tool_invocation_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+
+class RunEventStore:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def append(self, event: RunEvent) -> None:
+        self._session.add(run_event_to_row(event))
+
+    def list_for_run(self, run_id: RunId) -> list[RunEvent]:
+        stmt = (
+            select(RunEventRow)
+            .where(RunEventRow.run_id == str(run_id))
+            .order_by(RunEventRow.sequence)
+        )
+        return [run_event_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+    def next_sequence(self, run_id: RunId) -> int:
+        stmt = select(func.max(RunEventRow.sequence)).where(RunEventRow.run_id == str(run_id))
+        current_max = self._session.execute(stmt).scalar()
+        return (current_max or 0) + 1

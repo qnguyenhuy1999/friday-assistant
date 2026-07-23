@@ -283,15 +283,12 @@ def run_event_to_row(event: RunEvent) -> RunEventRow:
 
 
 def run_event_from_row(row: RunEventRow) -> RunEvent:
-    occurred_at = row.occurred_at
-    if occurred_at.tzinfo is None:
-        occurred_at = occurred_at.replace(tzinfo=UTC)
     return RunEvent(
         id=RunEventId.parse(row.id),
         run_id=RunId.parse(row.run_id),
         step_id=RunStepId.parse(row.step_id) if row.step_id else None,
         type=RunEventType(row.type),
         sequence=row.sequence,
-        occurred_at=occurred_at,
+        occurred_at=_read_back_utc(row.occurred_at),
         payload=cast(JsonValue, row.payload),
     )

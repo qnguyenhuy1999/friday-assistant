@@ -4,11 +4,11 @@ Local-first engineering agent operating system.
 
 ## Status
 
-**Phase 2 — clean source organization.** The repository now has an
-official source layout, package boundaries, dependency-direction
-enforcement, and minimal importable application shells. No business
-logic, framework, database, or AI integration exists yet — the shells
-return only static identification values.
+**Phase 3 — quality gates and architecture hardening.** The repository now
+enforces formatting, linting, typing, tests, coverage, dependency/
+repository/provenance policy, lockfile reproducibility, and shell/Markdown
+hygiene locally (pre-commit), in a full local gate, and in CI — with no new
+business logic, framework, database, or AI integration.
 
 ## Repository Structure
 
@@ -26,6 +26,7 @@ packages/
 └── sdk-ts/     TypeScript client SDK surface (@friday/sdk)
 tests/
 ├── architecture/  import-boundary and repository-layout checks
+├── policy/        dependency/repository/provenance/sensitive-file/link policy checks
 └── toolchain/     Phase 1 toolchain smoke test
 ```
 
@@ -97,10 +98,10 @@ sidecar). None of this is implemented yet.
 
 ## Development
 
-**Phase status:** Phase 2 — clean source organization. No application
-runtime exists yet (no API, no frontend, no database, no AI
-integration) — only structure, dependency boundaries, and static
-composition-root shells.
+**Phase status:** Phase 3 — quality gates and architecture hardening. No
+application runtime exists yet (no API, no frontend, no database, no AI
+integration) — only structure, dependency boundaries, static
+composition-root shells, and the quality gates described below.
 
 Required runtimes:
 
@@ -123,6 +124,25 @@ just check
 ```
 
 See `justfile` for the complete list of available commands.
+
+## Quality Gates
+
+Formatting, linting, typing, tests, coverage, architecture/dependency/
+repository/provenance policy, lockfile reproducibility, and shell/Markdown
+hygiene are all enforced through the same small set of `just` recipes,
+invoked identically by pre-commit hooks and CI. See
+[docs/governance/quality-gates.md](docs/governance/quality-gates.md) for the
+full gate-by-gate breakdown.
+
+```bash
+# Install git hooks (default stage + pre-push stage)
+uv run pre-commit install
+uv run pre-commit install --hook-type pre-push
+
+just check       # fast, non-mutating local gate
+just ci          # full CI-equivalent gate
+just pre-commit  # run every configured hook against all files
+```
 
 ## Development Status Disclaimer
 

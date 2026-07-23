@@ -53,6 +53,24 @@ to every phase unless a specific phase's documentation says otherwise.
 - Each phase requires review before the next phase begins. Do not start the
   next phase's work inside a change intended for the current phase.
 
+## Quality Gates
+
+- Install git hooks once per clone:
+  `uv run pre-commit install && uv run pre-commit install --hook-type pre-push`.
+- Fast checks (formatting, linting, shellcheck, architecture, policy) run at
+  commit time; slower checks (typecheck, coverage, lockfile reproducibility)
+  run at push time (`git push`) and in CI. `just check` runs the fast gate
+  locally; `just ci` runs the full CI-equivalent gate; `just pre-commit`
+  runs every configured hook (both stages) against all files.
+- See [docs/governance/quality-gates.md](docs/governance/quality-gates.md)
+  for what each gate checks and how to change one safely.
+- Dependency policy: all Phase 3 tooling is dev-only (Python
+  `dependency-groups.dev`, Node `devDependencies`); no wildcard, prerelease,
+  or direct URL/git/local-path dependency specifiers.
+- Changing a detector in `tests/policy/*.py` (or the architecture boundary
+  tests) requires a red-then-green run in the PR description: show the
+  synthetic negative fixture fails before the change and passes after.
+
 ## Local Development
 
 - Bootstrap: `just bootstrap`. Validate: `just check`.

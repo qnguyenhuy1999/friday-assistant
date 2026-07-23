@@ -22,6 +22,10 @@ framework, database, or AI integration exists yet.
   client exists yet.
 - **`tests/architecture`** — import-boundary and repository-layout
   checks.
+- **`tests/policy`** — Phase 3 dependency, repository, provenance,
+  sensitive-file, and Markdown-link policy checks. Structural, not
+  architectural, but enforced the same way (see
+  [../governance/quality-gates.md](../governance/quality-gates.md)).
 - **`tests/toolchain`** — Phase 1 toolchain smoke test.
 
 ## Dependency Direction

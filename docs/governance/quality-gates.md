@@ -1,6 +1,6 @@
 # Quality Gates
 
-This document describes the Phase 3 quality gates: what each one checks, the
+This document describes the repository quality gates through Phase 5: what each one checks, the
 exact command that runs it, where it runs (local/pre-commit/pre-push/CI), and
 how to change it safely. It complements
 [repository-rules.md](repository-rules.md) and
@@ -38,7 +38,7 @@ implemented.
   (bundles the real ShellCheck binary, pinned through `uv.lock` — no system
   install required).
 - **Command:** `just shellcheck`.
-- **Runs:** local, pre-commit (default stage), CI (`just check`).
+- **Runs:** local, pre-commit (default stage), CI through `just pre-commit`.
 
 ## Static Typing
 
@@ -52,8 +52,8 @@ implemented.
 ## Tests
 
 - **Purpose:** verify behavior.
-- **Implementation:** `pytest`, covering `tests/architecture`,
-  `tests/policy`, and `tests/toolchain`.
+- **Implementation:** `pytest`, covering all configured test directories under
+  `tests/`.
 - **Command:** `just test` (all tests), `just architecture-check` (only
   `tests/architecture`), `just policy-check` (only `tests/policy`).
 - **Runs:** local, pre-commit (`architecture-check` and `policy-check` run
@@ -78,6 +78,19 @@ implemented.
 - **Command:** `just migration-check`.
 - **Runs:** local, CI (`just check`); a subset already exercised by
   `just test` and by `just persistence-check`.
+
+## Schema Parity
+
+- **Purpose:** detect structural drift between a fresh Alembic-upgraded
+  SQLite database and the current SQLAlchemy metadata.
+- **Implementation:** `tests/persistence/test_schema_parity.py` excludes
+  Alembic's `alembic_version` table and compares application-owned tables,
+  columns, normalized types, nullability, primary/foreign keys, unique
+  constraints, indexes, and server defaults. It also asserts the database
+  reaches the current Alembic head and contains no extra application tables.
+- **Command:** `just schema-parity-check`.
+- **Runs:** local and CI through `just check`; the test is also included in
+  the full `just test` run.
 
 ## Persistence Layer
 

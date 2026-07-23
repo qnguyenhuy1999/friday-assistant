@@ -7,17 +7,14 @@ mapping (e.g. to an HTTP 404) is an application/infrastructure concern, not
 a port concern.
 
 List ordering is part of each port's contract, documented per method below.
-
-No UnitOfWork port: nothing in this phase requires multiple repository
-writes inside one shared transaction boundary, and adding one now would be
-speculative. Introduce it once persistence in a later phase demonstrates a
-concrete need.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import Protocol
+from types import TracebackType
+from typing import Protocol, Self
 
 from friday.domain.approval import ApprovalRequest
 from friday.domain.artifact import Artifact
@@ -105,3 +102,39 @@ class RunEventStore(Protocol):
     def next_sequence(self, run_id: RunId) -> int:
         """The sequence number the next appended event for this run must use."""
         ...
+
+
+class UnitOfWork(Protocol):
+    """One shared transaction boundary across the repositories/event store a
+    use case needs. A use case opens exactly one UnitOfWork, does its work
+    through the exposed repositories, then calls `commit()` once; any
+    exception before that should leave nothing durable (`rollback()`, called
+    explicitly or via `__exit__`, undoes all staged writes)."""
+
+    @property
+    def tasks(self) -> TaskRepository: ...
+    @property
+    def runs(self) -> RunRepository: ...
+    @property
+    def steps(self) -> RunStepRepository: ...
+    @property
+    def approvals(self) -> ApprovalRepository: ...
+    @property
+    def artifacts(self) -> ArtifactRepository: ...
+    @property
+    def tool_invocations(self) -> ToolInvocationRepository: ...
+    @property
+    def events(self) -> RunEventStore: ...
+
+    def __enter__(self) -> Self: ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+    def commit(self) -> None: ...
+    def rollback(self) -> None: ...
+
+
+UnitOfWorkFactory = Callable[[], UnitOfWork]

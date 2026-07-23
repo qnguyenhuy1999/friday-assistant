@@ -2,8 +2,9 @@
 
 This document describes the Phase 4 domain model under `src/friday/domain`.
 It covers the entities, value objects, and lifecycle rules the codebase
-enforces — not application use cases, persistence, or any framework
-concern, none of which exist yet.
+enforces. Application use-case orchestration and transaction coordination
+are outside this document; persistence is described separately in
+[persistence.md](persistence.md).
 
 ## Value Objects
 
@@ -102,7 +103,8 @@ blank `name`/`location` or a negative `size`.
 
 `src/friday/application/ports.py` defines `Protocol`s for one repository
 per entity plus `RunEventStore` and `Clock`. Ports are structural
-(`typing.Protocol`), not ABCs — no implementation exists in this phase.
+(`typing.Protocol`), not ABCs. The Phase 5 SQLite adapter implements these
+ports; application use cases are documented separately when delivered.
 Each `list_for_*` method documents its required ordering (e.g. runs by
 `created_at` then `id`) as part of the port contract, not left to each
 future implementation to decide independently.

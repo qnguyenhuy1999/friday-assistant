@@ -43,6 +43,9 @@ domain-check:
 schema-check:
     uv run pytest tests/contracts
 
+migration-check:
+    uv run pytest tests/persistence/test_migrations.py
+
 lock-check:
     uv run python scripts/lock_check.py
 
@@ -51,12 +54,13 @@ pre-commit:
     uv run pre-commit run --all-files --hook-stage pre-push
 
 # Fast, non-mutating local gate. architecture-check, policy-check,
-# domain-check, and schema-check are subsets already exercised by `test`
-# (tests/architecture, tests/policy, tests/domain, tests/application,
-# tests/contracts); they're re-run here individually so a contributor gets
-# an explicit, fast-failing signal naming exactly which dimension broke, at
-# negligible cost (each subset runs in well under a second).
-check: format-check lint typecheck test architecture-check policy-check domain-check schema-check
+# domain-check, schema-check, and migration-check are subsets already
+# exercised by `test` (tests/architecture, tests/policy, tests/domain,
+# tests/application, tests/contracts, tests/persistence); they're re-run
+# here individually so a contributor gets an explicit, fast-failing signal
+# naming exactly which dimension broke, at negligible cost (each subset
+# runs in well under a second).
+check: format-check lint typecheck test architecture-check policy-check domain-check schema-check migration-check
 
 # Full CI-equivalent gate. test-cov and lock-check are not part of `check`
 # because test-cov needs coverage instrumentation (slower, and duplicates

@@ -65,7 +65,7 @@ def test_api_entry_point_exposes_asgi_app() -> None:
     assert app.title == "Friday Agent OS API"
 
 
-def test_worker_shell_entry_point_executes() -> None:
-    from apps.worker.main import main
+def test_worker_entry_point_constructs() -> None:
+    from apps.worker.main import worker
 
-    assert main() == "Friday Agent OS Worker shell"
+    assert worker.settings.worker_id

@@ -5,6 +5,7 @@ with its approval consumed — the documented at-least-once ambiguity."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -69,10 +70,11 @@ class ScriptedGateway:
 
 
 @pytest.fixture
-def uow_factory(tmp_path: Path) -> UnitOfWorkFactory:
+def uow_factory(tmp_path: Path) -> Iterator[UnitOfWorkFactory]:
     engine = create_engine(f"sqlite:///{tmp_path / 'exec.db'}")
     Base.metadata.create_all(engine)
-    return create_unit_of_work_factory(create_session_factory(engine))
+    yield create_unit_of_work_factory(create_session_factory(engine))
+    engine.dispose()
 
 
 def _seed_claimed_run(uow_factory: UnitOfWorkFactory) -> tuple[RunId, int]:

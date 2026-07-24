@@ -396,3 +396,85 @@ def test_limits_invariants(field: str, value: int) -> None:
     fields[field] = value
     with pytest.raises(ValueError):
         RuntimeLimits(**fields)
+
+
+def test_finish_with_pending_step_is_rejected_as_a_turn_note() -> None:
+    from friday.domain.identifiers import RunStepId
+    from friday.domain.step import RunStep
+
+    harness = Harness(FINISH, FailAction(reason="cannot complete the step"))
+    step = RunStep.new(
+        id=RunStepId.new(), run_id=harness.run.id, name="s", position=0, created_at=T0
+    )
+    harness.uow.step_repo.add(step)  # PENDING forever
+    outcome = harness.processor.process(harness.context())
+    # turn 1's finish is rejected as a note; turn 2 the brain gives up
+    assert "finish rejected: 1 step(s) are not terminal" in harness.brain.requests[1].context
+    assert outcome.kind == "failed"
+    assert outcome.failure is not None
+    assert outcome.failure.code == "agent_reported_failure"
+
+
+def test_ambiguous_prior_protected_execution_fails_the_run() -> None:
+    from friday.domain.identifiers import ToolInvocationId
+    from friday.domain.tool import ToolInvocation
+
+    harness = Harness(WRITE)
+    approval = harness.approve(WRITE)
+    approval.consume(T0)
+    prior = ToolInvocation.new(
+        id=ToolInvocationId.new(),
+        run_id=harness.run.id,
+        tool_name=WRITE.tool,
+        requested_input=WRITE.tool_input,
+        requested_at=T0,
+        approval_request_id=approval.id,
+    )
+    prior.start(T0)  # non-terminal: side effect may have happened
+    harness.uow.tool_repo.add(prior)
+    outcome = harness.processor.process(harness.context())
+    assert outcome.kind == "failed"
+    assert outcome.failure is not None
+    assert outcome.failure.code == "tool_execution_ambiguous"
+    assert outcome.failure.retryable is False
+
+
+def test_replayed_protected_result_is_noted_in_the_next_context() -> None:
+    from friday.domain.identifiers import ToolInvocationId
+    from friday.domain.tool import ToolInvocation
+
+    harness = Harness(WRITE, FINISH)
+    approval = harness.approve(WRITE)
+    approval.consume(T0)
+    prior = ToolInvocation.new(
+        id=ToolInvocationId.new(),
+        run_id=harness.run.id,
+        tool_name=WRITE.tool,
+        requested_input=WRITE.tool_input,
+        requested_at=T0,
+        approval_request_id=approval.id,
+    )
+    prior.start(T0)
+    prior.succeed(T0, {"path": "b.txt"})
+    harness.uow.tool_repo.add(prior)
+    outcome = harness.processor.process(harness.context())
+    assert outcome.kind == "succeeded"
+    assert harness.gateway.executed == []  # never re-executed
+    assert "(replayed durable result)" in harness.brain.requests[1].context
+
+
+def test_claim_lost_while_requesting_approval_yields() -> None:
+    harness = Harness(WRITE)
+    original = harness.uow.work_queue_repo.is_claim_active
+    checks = {"n": 0}
+
+    def die_at_fourth_check(*args: object, **kwargs: object) -> bool:
+        checks["n"] += 1
+        if checks["n"] <= 3:
+            return original(*args, **kwargs)  # type: ignore[arg-type]
+        return False  # dead exactly when RequestToolApproval verifies
+
+    harness.uow.work_queue_repo.is_claim_active = die_at_fourth_check  # type: ignore[method-assign]
+    outcome = harness.processor.process(harness.context())
+    assert outcome.kind == "yielded"
+    assert harness.uow.approval_repo.list_for_run(harness.run.id) == []  # nothing persisted

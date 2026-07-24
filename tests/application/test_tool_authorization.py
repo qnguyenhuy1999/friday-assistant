@@ -9,7 +9,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from friday.application.commands import RequestApprovalCommand
-from friday.application.errors import ClaimLost, EntityConflict
+from friday.application.errors import (
+    ClaimLost,
+    EntityConflict,
+    RunNotFound,
+    RunStepNotFound,
+)
 from friday.application.tool_authorization import (
     RequestToolApproval,
     compute_authorization_fingerprint,
@@ -20,6 +25,7 @@ from friday.domain.approval import ApprovalCategory, ApprovalRequest, ApprovalSt
 from friday.domain.event import RunEventType
 from friday.domain.identifiers import ApprovalRequestId, RunId, RunStepId, TaskId
 from friday.domain.run import Run, RunStatus
+from friday.domain.step import RunStep, RunStepStatus
 from friday.domain.task import Task
 from tests.application.fakes import T0, CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
 
@@ -280,3 +286,111 @@ def test_utc_timestamps_in_result() -> None:
     assert result.requested_at == moment
     assert result.requested_at.tzinfo == UTC
     assert isinstance(result.requested_at, datetime)
+
+
+def test_missing_run_raises_run_not_found() -> None:
+    uow, factory, run, generation = _claimed_run()
+    use_case = RequestToolApproval(factory, FakeClock(T0 + timedelta(seconds=1)))
+    ghost = RunId.new()
+    uow.work_queue_repo.enqueue(ghost, available_at=T0, enqueued_at=T0)
+    assert uow.work_queue_repo.try_claim(ghost, "w1", "tok", T0, T0 + LEASE)
+    command = RequestApprovalCommand(
+        run_id=ghost,
+        category=ApprovalCategory.OTHER,
+        summary="s",
+        reason="",
+        requested_action="x",
+        requested_input=None,
+    )
+    with pytest.raises(RunNotFound):
+        use_case.execute(command, worker_id="w1", claim_token="tok", claim_generation=1)
+
+
+def test_step_scoped_approval_parks_the_step_too() -> None:
+    uow, factory, run, generation = _claimed_run()
+    step = RunStep.new(id=RunStepId.new(), run_id=run.id, name="s", position=0, created_at=T0)
+    step.start(T0)
+    uow.step_repo.add(step)
+    command = RequestApprovalCommand(
+        run_id=run.id,
+        category=ApprovalCategory.FILESYSTEM_WRITE,
+        summary="write a.txt",
+        reason="",
+        requested_action=CALL.tool,
+        requested_input=CALL.tool_input,
+        step_id=step.id,
+        authorization_fingerprint=fingerprint_of(run_id=run.id, step_id=step.id),
+    )
+    use_case = RequestToolApproval(factory, FakeClock(T0 + timedelta(seconds=1)))
+    result = use_case.execute(
+        command, worker_id="w1", claim_token="tok", claim_generation=generation
+    )
+    assert result.step_id == step.id
+    assert step.status is RunStepStatus.WAITING_FOR_APPROVAL
+    assert step.approval_request_id == result.approval_id
+
+
+def test_step_of_another_run_conflicts() -> None:
+    uow, factory, run, generation = _claimed_run()
+    foreign_step = RunStep.new(
+        id=RunStepId.new(), run_id=RunId.new(), name="s", position=0, created_at=T0
+    )
+    foreign_step.start(T0)
+    uow.step_repo.add(foreign_step)
+    command = RequestApprovalCommand(
+        run_id=run.id,
+        category=ApprovalCategory.OTHER,
+        summary="s",
+        reason="",
+        requested_action="x",
+        requested_input=None,
+        step_id=foreign_step.id,
+    )
+    use_case = RequestToolApproval(factory, FakeClock(T0 + timedelta(seconds=1)))
+    with pytest.raises(EntityConflict):
+        use_case.execute(command, worker_id="w1", claim_token="tok", claim_generation=generation)
+    assert uow.commit_count == 0
+
+
+def test_missing_step_raises_step_not_found() -> None:
+    uow, factory, run, generation = _claimed_run()
+    command = RequestApprovalCommand(
+        run_id=run.id,
+        category=ApprovalCategory.OTHER,
+        summary="s",
+        reason="",
+        requested_action="x",
+        requested_input=None,
+        step_id=RunStepId.new(),
+    )
+    use_case = RequestToolApproval(factory, FakeClock(T0 + timedelta(seconds=1)))
+    with pytest.raises(RunStepNotFound):
+        use_case.execute(command, worker_id="w1", claim_token="tok", claim_generation=generation)
+
+
+def test_non_running_step_conflicts() -> None:
+    uow, factory, run, generation = _claimed_run()
+    step = RunStep.new(id=RunStepId.new(), run_id=run.id, name="s", position=0, created_at=T0)
+    uow.step_repo.add(step)  # still PENDING
+    command = RequestApprovalCommand(
+        run_id=run.id,
+        category=ApprovalCategory.OTHER,
+        summary="s",
+        reason="",
+        requested_action="x",
+        requested_input=None,
+        step_id=step.id,
+    )
+    use_case = RequestToolApproval(factory, FakeClock(T0 + timedelta(seconds=1)))
+    with pytest.raises(EntityConflict):
+        use_case.execute(command, worker_id="w1", claim_token="tok", claim_generation=generation)
+
+
+def test_non_running_run_conflicts() -> None:
+    uow, factory, run, generation = _claimed_run()
+    run.cancel(T0)
+    use_case = RequestToolApproval(factory, FakeClock(T0 + timedelta(seconds=1)))
+    with pytest.raises(EntityConflict):
+        use_case.execute(
+            _command(run), worker_id="w1", claim_token="tok", claim_generation=generation
+        )

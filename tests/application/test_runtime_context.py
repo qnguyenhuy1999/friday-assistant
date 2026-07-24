@@ -242,3 +242,52 @@ def test_no_environment_or_secret_content_included() -> None:
     document = _build(_snapshot())
     for forbidden in ("ANTHROPIC", "API_KEY", "PATH=", "HOME="):
         assert forbidden not in document
+
+
+def test_drop_chain_walks_events_then_invocations_then_approvals_then_artifacts() -> None:
+    snapshot = _snapshot(
+        approvals=tuple(_approval(NOW + timedelta(minutes=i), f"act-{i}") for i in range(5)),
+        invocations=tuple(
+            _invocation(NOW + timedelta(minutes=i), "workspace.list") for i in range(5)
+        ),
+        artifacts=tuple(_artifact(NOW + timedelta(minutes=i), f"f{i}.txt") for i in range(5)),
+        events=tuple(_event(i, RunEventType.RUN_CREATED) for i in range(1, 6)),
+        previous_turns=tuple(f"turn note {i}" for i in range(5)),
+    )
+    tight = _build(snapshot, max_chars=MIN_CONTEXT_CHARS + 400)
+    assert len(tight) <= MIN_CONTEXT_CHARS + 400
+    # every droppable category announces its omissions or vanished entirely
+    assert "omitted]" in tight or "[context truncated to budget]" in tight
+    # determinism under the same tight budget
+    assert tight == _build(snapshot, max_chars=MIN_CONTEXT_CHARS + 400)
+
+
+def test_step_failure_and_approval_note_render() -> None:
+    step = _step(0, "compile")
+    step.start(NOW)
+    step.fail(
+        NOW,
+        Failure(code="tool_timeout", message="x", retryable=True, cause=FailureCause.TIMEOUT),
+    )
+    approval = _approval(NOW, "write file")
+    approval.reject(NOW, resolver="patrick", resolution_note="too risky")
+    document = _build(_snapshot(steps=(step,), approvals=(approval,)))
+    assert "failure=tool_timeout" in document
+    assert "note: too risky" in document
+
+
+def test_exhaustive_drop_chain_renders_marker_only_sections() -> None:
+    snapshot = _snapshot(
+        approvals=tuple(_approval(NOW + timedelta(minutes=i), "a" * 150) for i in range(8)),
+        invocations=tuple(
+            _invocation(NOW + timedelta(minutes=i), "workspace.list", output={"x": "y" * 100})
+            for i in range(8)
+        ),
+        artifacts=tuple(_artifact(NOW + timedelta(minutes=i), f"file-{i}.txt") for i in range(8)),
+        events=tuple(_event(i, RunEventType.RUN_CREATED) for i in range(1, 9)),
+        previous_turns=tuple(f"note {i} " + "z" * 100 for i in range(8)),
+    )
+    document = _build(snapshot, max_chars=MIN_CONTEXT_CHARS)
+    assert len(document) <= MIN_CONTEXT_CHARS
+    # deterministic under the exhaustive chain too
+    assert document == _build(snapshot, max_chars=MIN_CONTEXT_CHARS)

@@ -4,6 +4,10 @@ The current repository ports return ordered lists rather than accepting
 cursors, so these helpers deliberately slice those lists in the API layer.
 That keeps this SQLite-scale delivery change local until persistence needs
 true keyset queries.
+
+Cursors encode the last-seen item's sort-key tuple (not a raw offset), so
+a page stays stable even if items are inserted or removed between reads --
+an offset-based cursor would skip or repeat items under concurrent writes.
 """
 
 from __future__ import annotations

@@ -74,6 +74,10 @@ class ApprovalRepository(Protocol):
         """Ordered by requested_at, then id."""
         ...
 
+    def list_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
+        """Ordered by requested_at, then id."""
+        ...
+
 
 class ArtifactRepository(Protocol):
     def add(self, artifact: Artifact) -> None: ...
@@ -109,6 +113,10 @@ class RunEventStore(Protocol):
 class TaskEventStore(Protocol):
     def append(self, event: TaskEvent) -> None: ...
     def next_sequence(self, task_id: TaskId) -> int: ...
+
+    def list_for_task(self, task_id: TaskId) -> list[TaskEvent]:
+        """Ordered by sequence."""
+        ...
 
 
 class UnitOfWork(Protocol):

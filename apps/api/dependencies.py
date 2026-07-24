@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from apps.api.settings import ApiSettings
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.infrastructure.persistence.health import is_database_reachable
 
@@ -19,6 +20,11 @@ def get_uow_factory(request: Request) -> UnitOfWorkFactory:
 def get_clock(request: Request) -> Clock:
     clock: Clock = request.app.state.clock
     return clock
+
+
+def get_settings(request: Request) -> ApiSettings:
+    settings: ApiSettings = request.app.state.settings
+    return settings
 
 
 def get_database_reachable(request: Request) -> bool:

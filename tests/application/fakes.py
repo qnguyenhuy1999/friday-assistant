@@ -110,6 +110,12 @@ class FakeTaskEventStore:
     def next_sequence(self, task_id: TaskId) -> int:
         return sum(event.task_id == task_id for event in self.appended) + 1
 
+    def list_for_task(self, task_id: TaskId) -> list[TaskEvent]:
+        return sorted(
+            (event for event in self.appended if event.task_id == task_id),
+            key=lambda event: event.sequence,
+        )
+
 
 class FakeRunStepRepository:
     def __init__(self) -> None:
@@ -177,6 +183,12 @@ class FakeApprovalRepository:
             if a.run_id == run_id and a.status is ApprovalStatus.PENDING
         ]
         return sorted(matching, key=lambda a: (a.requested_at, str(a.id)))
+
+    def list_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
+        return sorted(
+            (approval for approval in self.items.values() if approval.run_id == run_id),
+            key=lambda approval: (approval.requested_at, str(approval.id)),
+        )
 
 
 class FakeArtifactRepository:

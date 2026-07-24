@@ -23,6 +23,7 @@ from friday.application.errors import (
     ToolInvocationNotFound,
     TransactionFailure,
 )
+from friday.domain.errors import DomainValidationError
 from friday.domain.identifiers import (
     ApprovalRequestId,
     ArtifactId,
@@ -85,5 +86,38 @@ def test_validation_error_maps_to_422() -> None:
     client = TestClient(app, raise_server_exceptions=False)
     response = client.get("/items/not-an-int")
 
+    assert response.status_code == 422
+    assert response.json()["error"]["type"] == "validation_error"
+
+
+def test_domain_validation_error_maps_to_422() -> None:
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.get("/boom-domain")
+    def boom_domain() -> None:
+        raise DomainValidationError("internal details")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/boom-domain")
+
+    assert response.status_code == 422
+    assert response.json()["error"]["type"] == "validation_error"
+    assert "internal details" not in response.text
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/approvals/not-a-uuid",
+        "/v1/artifacts/not-a-uuid",
+        "/v1/tool-invocations/not-a-uuid",
+        "/v1/runs/not-a-uuid/events",
+    ],
+)
+def test_invalid_id_maps_to_stable_422_schema_across_endpoints(
+    client: TestClient, path: str
+) -> None:
+    response = client.get(path)
     assert response.status_code == 422
     assert response.json()["error"]["type"] == "validation_error"

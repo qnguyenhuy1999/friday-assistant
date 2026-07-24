@@ -102,6 +102,13 @@ def test_operation_ids_are_unique_and_present() -> None:
     assert len(operation_ids) == len(set(operation_ids))
 
 
+def test_start_run_response_uses_named_schema_not_raw_dict() -> None:
+    schema = _schema()
+    responses = schema["paths"]["/v1/tasks/{task_id}/runs"]["post"]["responses"]
+    content = responses["201"]["content"]["application/json"]["schema"]
+    assert content["$ref"] == "#/components/schemas/StartRunResponse"
+
+
 def test_no_orm_row_type_names_leak_into_schema_components() -> None:
     schema = _schema()
     component_names = schema.get("components", {}).get("schemas", {}).keys()

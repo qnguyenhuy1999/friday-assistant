@@ -43,3 +43,27 @@ def test_run_and_step_cursor_pagination(client: TestClient) -> None:
     positions = [item["position"] for item in first_steps["items"] + remaining_steps["items"]]
     assert positions == [0, 1, 2]
     assert client.get(f"/v1/runs/{run_ids[1]}/steps?cursor=bad").status_code == 422
+
+
+def test_run_events_cursor_cannot_be_reused_across_runs(client: TestClient) -> None:
+    task_id = client.post("/v1/tasks", json={"title": "Task"}).json()["id"]
+    run_a = client.post(f"/v1/tasks/{task_id}/runs").json()["run_id"]
+    run_b = client.post(f"/v1/tasks/{task_id}/runs").json()["run_id"]
+    client.post(f"/v1/runs/{run_a}/start")
+    client.post(f"/v1/runs/{run_a}/complete")
+
+    run_a_cursor = client.get(f"/v1/runs/{run_a}/events?limit=1").json()["next_cursor"]
+    assert run_a_cursor is not None
+    assert client.get(f"/v1/runs/{run_b}/events?cursor={run_a_cursor}").status_code == 422
+
+
+def test_task_list_cursor_cannot_be_reused_for_task_runs(client: TestClient) -> None:
+    client.post("/v1/tasks", json={"title": "Task 1"})
+    client.post("/v1/tasks", json={"title": "Task 2"})
+    task_id = client.post("/v1/tasks", json={"title": "Task 3"}).json()["id"]
+    client.post(f"/v1/tasks/{task_id}/runs")
+    client.post(f"/v1/tasks/{task_id}/runs")
+
+    tasks_cursor = client.get("/v1/tasks?limit=1").json()["next_cursor"]
+    assert tasks_cursor is not None
+    assert client.get(f"/v1/tasks/{task_id}/runs?cursor={tasks_cursor}").status_code == 422

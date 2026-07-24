@@ -33,3 +33,8 @@ class TaskResponse(BaseModel):
 class TaskPageResponse(BaseModel):
     items: list[TaskResponse]
     next_cursor: str | None
+
+
+class StartRunResponse(BaseModel):
+    task_id: str
+    run_id: str

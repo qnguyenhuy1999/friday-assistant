@@ -13,7 +13,13 @@ from apps.api.pagination import (
     decode_cursor,
     page_from_query,
 )
-from apps.api.schemas.tasks import CreateTaskBody, FailureBody, TaskPageResponse, TaskResponse
+from apps.api.schemas.tasks import (
+    CreateTaskBody,
+    FailureBody,
+    StartRunResponse,
+    TaskPageResponse,
+    TaskResponse,
+)
 from friday.application.commands import (
     CancelTaskCommand,
     CompleteTaskCommand,
@@ -103,10 +109,17 @@ def get_task(task_id: UUID, uow_factory: UowDependency, clock: ClockDependency) 
     return _task_response(GetTask(uow_factory, clock).execute(TaskId.parse(str(task_id))))
 
 
-@router.post("/{task_id}/runs", status_code=status.HTTP_201_CREATED, operation_id="startRun")
-def start_run(task_id: UUID, uow_factory: UowDependency, clock: ClockDependency) -> dict[str, str]:
+@router.post(
+    "/{task_id}/runs",
+    response_model=StartRunResponse,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="startRun",
+)
+def start_run(
+    task_id: UUID, uow_factory: UowDependency, clock: ClockDependency
+) -> StartRunResponse:
     result = StartRun(uow_factory, clock).execute(StartRunCommand(TaskId.parse(str(task_id))))
-    return {"task_id": str(result.task_id), "run_id": str(result.run_id)}
+    return StartRunResponse(task_id=str(result.task_id), run_id=str(result.run_id))
 
 
 @router.post("/{task_id}/cancel", response_model=TaskResponse, operation_id="cancelTask")

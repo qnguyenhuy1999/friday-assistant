@@ -15,7 +15,7 @@ from friday.application.lifecycle_events import LifecycleEvents, step_result
 from friday.application.ports import UnitOfWork
 from friday.application.results import RunStepResult
 from friday.domain.event import RunEventType
-from friday.domain.identifiers import RunStepId
+from friday.domain.identifiers import RunId, RunStepId
 from friday.domain.json_value import JsonValue
 from friday.domain.run import Run, RunStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES, RunStep, RunStepStatus
@@ -54,6 +54,23 @@ class CreateOrderedStep(LifecycleEvents):
             )
             uow.commit()
             return step_result(step)
+
+
+class GetRunStep(LifecycleEvents):
+    def execute(self, step_id: RunStepId) -> RunStepResult:
+        with self._uow_factory() as uow:
+            step = uow.steps.get(step_id)
+            if step is None:
+                raise RunStepNotFound(step_id)
+            return step_result(step)
+
+
+class ListRunStepsForRun(LifecycleEvents):
+    def execute(self, run_id: RunId) -> list[RunStepResult]:
+        with self._uow_factory() as uow:
+            if uow.runs.get(run_id) is None:
+                raise RunNotFound(run_id)
+            return [step_result(step) for step in uow.steps.list_for_run(run_id)]
 
 
 class _StepLifecycle(LifecycleEvents):

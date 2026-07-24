@@ -5,6 +5,7 @@ pin the port contracts down for later infrastructure implementations."""
 
 from __future__ import annotations
 
+import builtins
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -65,6 +66,18 @@ class _FakeTaskRepository:
             :limit
         ]
 
+    def list_page(
+        self, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> builtins.list[Task]:
+        tasks = self.list(len(self._tasks))
+        if after_created_at is not None and after_id is not None:
+            tasks = [
+                task
+                for task in tasks
+                if (task.created_at, task.id.value) > (after_created_at, after_id)
+            ]
+        return tasks[:limit]
+
 
 @dataclass
 class _FakeRunRepository:
@@ -82,6 +95,16 @@ class _FakeRunRepository:
     def list_for_task(self, task_id: TaskId) -> list[Run]:
         matches = [run for run in self._runs.values() if run.task_id == task_id]
         return sorted(matches, key=lambda run: (run.created_at, run.id.value))
+
+    def list_for_task_page(
+        self, task_id: TaskId, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> list[Run]:
+        runs = self.list_for_task(task_id)
+        if after_created_at is not None and after_id is not None:
+            runs = [
+                run for run in runs if (run.created_at, run.id.value) > (after_created_at, after_id)
+            ]
+        return runs[:limit]
 
 
 @dataclass
@@ -101,6 +124,18 @@ class _FakeRunStepRepository:
         matches = [step for step in self._steps.values() if step.run_id == run_id]
         return sorted(matches, key=lambda step: (step.position, step.id.value))
 
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_position: int | None, after_id: str | None
+    ) -> list[RunStep]:
+        steps = self.list_for_run(run_id)
+        if after_position is not None and after_id is not None:
+            steps = [
+                step
+                for step in steps
+                if (step.position, step.id.value) > (after_position, after_id)
+            ]
+        return steps[:limit]
+
 
 @dataclass
 class _FakeApprovalRepository:
@@ -119,6 +154,22 @@ class _FakeApprovalRepository:
         matches = [a for a in self._approvals.values() if a.run_id == run_id]
         return sorted(matches, key=lambda a: (a.requested_at, a.id.value))
 
+    def list_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
+        matches = [a for a in self._approvals.values() if a.run_id == run_id]
+        return sorted(matches, key=lambda a: (a.requested_at, a.id.value))
+
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_requested_at: datetime | None, after_id: str | None
+    ) -> list[ApprovalRequest]:
+        approvals = self.list_for_run(run_id)
+        if after_requested_at is not None and after_id is not None:
+            approvals = [
+                approval
+                for approval in approvals
+                if (approval.requested_at, approval.id.value) > (after_requested_at, after_id)
+            ]
+        return approvals[:limit]
+
 
 @dataclass
 class _FakeArtifactRepository:
@@ -133,6 +184,18 @@ class _FakeArtifactRepository:
     def list_for_run(self, run_id: RunId) -> list[Artifact]:
         matches = [a for a in self._artifacts.values() if a.run_id == run_id]
         return sorted(matches, key=lambda a: (a.created_at, a.id.value))
+
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> list[Artifact]:
+        artifacts = self.list_for_run(run_id)
+        if after_created_at is not None and after_id is not None:
+            artifacts = [
+                artifact
+                for artifact in artifacts
+                if (artifact.created_at, artifact.id.value) > (after_created_at, after_id)
+            ]
+        return artifacts[:limit]
 
 
 @dataclass
@@ -156,6 +219,34 @@ class _FakeToolInvocationRepository:
         matches = [i for i in self._invocations.values() if i.step_id == step_id]
         return sorted(matches, key=lambda i: (i.requested_at, i.id.value))
 
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_requested_at: datetime | None, after_id: str | None
+    ) -> list[ToolInvocation]:
+        invocations = self.list_for_run(run_id)
+        if after_requested_at is not None and after_id is not None:
+            invocations = [
+                invocation
+                for invocation in invocations
+                if (invocation.requested_at, invocation.id.value) > (after_requested_at, after_id)
+            ]
+        return invocations[:limit]
+
+    def list_for_step_page(
+        self,
+        step_id: RunStepId,
+        limit: int,
+        after_requested_at: datetime | None,
+        after_id: str | None,
+    ) -> list[ToolInvocation]:
+        invocations = self.list_for_step(step_id)
+        if after_requested_at is not None and after_id is not None:
+            invocations = [
+                invocation
+                for invocation in invocations
+                if (invocation.requested_at, invocation.id.value) > (after_requested_at, after_id)
+            ]
+        return invocations[:limit]
+
 
 @dataclass
 class _FakeRunEventStore:
@@ -166,6 +257,11 @@ class _FakeRunEventStore:
 
     def list_for_run(self, run_id: RunId) -> list[RunEvent]:
         return sorted(self._events.get(run_id, []), key=lambda e: e.sequence)
+
+    def list_after_sequence(self, run_id: RunId, after_sequence: int, limit: int) -> list[RunEvent]:
+        return [event for event in self.list_for_run(run_id) if event.sequence > after_sequence][
+            :limit
+        ]
 
     def next_sequence(self, run_id: RunId) -> int:
         return len(self._events.get(run_id, [])) + 1

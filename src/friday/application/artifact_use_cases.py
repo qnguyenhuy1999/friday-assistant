@@ -12,6 +12,8 @@ the same ID with different data is a conflict.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from friday.application.commands import RecordArtifactCommand
 from friday.application.errors import (
     ArtifactNotFound,
@@ -58,6 +60,17 @@ class ListArtifactsForRun(LifecycleEvents):
             if uow.runs.get(run_id) is None:
                 raise RunNotFound(run_id)
             return [artifact_result(a) for a in uow.artifacts.list_for_run(run_id)]
+
+    def page(
+        self, run_id: RunId, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> list[ArtifactResult]:
+        with self._uow_factory() as uow:
+            if uow.runs.get(run_id) is None:
+                raise RunNotFound(run_id)
+            return [
+                artifact_result(a)
+                for a in uow.artifacts.list_for_run_page(run_id, limit, after_created_at, after_id)
+            ]
 
 
 def _same_recording(existing: Artifact, candidate: Artifact) -> bool:

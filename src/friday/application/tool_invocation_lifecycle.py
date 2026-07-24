@@ -13,6 +13,8 @@ later runtime phase decides whether that is allowed.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from friday.application.commands import (
     CancelToolInvocationCommand,
     MarkToolInvocationFailedCommand,
@@ -72,6 +74,19 @@ class ListToolInvocationsForRun(LifecycleEvents):
                 raise RunNotFound(run_id)
             return [tool_invocation_result(i) for i in uow.tool_invocations.list_for_run(run_id)]
 
+    def page(
+        self, run_id: RunId, limit: int, after_requested_at: datetime | None, after_id: str | None
+    ) -> list[ToolInvocationResult]:
+        with self._uow_factory() as uow:
+            if uow.runs.get(run_id) is None:
+                raise RunNotFound(run_id)
+            return [
+                tool_invocation_result(i)
+                for i in uow.tool_invocations.list_for_run_page(
+                    run_id, limit, after_requested_at, after_id
+                )
+            ]
+
 
 class ListToolInvocationsForStep(LifecycleEvents):
     def execute(self, step_id: RunStepId) -> list[ToolInvocationResult]:
@@ -79,6 +94,23 @@ class ListToolInvocationsForStep(LifecycleEvents):
             if uow.steps.get(step_id) is None:
                 raise RunStepNotFound(step_id)
             return [tool_invocation_result(i) for i in uow.tool_invocations.list_for_step(step_id)]
+
+    def page(
+        self,
+        step_id: RunStepId,
+        limit: int,
+        after_requested_at: datetime | None,
+        after_id: str | None,
+    ) -> list[ToolInvocationResult]:
+        with self._uow_factory() as uow:
+            if uow.steps.get(step_id) is None:
+                raise RunStepNotFound(step_id)
+            return [
+                tool_invocation_result(i)
+                for i in uow.tool_invocations.list_for_step_page(
+                    step_id, limit, after_requested_at, after_id
+                )
+            ]
 
 
 class RequestToolInvocation(LifecycleEvents):

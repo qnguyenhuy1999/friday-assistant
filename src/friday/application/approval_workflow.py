@@ -77,6 +77,27 @@ class ListPendingApprovalsForRun(LifecycleEvents):
             return [approval_result(a) for a in uow.approvals.list_pending_for_run(run_id)]
 
 
+class ListApprovalsForRun(LifecycleEvents):
+    def execute(self, run_id: RunId) -> list[ApprovalRequestResult]:
+        with self._uow_factory() as uow:
+            if uow.runs.get(run_id) is None:
+                raise RunNotFound(run_id)
+            return [approval_result(a) for a in uow.approvals.list_for_run(run_id)]
+
+    def page(
+        self, run_id: RunId, limit: int, after_requested_at: datetime | None, after_id: str | None
+    ) -> list[ApprovalRequestResult]:
+        with self._uow_factory() as uow:
+            if uow.runs.get(run_id) is None:
+                raise RunNotFound(run_id)
+            return [
+                approval_result(a)
+                for a in uow.approvals.list_for_run_page(
+                    run_id, limit, after_requested_at, after_id
+                )
+            ]
+
+
 class RequestApproval(LifecycleEvents):
     def execute(self, command: RequestApprovalCommand) -> ApprovalRequestResult:
         with self._uow_factory() as uow:

@@ -1,9 +1,10 @@
 """Enforces Python dependency-manifest policy against pyproject.toml.
 
-Rules: [project.dependencies] is allowlisted to sqlalchemy and alembic only;
-all other quality tooling lives in the dev dependency group; build-system
-requirements are exactly pinned; no direct URL/git/editable/local-path or
-wildcard/prerelease dependency specifiers.
+Rules: [project.dependencies] is allowlisted to sqlalchemy, alembic, fastapi,
+uvicorn, and pydantic only (the persistence layer plus the Phase 9 API
+delivery boundary); all other quality tooling lives in the dev dependency
+group; build-system requirements are exactly pinned; no direct
+URL/git/editable/local-path or wildcard/prerelease dependency specifiers.
 """
 
 from __future__ import annotations
@@ -23,7 +24,9 @@ FORBIDDEN_SPEC_PATTERNS = (
 )
 PRERELEASE_MARKERS = re.compile(r"\d(a|b|rc)\d|\.dev\d|\.post\d")
 WILDCARD_MARKERS = ("*",)
-ALLOWED_PROJECT_DEPENDENCY_NAMES = frozenset({"sqlalchemy", "alembic"})
+ALLOWED_PROJECT_DEPENDENCY_NAMES = frozenset(
+    {"sqlalchemy", "alembic", "fastapi", "uvicorn", "pydantic"}
+)
 
 
 def _load(text: str) -> dict[str, Any]:
@@ -80,7 +83,7 @@ def test_detector_flags_non_empty_project_dependencies() -> None:
     data = _load(
         """
         [project]
-        dependencies = ["fastapi"]
+        dependencies = ["requests"]
         """
     )
     violations = check_python_dependency_policy(data)
@@ -138,9 +141,9 @@ def test_project_dependencies_allow_only_sqlalchemy_and_alembic() -> None:
 
 
 def test_detector_flags_an_unlisted_project_dependency() -> None:
-    data = {"project": {"dependencies": ["sqlalchemy>=2.0.51", "fastapi>=0.115.0"]}}
+    data = {"project": {"dependencies": ["sqlalchemy>=2.0.51", "requests>=2.0.0"]}}
     violations = check_python_dependency_policy(data)
-    assert any("fastapi" in v for v in violations)
+    assert any("requests" in v for v in violations)
 
 
 def test_detector_flags_a_wildcard_project_dependency() -> None:

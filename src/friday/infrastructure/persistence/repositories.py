@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import func, select
+import builtins
+
+from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from friday.domain import (
@@ -31,6 +33,7 @@ from friday.infrastructure.persistence.mappers import (
     run_step_from_row,
     run_step_to_row,
     run_to_row,
+    task_event_from_row,
     task_event_to_row,
     task_from_row,
     task_to_row,
@@ -67,6 +70,24 @@ class TaskRepository:
         stmt = select(TaskRow).order_by(TaskRow.created_at, TaskRow.id).limit(limit)
         return [task_from_row(row) for row in self._session.execute(stmt).scalars()]
 
+    def list_page(
+        self, limit: int, after_created_at: object | None, after_id: str | None
+    ) -> builtins.list[Task]:
+        stmt = select(TaskRow)
+        if after_created_at is not None and after_id is not None:
+            stmt = stmt.where(
+                or_(
+                    TaskRow.created_at > after_created_at,
+                    and_(TaskRow.created_at == after_created_at, TaskRow.id > after_id),
+                )
+            )
+        return [
+            task_from_row(row)
+            for row in self._session.execute(
+                stmt.order_by(TaskRow.created_at, TaskRow.id).limit(limit)
+            ).scalars()
+        ]
+
 
 class RunRepository:
     def __init__(self, session: Session) -> None:
@@ -90,6 +111,24 @@ class RunRepository:
         )
         return [run_from_row(row) for row in self._session.execute(stmt).scalars()]
 
+    def list_for_task_page(
+        self, task_id: TaskId, limit: int, after_created_at: object | None, after_id: str | None
+    ) -> list[Run]:
+        stmt = select(RunRow).where(RunRow.task_id == str(task_id))
+        if after_created_at is not None and after_id is not None:
+            stmt = stmt.where(
+                or_(
+                    RunRow.created_at > after_created_at,
+                    and_(RunRow.created_at == after_created_at, RunRow.id > after_id),
+                )
+            )
+        return [
+            run_from_row(row)
+            for row in self._session.execute(
+                stmt.order_by(RunRow.created_at, RunRow.id).limit(limit)
+            ).scalars()
+        ]
+
 
 class RunStepRepository:
     def __init__(self, session: Session) -> None:
@@ -112,6 +151,24 @@ class RunStepRepository:
             .order_by(RunStepRow.position, RunStepRow.id)
         )
         return [run_step_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_position: int | None, after_id: str | None
+    ) -> list[RunStep]:
+        stmt = select(RunStepRow).where(RunStepRow.run_id == str(run_id))
+        if after_position is not None and after_id is not None:
+            stmt = stmt.where(
+                or_(
+                    RunStepRow.position > after_position,
+                    and_(RunStepRow.position == after_position, RunStepRow.id > after_id),
+                )
+            )
+        return [
+            run_step_from_row(row)
+            for row in self._session.execute(
+                stmt.order_by(RunStepRow.position, RunStepRow.id).limit(limit)
+            ).scalars()
+        ]
 
 
 class ApprovalRepository:
@@ -139,6 +196,35 @@ class ApprovalRepository:
         )
         return [approval_from_row(row) for row in self._session.execute(stmt).scalars()]
 
+    def list_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
+        stmt = (
+            select(ApprovalRequestRow)
+            .where(ApprovalRequestRow.run_id == str(run_id))
+            .order_by(ApprovalRequestRow.requested_at, ApprovalRequestRow.id)
+        )
+        return [approval_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_requested_at: object | None, after_id: str | None
+    ) -> list[ApprovalRequest]:
+        stmt = select(ApprovalRequestRow).where(ApprovalRequestRow.run_id == str(run_id))
+        if after_requested_at is not None and after_id is not None:
+            stmt = stmt.where(
+                or_(
+                    ApprovalRequestRow.requested_at > after_requested_at,
+                    and_(
+                        ApprovalRequestRow.requested_at == after_requested_at,
+                        ApprovalRequestRow.id > after_id,
+                    ),
+                )
+            )
+        return [
+            approval_from_row(row)
+            for row in self._session.execute(
+                stmt.order_by(ApprovalRequestRow.requested_at, ApprovalRequestRow.id).limit(limit)
+            ).scalars()
+        ]
+
 
 class ArtifactRepository:
     def __init__(self, session: Session) -> None:
@@ -158,6 +244,24 @@ class ArtifactRepository:
             .order_by(ArtifactRow.created_at, ArtifactRow.id)
         )
         return [artifact_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_created_at: object | None, after_id: str | None
+    ) -> list[Artifact]:
+        stmt = select(ArtifactRow).where(ArtifactRow.run_id == str(run_id))
+        if after_created_at is not None and after_id is not None:
+            stmt = stmt.where(
+                or_(
+                    ArtifactRow.created_at > after_created_at,
+                    and_(ArtifactRow.created_at == after_created_at, ArtifactRow.id > after_id),
+                )
+            )
+        return [
+            artifact_from_row(row)
+            for row in self._session.execute(
+                stmt.order_by(ArtifactRow.created_at, ArtifactRow.id).limit(limit)
+            ).scalars()
+        ]
 
 
 class ToolInvocationRepository:
@@ -190,6 +294,54 @@ class ToolInvocationRepository:
         )
         return [tool_invocation_from_row(row) for row in self._session.execute(stmt).scalars()]
 
+    def _list_page(
+        self,
+        stmt: Select[tuple[ToolInvocationRow]],
+        limit: int,
+        after_requested_at: object | None,
+        after_id: str | None,
+    ) -> list[ToolInvocation]:
+        if after_requested_at is not None and after_id is not None:
+            stmt = stmt.where(
+                or_(
+                    ToolInvocationRow.requested_at > after_requested_at,
+                    and_(
+                        ToolInvocationRow.requested_at == after_requested_at,
+                        ToolInvocationRow.id > after_id,
+                    ),
+                )
+            )
+        return [
+            tool_invocation_from_row(row)
+            for row in self._session.execute(
+                stmt.order_by(ToolInvocationRow.requested_at, ToolInvocationRow.id).limit(limit)
+            ).scalars()
+        ]
+
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_requested_at: object | None, after_id: str | None
+    ) -> list[ToolInvocation]:
+        return self._list_page(
+            select(ToolInvocationRow).where(ToolInvocationRow.run_id == str(run_id)),
+            limit,
+            after_requested_at,
+            after_id,
+        )
+
+    def list_for_step_page(
+        self,
+        step_id: RunStepId,
+        limit: int,
+        after_requested_at: object | None,
+        after_id: str | None,
+    ) -> list[ToolInvocation]:
+        return self._list_page(
+            select(ToolInvocationRow).where(ToolInvocationRow.step_id == str(step_id)),
+            limit,
+            after_requested_at,
+            after_id,
+        )
+
 
 class RunEventStore:
     def __init__(self, session: Session) -> None:
@@ -203,6 +355,15 @@ class RunEventStore:
             select(RunEventRow)
             .where(RunEventRow.run_id == str(run_id))
             .order_by(RunEventRow.sequence)
+        )
+        return [run_event_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+    def list_after_sequence(self, run_id: RunId, after_sequence: int, limit: int) -> list[RunEvent]:
+        stmt = (
+            select(RunEventRow)
+            .where(RunEventRow.run_id == str(run_id), RunEventRow.sequence > after_sequence)
+            .order_by(RunEventRow.sequence)
+            .limit(limit)
         )
         return [run_event_from_row(row) for row in self._session.execute(stmt).scalars()]
 
@@ -222,3 +383,22 @@ class TaskEventStore:
     def next_sequence(self, task_id: TaskId) -> int:
         stmt = select(func.max(TaskEventRow.sequence)).where(TaskEventRow.task_id == str(task_id))
         return (self._session.execute(stmt).scalar() or 0) + 1
+
+    def list_for_task(self, task_id: TaskId) -> list[TaskEvent]:
+        stmt = (
+            select(TaskEventRow)
+            .where(TaskEventRow.task_id == str(task_id))
+            .order_by(TaskEventRow.sequence)
+        )
+        return [task_event_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+    def list_after_sequence(
+        self, task_id: TaskId, after_sequence: int, limit: int
+    ) -> list[TaskEvent]:
+        stmt = (
+            select(TaskEventRow)
+            .where(TaskEventRow.task_id == str(task_id), TaskEventRow.sequence > after_sequence)
+            .order_by(TaskEventRow.sequence)
+            .limit(limit)
+        )
+        return [task_event_from_row(row) for row in self._session.execute(stmt).scalars()]

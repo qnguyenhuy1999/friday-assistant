@@ -17,7 +17,9 @@ exists yet.
 - **`src/friday/infrastructure/persistence`** — SQLite adapter via
   SQLAlchemy/Alembic implementing the application ports (see
   [persistence.md](persistence.md)).
-- **`apps/api`** — API delivery process. A thin composition root.
+- **`apps/api`** — API delivery process. A thin composition root exposing
+  Phase 6–8 use cases over local HTTP (see
+  [api-delivery.md](api-delivery.md)).
 - **`apps/worker`** — worker delivery process. A thin composition root.
 - **`apps/web`** — browser control-plane delivery. A thin TypeScript
   package shell (no React/Vite yet).
@@ -89,4 +91,9 @@ Phase 5 adds a SQLite persistence adapter (see
 [persistence.md](persistence.md)) implementing all seven application
 ports via SQLAlchemy, with Alembic migrations as schema source of truth.
 The adapter and migration behavior are covered by `tests/persistence`.
-Routes, the worker, AI integration, and the frontend still do not exist.
+
+Phase 9 adds the FastAPI/Uvicorn/Pydantic API delivery boundary (see
+[api-delivery.md](api-delivery.md)): a composition root, centralized
+error mapping, cursor pagination, and a Run-event SSE stream over the
+Phase 6–8 use cases. The worker, AI/runtime integration, and the
+frontend still do not exist.

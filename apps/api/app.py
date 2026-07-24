@@ -12,6 +12,9 @@ from fastapi import FastAPI
 
 from apps.api.errors import register_exception_handlers
 from apps.api.routes.health import router as health_router
+from apps.api.routes.runs import router as runs_router
+from apps.api.routes.steps import router as steps_router
+from apps.api.routes.tasks import router as tasks_router
 from apps.api.settings import ApiSettings
 from friday.infrastructure.clock import SystemClock
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
@@ -30,5 +33,8 @@ def create_app(settings: ApiSettings) -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(health_router)
+    app.include_router(tasks_router)
+    app.include_router(runs_router)
+    app.include_router(steps_router)
 
     return app

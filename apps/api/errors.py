@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from friday.application.errors import (
     ApplicationError,
@@ -95,3 +96,12 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content=_error_body("validation_error", "The request failed schema validation."),
         )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_error_handler(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        if exc.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=_error_body("validation_error", "The request failed schema validation."),
+            )
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})

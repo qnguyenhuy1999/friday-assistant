@@ -6,7 +6,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 
 from apps.api.dependencies import get_clock, get_uow_factory
-from apps.api.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, page_ordered
+from apps.api.pagination import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    cursor_datetime,
+    decode_cursor,
+    page_from_query,
+)
 from apps.api.schemas.runs import RunPageResponse, RunResponse
 from apps.api.schemas.tasks import FailureBody
 from friday.application.commands import (
@@ -73,11 +79,22 @@ def list_runs(
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: str | None = None,
 ) -> RunPageResponse:
-    results = ListRunsForTask(uow_factory, clock).execute(TaskId.parse(str(task_id)))
-    page, next_cursor = page_ordered(
+    parent_id = str(task_id)
+    after = decode_cursor(
+        cursor, collection="task_runs", parent_id=parent_id, order="created_at_id_asc", parts=2
+    )
+    results = ListRunsForTask(uow_factory, clock).page(
+        TaskId.parse(parent_id),
+        limit + 1,
+        cursor_datetime(after.after[0]) if after else None,
+        after.after[1] if after else None,
+    )
+    page, next_cursor = page_from_query(
         results,
         limit=limit,
-        cursor=cursor,
+        collection="task_runs",
+        parent_id=parent_id,
+        order="created_at_id_asc",
         key=lambda run: (run.created_at.isoformat(), str(run.run_id)),
     )
     return RunPageResponse(items=[_run_response(item) for item in page], next_cursor=next_cursor)

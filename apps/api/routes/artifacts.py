@@ -5,7 +5,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, status
 
 from apps.api.dependencies import get_clock, get_uow_factory
-from apps.api.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, page_ordered
+from apps.api.pagination import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    cursor_datetime,
+    decode_cursor,
+    page_from_query,
+)
 from apps.api.schemas.artifacts import ArtifactPage, ArtifactResponse, RecordArtifactBody
 from friday.application.artifact_use_cases import GetArtifact, ListArtifactsForRun, RecordArtifact
 from friday.application.ports import Clock, UnitOfWorkFactory
@@ -47,11 +53,21 @@ def list_artifacts_for_run(
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: str | None = None,
 ) -> ArtifactPage:
-    results = ListArtifactsForRun(uow_factory, clock).execute(RunId.parse(run_id))
-    page, next_cursor = page_ordered(
+    after = decode_cursor(
+        cursor, collection="run_artifacts", parent_id=run_id, order="created_at_id_asc", parts=2
+    )
+    results = ListArtifactsForRun(uow_factory, clock).page(
+        RunId.parse(run_id),
+        limit + 1,
+        cursor_datetime(after.after[0]) if after else None,
+        after.after[1] if after else None,
+    )
+    page, next_cursor = page_from_query(
         results,
         limit=limit,
-        cursor=cursor,
+        collection="run_artifacts",
+        parent_id=run_id,
+        order="created_at_id_asc",
         key=lambda a: (a.created_at.isoformat(), str(a.artifact_id)),
     )
     return ArtifactPage(

@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
@@ -16,7 +18,6 @@ from friday.domain.identifiers import RunEventId, RunId, TaskEventId, TaskId
 from friday.domain.run import Run
 from friday.domain.task import Task
 from friday.domain.task_event import TaskEvent, TaskEventType
-from friday.infrastructure.persistence.models import Base
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -36,10 +37,20 @@ def _settings_for(tmp_path: Path) -> ApiSettings:
     )
 
 
+def _upgrade_schema(database_url: str) -> None:
+    """Exercise the production Alembic path used by deployed databases."""
+    root = Path(__file__).resolve().parents[2]
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+
 @pytest.fixture
 def app(tmp_path: Path) -> Iterator[FastAPI]:
-    application = create_app(_settings_for(tmp_path))
-    Base.metadata.create_all(application.state.engine)
+    settings = _settings_for(tmp_path)
+    _upgrade_schema(settings.database_url)
+    application = create_app(settings)
     try:
         yield application
     finally:

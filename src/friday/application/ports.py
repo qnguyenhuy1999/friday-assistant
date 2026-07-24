@@ -11,6 +11,7 @@ List ordering is part of each port's contract, documented per method below.
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Callable
 from datetime import datetime
 from types import TracebackType
@@ -43,6 +44,9 @@ class TaskRepository(Protocol):
     def get(self, task_id: TaskId) -> Task | None: ...
     def save(self, task: Task) -> None: ...
     def list(self, limit: int) -> list[Task]: ...
+    def list_page(
+        self, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> builtins.list[Task]: ...
 
 
 class RunRepository(Protocol):
@@ -54,6 +58,10 @@ class RunRepository(Protocol):
         """Ordered by created_at, then id."""
         ...
 
+    def list_for_task_page(
+        self, task_id: TaskId, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> list[Run]: ...
+
 
 class RunStepRepository(Protocol):
     def add(self, step: RunStep) -> None: ...
@@ -63,6 +71,10 @@ class RunStepRepository(Protocol):
     def list_for_run(self, run_id: RunId) -> list[RunStep]:
         """Ordered by position, then id."""
         ...
+
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_position: int | None, after_id: str | None
+    ) -> list[RunStep]: ...
 
 
 class ApprovalRepository(Protocol):
@@ -78,6 +90,10 @@ class ApprovalRepository(Protocol):
         """Ordered by requested_at, then id."""
         ...
 
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_requested_at: datetime | None, after_id: str | None
+    ) -> list[ApprovalRequest]: ...
+
 
 class ArtifactRepository(Protocol):
     def add(self, artifact: Artifact) -> None: ...
@@ -86,6 +102,10 @@ class ArtifactRepository(Protocol):
     def list_for_run(self, run_id: RunId) -> list[Artifact]:
         """Ordered by created_at, then id."""
         ...
+
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> list[Artifact]: ...
 
 
 class ToolInvocationRepository(Protocol):
@@ -98,6 +118,16 @@ class ToolInvocationRepository(Protocol):
         ...
 
     def list_for_step(self, step_id: RunStepId) -> list[ToolInvocation]: ...
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_requested_at: datetime | None, after_id: str | None
+    ) -> list[ToolInvocation]: ...
+    def list_for_step_page(
+        self,
+        step_id: RunStepId,
+        limit: int,
+        after_requested_at: datetime | None,
+        after_id: str | None,
+    ) -> list[ToolInvocation]: ...
 
 
 class RunEventStore(Protocol):
@@ -106,6 +136,10 @@ class RunEventStore(Protocol):
     def list_for_run(self, run_id: RunId) -> list[RunEvent]:
         """Ordered by sequence."""
         ...
+
+    def list_after_sequence(
+        self, run_id: RunId, after_sequence: int, limit: int
+    ) -> list[RunEvent]: ...
 
     def next_sequence(self, run_id: RunId) -> int: ...
 
@@ -117,6 +151,10 @@ class TaskEventStore(Protocol):
     def list_for_task(self, task_id: TaskId) -> list[TaskEvent]:
         """Ordered by sequence."""
         ...
+
+    def list_after_sequence(
+        self, task_id: TaskId, after_sequence: int, limit: int
+    ) -> list[TaskEvent]: ...
 
 
 class UnitOfWork(Protocol):

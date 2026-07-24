@@ -33,6 +33,14 @@ class ListTasks(LifecycleEvents):
         with self._uow_factory() as uow:
             return [task_result(task) for task in uow.tasks.list(limit)]
 
+    def page(
+        self, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> list[TaskResult]:
+        with self._uow_factory() as uow:
+            return [
+                task_result(task) for task in uow.tasks.list_page(limit, after_created_at, after_id)
+            ]
+
 
 class _TaskCancellation(LifecycleEvents):
     def _cancel_run(self, uow: UnitOfWork, run: Run, now: datetime) -> None:

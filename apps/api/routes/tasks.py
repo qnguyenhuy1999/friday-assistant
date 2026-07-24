@@ -6,7 +6,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 
 from apps.api.dependencies import get_clock, get_uow_factory
-from apps.api.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, page_ordered
+from apps.api.pagination import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    cursor_datetime,
+    decode_cursor,
+    page_from_query,
+)
 from apps.api.schemas.tasks import CreateTaskBody, FailureBody, TaskPageResponse, TaskResponse
 from friday.application.commands import (
     CancelTaskCommand,
@@ -24,7 +30,6 @@ from friday.domain.failure import Failure, FailureCause
 from friday.domain.identifiers import TaskId
 
 router = APIRouter(prefix="/v1/tasks", tags=["tasks"])
-_LIST_FETCH_LIMIT = 1_000_000
 UowDependency = Annotated[UnitOfWorkFactory, Depends(get_uow_factory)]
 ClockDependency = Annotated[Clock, Depends(get_clock)]
 
@@ -74,11 +79,20 @@ def list_tasks(
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: str | None = None,
 ) -> TaskPageResponse:
-    results = ListTasks(uow_factory, clock).execute(limit=_LIST_FETCH_LIMIT)
-    page, next_cursor = page_ordered(
+    after = decode_cursor(
+        cursor, collection="tasks", parent_id=None, order="created_at_id_asc", parts=2
+    )
+    results = ListTasks(uow_factory, clock).page(
+        limit + 1,
+        cursor_datetime(after.after[0]) if after else None,
+        after.after[1] if after else None,
+    )
+    page, next_cursor = page_from_query(
         results,
         limit=limit,
-        cursor=cursor,
+        collection="tasks",
+        parent_id=None,
+        order="created_at_id_asc",
         key=lambda task: (task.created_at.isoformat(), str(task.task_id)),
     )
     return TaskPageResponse(items=[_task_response(item) for item in page], next_cursor=next_cursor)

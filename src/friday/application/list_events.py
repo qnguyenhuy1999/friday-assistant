@@ -16,6 +16,12 @@ class ListRunEvents(LifecycleEvents):
                 raise RunNotFound(run_id)
             return uow.events.list_for_run(run_id)
 
+    def after(self, run_id: RunId, after_sequence: int, limit: int) -> list[RunEvent]:
+        with self._uow_factory() as uow:
+            if uow.runs.get(run_id) is None:
+                raise RunNotFound(run_id)
+            return uow.events.list_after_sequence(run_id, after_sequence, limit)
+
 
 class ListTaskEvents(LifecycleEvents):
     def execute(self, task_id: TaskId) -> list[TaskEvent]:
@@ -23,3 +29,9 @@ class ListTaskEvents(LifecycleEvents):
             if uow.tasks.get(task_id) is None:
                 raise TaskNotFound(task_id)
             return uow.task_events.list_for_task(task_id)
+
+    def after(self, task_id: TaskId, after_sequence: int, limit: int) -> list[TaskEvent]:
+        with self._uow_factory() as uow:
+            if uow.tasks.get(task_id) is None:
+                raise TaskNotFound(task_id)
+            return uow.task_events.list_after_sequence(task_id, after_sequence, limit)

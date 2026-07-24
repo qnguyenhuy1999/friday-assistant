@@ -5,7 +5,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, status
 
 from apps.api.dependencies import get_clock, get_uow_factory
-from apps.api.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, page_ordered
+from apps.api.pagination import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    cursor_datetime,
+    decode_cursor,
+    page_from_query,
+)
 from apps.api.schemas.tool_invocations import (
     MarkFailedBody,
     MarkSucceededBody,
@@ -70,8 +76,27 @@ def list_tool_invocations_for_run(
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: str | None = None,
 ) -> ToolInvocationPage:
-    results = ListToolInvocationsForRun(uow_factory, clock).execute(RunId.parse(run_id))
-    page, next_cursor = page_ordered(results, limit=limit, cursor=cursor, key=_tool_invocation_key)
+    after = decode_cursor(
+        cursor,
+        collection="run_tool_invocations",
+        parent_id=run_id,
+        order="requested_at_id_asc",
+        parts=2,
+    )
+    results = ListToolInvocationsForRun(uow_factory, clock).page(
+        RunId.parse(run_id),
+        limit + 1,
+        cursor_datetime(after.after[0]) if after else None,
+        after.after[1] if after else None,
+    )
+    page, next_cursor = page_from_query(
+        results,
+        limit=limit,
+        collection="run_tool_invocations",
+        parent_id=run_id,
+        order="requested_at_id_asc",
+        key=_tool_invocation_key,
+    )
     return ToolInvocationPage(
         items=[ToolInvocationResponse.from_result(r) for r in page], next_cursor=next_cursor
     )
@@ -85,8 +110,27 @@ def list_tool_invocations_for_step(
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: str | None = None,
 ) -> ToolInvocationPage:
-    results = ListToolInvocationsForStep(uow_factory, clock).execute(RunStepId.parse(step_id))
-    page, next_cursor = page_ordered(results, limit=limit, cursor=cursor, key=_tool_invocation_key)
+    after = decode_cursor(
+        cursor,
+        collection="step_tool_invocations",
+        parent_id=step_id,
+        order="requested_at_id_asc",
+        parts=2,
+    )
+    results = ListToolInvocationsForStep(uow_factory, clock).page(
+        RunStepId.parse(step_id),
+        limit + 1,
+        cursor_datetime(after.after[0]) if after else None,
+        after.after[1] if after else None,
+    )
+    page, next_cursor = page_from_query(
+        results,
+        limit=limit,
+        collection="step_tool_invocations",
+        parent_id=step_id,
+        order="requested_at_id_asc",
+        key=_tool_invocation_key,
+    )
     return ToolInvocationPage(
         items=[ToolInvocationResponse.from_result(r) for r in page], next_cursor=next_cursor
     )

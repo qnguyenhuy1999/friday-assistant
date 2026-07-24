@@ -5,7 +5,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, status
 
 from apps.api.dependencies import get_clock, get_uow_factory
-from apps.api.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, page_ordered
+from apps.api.pagination import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    cursor_datetime,
+    decode_cursor,
+    page_from_query,
+)
 from apps.api.schemas.approvals import (
     ApprovalPage,
     ApprovalResponse,
@@ -62,11 +68,21 @@ def list_approvals_for_run(
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: str | None = None,
 ) -> ApprovalPage:
-    results = ListApprovalsForRun(uow_factory, clock).execute(RunId.parse(run_id))
-    page, next_cursor = page_ordered(
+    after = decode_cursor(
+        cursor, collection="run_approvals", parent_id=run_id, order="requested_at_id_asc", parts=2
+    )
+    results = ListApprovalsForRun(uow_factory, clock).page(
+        RunId.parse(run_id),
+        limit + 1,
+        cursor_datetime(after.after[0]) if after else None,
+        after.after[1] if after else None,
+    )
+    page, next_cursor = page_from_query(
         results,
         limit=limit,
-        cursor=cursor,
+        collection="run_approvals",
+        parent_id=run_id,
+        order="requested_at_id_asc",
         key=lambda a: (a.requested_at.isoformat(), str(a.approval_id)),
     )
     return ApprovalPage(

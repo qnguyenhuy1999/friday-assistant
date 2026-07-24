@@ -1,14 +1,4 @@
-"""Opaque cursor pagination owned by the HTTP delivery layer.
-
-The current repository ports return ordered lists rather than accepting
-cursors, so these helpers deliberately slice those lists in the API layer.
-That keeps this SQLite-scale delivery change local until persistence needs
-true keyset queries.
-
-Cursors encode the last-seen item's sort-key tuple (not a raw offset), so
-a page stays stable even if items are inserted or removed between reads --
-an offset-based cursor would skip or repeat items under concurrent writes.
-"""
+"""Opaque, collection-bound keyset cursors for HTTP collection endpoints."""
 
 from __future__ import annotations
 
@@ -16,6 +6,8 @@ import base64
 import binascii
 import json
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import datetime
 
 from fastapi import HTTPException
 
@@ -23,43 +15,91 @@ DEFAULT_PAGE_SIZE = 25
 MAX_PAGE_SIZE = 100
 
 
-def encode_cursor(*parts: str | int) -> str:
-    payload = json.dumps(["v1", *parts], separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+@dataclass(frozen=True)
+class Cursor:
+    after: tuple[str, ...]
 
 
-def decode_cursor(cursor: str, expected_parts: int) -> tuple[str, ...]:
+def encode_cursor(
+    *, collection: str, parent_id: str | None, order: str, after: Sequence[str | int]
+) -> str:
+    payload = {
+        "version": 1,
+        "collection": collection,
+        "parent_id": parent_id,
+        "order": order,
+        "after": list(after),
+    }
+    return (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode())
+        .decode()
+        .rstrip("=")
+    )
+
+
+def decode_cursor(
+    value: str | None, *, collection: str, parent_id: str | None, order: str, parts: int
+) -> Cursor | None:
+    if value is None:
+        return None
     try:
-        decoded = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
-        payload = json.loads(decoded)
+        raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        payload = json.loads(raw)
+        after = payload["after"]
         if (
-            not isinstance(payload, list)
-            or len(payload) != expected_parts + 1
-            or payload[0] != "v1"
-            or any(not isinstance(value, (str, int)) for value in payload[1:])
+            not isinstance(payload, dict)
+            or payload.get("version") != 1
+            or payload.get("collection") != collection
+            or payload.get("parent_id") != parent_id
+            or payload.get("order") != order
+            or not isinstance(after, list)
+            or len(after) != parts
+            or any(not isinstance(part, (str, int)) for part in after)
         ):
             raise ValueError
-    except (ValueError, TypeError, UnicodeDecodeError, binascii.Error, json.JSONDecodeError):
+    except (
+        KeyError,
+        ValueError,
+        TypeError,
+        UnicodeDecodeError,
+        binascii.Error,
+        json.JSONDecodeError,
+    ):
         raise HTTPException(status_code=422, detail="Invalid pagination cursor") from None
-    return tuple(str(value) for value in payload[1:])
+    return Cursor(tuple(str(part) for part in after))
 
 
-def page_ordered[T](
-    items: Sequence[T],
+def page_from_query[T](
+    rows: Sequence[T],
     *,
     limit: int,
-    cursor: str | None,
-    key: Callable[[T], tuple[str, ...]],
+    collection: str,
+    parent_id: str | None,
+    order: str,
+    key: Callable[[T], tuple[str | int, ...]],
 ) -> tuple[list[T], str | None]:
-    start = 0
-    if cursor is not None:
-        cursor_key = decode_cursor(cursor, len(key(items[0])) if items else 2)
-        for index, item in enumerate(items):
-            if key(item) == cursor_key:
-                start = index + 1
-                break
-        else:
-            raise HTTPException(status_code=422, detail="Invalid pagination cursor")
-    page = list(items[start : start + limit])
-    next_cursor = encode_cursor(*key(page[-1])) if start + limit < len(items) and page else None
+    """Turn the bounded ``LIMIT page_size + 1`` result into an HTTP page."""
+    page = list(rows[:limit])
+    next_cursor = None
+    if len(rows) > limit and page:
+        next_cursor = encode_cursor(
+            collection=collection, parent_id=parent_id, order=order, after=key(page[-1])
+        )
     return page, next_cursor
+
+
+def cursor_datetime(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError
+        return parsed
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid pagination cursor") from None
+
+
+def cursor_int(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid pagination cursor") from None

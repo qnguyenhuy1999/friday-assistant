@@ -39,6 +39,9 @@ Thumbs.db
 
 # Temporary workspaces
 tmp/
+
+# Graphify (generated knowledge graph output)
+graphify-out/
 .tmp/
 
 # Claude

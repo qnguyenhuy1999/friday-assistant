@@ -72,6 +72,17 @@ class ListRunStepsForRun(LifecycleEvents):
                 raise RunNotFound(run_id)
             return [step_result(step) for step in uow.steps.list_for_run(run_id)]
 
+    def page(
+        self, run_id: RunId, limit: int, after_position: int | None, after_id: str | None
+    ) -> list[RunStepResult]:
+        with self._uow_factory() as uow:
+            if uow.runs.get(run_id) is None:
+                raise RunNotFound(run_id)
+            return [
+                step_result(step)
+                for step in uow.steps.list_for_run_page(run_id, limit, after_position, after_id)
+            ]
+
 
 class _StepLifecycle(LifecycleEvents):
     def _load(self, uow: UnitOfWork, step_id: RunStepId) -> tuple[RunStep, Run]:

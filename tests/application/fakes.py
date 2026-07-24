@@ -5,6 +5,7 @@ repository holds real in-memory state as of Phase 8."""
 
 from __future__ import annotations
 
+import builtins
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Self
@@ -65,6 +66,18 @@ class FakeTaskRepository:
     def list(self, limit: int) -> list[Task]:
         return sorted(self.items.values(), key=lambda task: (task.created_at, str(task.id)))[:limit]
 
+    def list_page(
+        self, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> builtins.list[Task]:
+        tasks = self.list(len(self.items))
+        if after_created_at is not None and after_id is not None:
+            tasks = [
+                task
+                for task in tasks
+                if (task.created_at, str(task.id)) > (after_created_at, after_id)
+            ]
+        return tasks[:limit]
+
 
 class FakeRunRepository:
     def __init__(self) -> None:
@@ -83,6 +96,16 @@ class FakeRunRepository:
         matching = [run for run in self.items.values() if run.task_id == task_id]
         return sorted(matching, key=lambda run: (run.created_at, str(run.id)))
 
+    def list_for_task_page(
+        self, task_id: TaskId, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> list[Run]:
+        runs = self.list_for_task(task_id)
+        if after_created_at is not None and after_id is not None:
+            runs = [
+                run for run in runs if (run.created_at, str(run.id)) > (after_created_at, after_id)
+            ]
+        return runs[:limit]
+
 
 class FakeRunEventStore:
     def __init__(self) -> None:
@@ -94,6 +117,11 @@ class FakeRunEventStore:
     def list_for_run(self, run_id: RunId) -> list[RunEvent]:
         matching = [event for event in self.appended if event.run_id == run_id]
         return sorted(matching, key=lambda event: event.sequence)
+
+    def list_after_sequence(self, run_id: RunId, after_sequence: int, limit: int) -> list[RunEvent]:
+        return [event for event in self.list_for_run(run_id) if event.sequence > after_sequence][
+            :limit
+        ]
 
     def next_sequence(self, run_id: RunId) -> int:
         sequences = [event.sequence for event in self.appended if event.run_id == run_id]
@@ -116,6 +144,13 @@ class FakeTaskEventStore:
             key=lambda event: event.sequence,
         )
 
+    def list_after_sequence(
+        self, task_id: TaskId, after_sequence: int, limit: int
+    ) -> list[TaskEvent]:
+        return [event for event in self.list_for_task(task_id) if event.sequence > after_sequence][
+            :limit
+        ]
+
 
 class FakeRunStepRepository:
     def __init__(self) -> None:
@@ -135,6 +170,16 @@ class FakeRunStepRepository:
             (s for s in self.items.values() if s.run_id == run_id),
             key=lambda s: (s.position, str(s.id)),
         )
+
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_position: int | None, after_id: str | None
+    ) -> list[RunStep]:
+        steps = self.list_for_run(run_id)
+        if after_position is not None and after_id is not None:
+            steps = [
+                step for step in steps if (step.position, str(step.id)) > (after_position, after_id)
+            ]
+        return steps[:limit]
 
 
 class FakeToolInvocationRepository:
@@ -161,6 +206,34 @@ class FakeToolInvocationRepository:
             (i for i in self.items.values() if i.step_id == step_id),
             key=lambda i: (i.requested_at, str(i.id)),
         )
+
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_requested_at: datetime | None, after_id: str | None
+    ) -> list[ToolInvocation]:
+        invocations = self.list_for_run(run_id)
+        if after_requested_at is not None and after_id is not None:
+            invocations = [
+                invocation
+                for invocation in invocations
+                if (invocation.requested_at, str(invocation.id)) > (after_requested_at, after_id)
+            ]
+        return invocations[:limit]
+
+    def list_for_step_page(
+        self,
+        step_id: RunStepId,
+        limit: int,
+        after_requested_at: datetime | None,
+        after_id: str | None,
+    ) -> list[ToolInvocation]:
+        invocations = self.list_for_step(step_id)
+        if after_requested_at is not None and after_id is not None:
+            invocations = [
+                invocation
+                for invocation in invocations
+                if (invocation.requested_at, str(invocation.id)) > (after_requested_at, after_id)
+            ]
+        return invocations[:limit]
 
 
 class FakeApprovalRepository:
@@ -190,6 +263,18 @@ class FakeApprovalRepository:
             key=lambda approval: (approval.requested_at, str(approval.id)),
         )
 
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_requested_at: datetime | None, after_id: str | None
+    ) -> list[ApprovalRequest]:
+        approvals = self.list_for_run(run_id)
+        if after_requested_at is not None and after_id is not None:
+            approvals = [
+                approval
+                for approval in approvals
+                if (approval.requested_at, str(approval.id)) > (after_requested_at, after_id)
+            ]
+        return approvals[:limit]
+
 
 class FakeArtifactRepository:
     def __init__(self) -> None:
@@ -206,6 +291,18 @@ class FakeArtifactRepository:
             (a for a in self.items.values() if a.run_id == run_id),
             key=lambda a: (a.created_at, str(a.id)),
         )
+
+    def list_for_run_page(
+        self, run_id: RunId, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> list[Artifact]:
+        artifacts = self.list_for_run(run_id)
+        if after_created_at is not None and after_id is not None:
+            artifacts = [
+                artifact
+                for artifact in artifacts
+                if (artifact.created_at, str(artifact.id)) > (after_created_at, after_id)
+            ]
+        return artifacts[:limit]
 
 
 class FakeUnitOfWork:

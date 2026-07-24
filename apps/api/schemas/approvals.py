@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -25,7 +26,7 @@ class RequestApprovalBody(BaseModel):
     reason: str
     requested_action: str
     requested_input: Any = None
-    step_id: str | None = None
+    step_id: UUID | None = None
     expires_at: datetime | None = None
 
     def to_command(self, run_id: RunId) -> RequestApprovalCommand:
@@ -36,7 +37,7 @@ class RequestApprovalBody(BaseModel):
             reason=self.reason,
             requested_action=self.requested_action,
             requested_input=self.requested_input,
-            step_id=RunStepId.parse(self.step_id) if self.step_id is not None else None,
+            step_id=RunStepId.parse(str(self.step_id)) if self.step_id is not None else None,
             expires_at=self.expires_at,
         )
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -18,11 +19,11 @@ class RecordArtifactBody(BaseModel):
     name: str
     media_type: str
     location: str
-    step_id: str | None = None
+    step_id: UUID | None = None
     size: int | None = None
     checksum: str | None = None
     metadata: Any = None
-    artifact_id: str | None = None
+    artifact_id: UUID | None = None
 
     def to_command(self, run_id: RunId) -> RecordArtifactCommand:
         return RecordArtifactCommand(
@@ -31,11 +32,11 @@ class RecordArtifactBody(BaseModel):
             name=self.name,
             media_type=self.media_type,
             location=self.location,
-            step_id=RunStepId.parse(self.step_id) if self.step_id is not None else None,
+            step_id=RunStepId.parse(str(self.step_id)) if self.step_id is not None else None,
             size=self.size,
             checksum=self.checksum,
             metadata=self.metadata,
-            artifact_id=ArtifactId.parse(self.artifact_id)
+            artifact_id=ArtifactId.parse(str(self.artifact_id))
             if self.artifact_id is not None
             else None,
         )

@@ -6,7 +6,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 
 from apps.api.dependencies import get_clock, get_uow_factory
-from apps.api.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, page_ordered
+from apps.api.pagination import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    cursor_int,
+    decode_cursor,
+    page_from_query,
+)
 from apps.api.schemas.steps import CreateStepBody, StepPageResponse, StepResponse
 from apps.api.schemas.tasks import FailureBody
 from friday.application.commands import (
@@ -86,12 +92,23 @@ def list_steps(
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: str | None = None,
 ) -> StepPageResponse:
-    results = ListRunStepsForRun(uow_factory, clock).execute(RunId.parse(str(run_id)))
-    page, next_cursor = page_ordered(
+    parent_id = str(run_id)
+    after = decode_cursor(
+        cursor, collection="run_steps", parent_id=parent_id, order="position_id_asc", parts=2
+    )
+    results = ListRunStepsForRun(uow_factory, clock).page(
+        RunId.parse(parent_id),
+        limit + 1,
+        cursor_int(after.after[0]) if after else None,
+        after.after[1] if after else None,
+    )
+    page, next_cursor = page_from_query(
         results,
         limit=limit,
-        cursor=cursor,
-        key=lambda step: (str(step.position), str(step.step_id)),
+        collection="run_steps",
+        parent_id=parent_id,
+        order="position_id_asc",
+        key=lambda step: (step.position, str(step.step_id)),
     )
     return StepPageResponse(items=[_step_response(item) for item in page], next_cursor=next_cursor)
 

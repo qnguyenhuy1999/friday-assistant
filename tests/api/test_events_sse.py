@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 from typing import cast
+from uuid import UUID
 
 import pytest
 from fastapi import FastAPI
@@ -34,7 +35,7 @@ def test_sse_streams_committed_events_in_sequence_and_sets_headers(app: FastAPI)
 
     async def read() -> tuple[str, str, str]:
         response = await stream_run_events(
-            str(seeded.run_id),
+            UUID(str(seeded.run_id)),
             DisconnectProbe([False, False]),  # type: ignore[arg-type]
             app.state.uow_factory,
             app.state.clock,
@@ -60,7 +61,7 @@ def test_sse_last_event_id_reconnect_and_new_events_never_duplicate(app: FastAPI
 
     async def read_resume() -> tuple[str, str]:
         first_response = await stream_run_events(
-            str(seeded.run_id),
+            UUID(str(seeded.run_id)),
             DisconnectProbe([False]),  # type: ignore[arg-type]
             app.state.uow_factory,
             app.state.clock,
@@ -70,7 +71,7 @@ def test_sse_last_event_id_reconnect_and_new_events_never_duplicate(app: FastAPI
         first = await _next_chunk(first_response)
         append_run_event(app, seeded.run_id, 2)
         resumed_response = await stream_run_events(
-            str(seeded.run_id),
+            UUID(str(seeded.run_id)),
             DisconnectProbe([False]),  # type: ignore[arg-type]
             app.state.uow_factory,
             app.state.clock,
@@ -91,7 +92,7 @@ def test_sse_disconnect_stops_before_another_poll_and_closes_sessions(app: FastA
 
     async def disconnect() -> None:
         response = await stream_run_events(
-            str(seeded.run_id),
+            UUID(str(seeded.run_id)),
             DisconnectProbe([False, True]),  # type: ignore[arg-type]
             app.state.uow_factory,
             app.state.clock,

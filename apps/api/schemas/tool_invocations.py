@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -56,17 +57,17 @@ class FailureResponse(BaseModel):
 class RequestToolInvocationBody(BaseModel):
     tool_name: str
     requested_input: Any = None
-    step_id: str | None = None
-    approval_request_id: str | None = None
+    step_id: UUID | None = None
+    approval_request_id: UUID | None = None
 
     def to_command(self, run_id: RunId) -> RequestToolInvocationCommand:
         return RequestToolInvocationCommand(
             run_id=run_id,
             tool_name=self.tool_name,
             requested_input=self.requested_input,
-            step_id=RunStepId.parse(self.step_id) if self.step_id is not None else None,
+            step_id=RunStepId.parse(str(self.step_id)) if self.step_id is not None else None,
             approval_request_id=(
-                ApprovalRequestId.parse(self.approval_request_id)
+                ApprovalRequestId.parse(str(self.approval_request_id))
                 if self.approval_request_id is not None
                 else None
             ),

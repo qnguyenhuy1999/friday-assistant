@@ -59,6 +59,17 @@ class ListRunsForTask(LifecycleEvents):
                 raise TaskNotFound(task_id)
             return [run_result(run) for run in uow.runs.list_for_task(task_id)]
 
+    def page(
+        self, task_id: TaskId, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> list[RunResult]:
+        with self._uow_factory() as uow:
+            if uow.tasks.get(task_id) is None:
+                raise TaskNotFound(task_id)
+            return [
+                run_result(run)
+                for run in uow.runs.list_for_task_page(task_id, limit, after_created_at, after_id)
+            ]
+
 
 class StartQueuedRun(LifecycleEvents):
     def execute(self, command: StartQueuedRunCommand) -> RunResult:

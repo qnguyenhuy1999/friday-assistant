@@ -7,6 +7,8 @@ every route gets identical error shapes for free.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -25,6 +27,7 @@ from friday.application.errors import (
     ToolInvocationNotFound,
     TransactionFailure,
 )
+from friday.domain.errors import DomainValidationError
 
 
 class ErrorDetail(BaseModel):
@@ -35,6 +38,14 @@ class ErrorDetail(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorDetail
+
+
+ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    404: {"model": ErrorResponse, "description": "Resource not found."},
+    409: {"model": ErrorResponse, "description": "State conflict."},
+    422: {"model": ErrorResponse, "description": "Request validation failed."},
+    500: {"model": ErrorResponse, "description": "Internal server error."},
+}
 
 
 _NOT_FOUND_TYPES: dict[type[ApplicationError], str] = {
@@ -92,6 +103,17 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _validation_error_handler(
         _request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content=_error_body("validation_error", "The request failed schema validation."),
+        )
+
+    @app.exception_handler(DomainValidationError)
+    async def _domain_validation_handler(
+        _request: Request, _exc: DomainValidationError
+    ) -> JSONResponse:
+        # Domain conversion at the transport boundary (typed IDs/timestamps)
+        # must be indistinguishable from normal request-schema validation.
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content=_error_body("validation_error", "The request failed schema validation."),

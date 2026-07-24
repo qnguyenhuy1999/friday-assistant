@@ -88,11 +88,11 @@ class RunWorkQueue(Protocol):
         ...
 
     def release_claim(
-        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int, now: datetime
     ) -> bool:
         """Clear ownership/lease fields but keep the row (and its
         claim_generation) claimable again. Returns False on ownership
-        mismatch."""
+        mismatch or an already-expired lease."""
         ...
 
     def requeue_claimed(
@@ -103,16 +103,18 @@ class RunWorkQueue(Protocol):
         claim_generation: int,
         available_at: datetime,
         enqueued_at: datetime,
+        now: datetime,
     ) -> bool:
         """Release ownership and reschedule availability in one conditional
-        UPDATE. Returns False on ownership mismatch."""
+        UPDATE. Returns False on ownership mismatch or an already-expired
+        lease."""
         ...
 
     def remove_if_claimed(
-        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int, now: datetime
     ) -> bool:
-        """Delete the work item only if still owned by this exact claim.
-        Returns False on ownership mismatch."""
+        """Delete the work item only if still owned by this exact claim and
+        its lease has not already expired. Returns False otherwise."""
         ...
 
     def clear_expired_claim(self, run_id: RunId, now: datetime) -> bool: ...

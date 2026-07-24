@@ -33,7 +33,6 @@ class WorkerSettings:
     retry_base_delay: timedelta
     retry_multiplier: float
     retry_max_delay: timedelta
-    maintenance_only: bool
 
     def __post_init__(self) -> None:
         if not self.worker_id.strip():
@@ -68,7 +67,6 @@ class WorkerSettings:
 
     @classmethod
     def from_env(cls) -> WorkerSettings:
-        maintenance_only = os.environ.get("FRIDAY_WORKER_MAINTENANCE_ONLY", "false").lower()
         return cls(
             database_url=os.environ.get("FRIDAY_WORKER_DATABASE_URL", _DEFAULT_DATABASE_URL),
             worker_id=os.environ.get("FRIDAY_WORKER_ID", f"worker-{os.getpid()}"),
@@ -122,5 +120,4 @@ class WorkerSettings:
                     )
                 )
             ),
-            maintenance_only=maintenance_only in {"1", "true"},
         )

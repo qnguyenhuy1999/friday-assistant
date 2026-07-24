@@ -180,6 +180,43 @@ def test_run_once_marks_lease_lost_when_heartbeat_renewal_fails() -> None:
     assert loop.run_once(processor) is True
 
 
+def test_run_once_skips_apply_when_lease_lost_before_success_outcome() -> None:
+    _, run, loop, processor = _run_and_loop(ProcessingOutcome.succeeded())
+    renewal_attempted = Event()
+
+    class ClaimLostRenewal:
+        def execute(self, *args: object) -> None:
+            renewal_attempted.set()
+            raise ClaimLost("lease was lost")
+
+    loop._renew_lease = ClaimLostRenewal()  # type: ignore[assignment]
+
+    apply_calls: list[str] = []
+    loop._apply_failed = RecordingApply(apply_calls, "failed")  # type: ignore[assignment]
+    loop._apply_succeeded = RecordingApply(apply_calls, "succeeded")  # type: ignore[assignment]
+    loop._apply_waiting = RecordingApply(apply_calls, "waiting")  # type: ignore[assignment]
+
+    def wait_for_lease_lost(context: ClaimContext) -> None:
+        assert renewal_attempted.wait(timeout=1)
+        assert context.is_lease_lost()
+
+    processor.before_outcome = wait_for_lease_lost
+    assert loop.run_once(processor) is True
+    assert apply_calls == []
+    assert run.status is RunStatus.RUNNING
+
+
+def test_run_once_unknown_outcome_kind_fails_run_instead_of_stalling() -> None:
+    outcome = ProcessingOutcome.succeeded()
+    object.__setattr__(outcome, "kind", "bogus")
+    _, run, loop, processor = _run_and_loop(outcome)
+
+    assert loop.run_once(processor) is True
+    assert run.status is RunStatus.FAILED
+    assert run.failure is not None
+    assert run.failure.code == "unknown_processing_outcome"
+
+
 def test_run_maintenance_tick_recovers_expired_lease() -> None:
     uow, run, loop, _ = _run_and_loop(ProcessingOutcome.succeeded())
     factory = CountingUnitOfWorkFactory(uow)

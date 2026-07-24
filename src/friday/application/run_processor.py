@@ -27,6 +27,8 @@ class ProcessingOutcome:
     available_at: datetime | None = None
 
     def __post_init__(self) -> None:
+        if self.kind not in {"succeeded", "failed", "waiting_for_approval", "yielded"}:
+            raise ValueError(f"unsupported processing outcome kind: {self.kind}")
         if self.kind == "failed" and self.failure is None:
             raise ValueError("a 'failed' outcome requires a failure")
         if self.kind != "failed" and self.failure is not None:

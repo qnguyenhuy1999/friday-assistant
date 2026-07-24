@@ -287,6 +287,81 @@ def test_stale_worker_is_fenced_after_newer_claim_generation(operation: str) -> 
             )
 
 
+@pytest.mark.parametrize("operation", ["release", "requeue", "complete"])
+def test_stale_worker_is_fenced_after_lease_expires_without_reclaim(operation: str) -> None:
+    """Same worker/token/generation still match, but the lease already
+    expired and no other worker has reclaimed it yet."""
+    uow, run = _prepared_run()
+    generation = _claim(uow, run.id)
+    expired_at = T0 + LEASE
+
+    with pytest.raises(ClaimLost):
+        if operation == "release":
+            ReleaseRunClaim(CountingUnitOfWorkFactory(uow), FakeClock(expired_at)).execute(
+                run.id, "worker-1", "token-1", generation
+            )
+        elif operation == "requeue":
+            RequeueClaimedRun(CountingUnitOfWorkFactory(uow), FakeClock(expired_at)).execute(
+                run.id, "worker-1", "token-1", generation, expired_at
+            )
+        else:
+            CompleteRunWorkItem(CountingUnitOfWorkFactory(uow), FakeClock(expired_at)).execute(
+                run.id, "worker-1", "token-1", generation
+            )
+
+    item = uow.work_queue_repo.get(run.id)
+    assert item is not None
+    assert (item.claimed_by, item.claim_token, item.claim_generation) == (
+        "worker-1",
+        "token-1",
+        generation,
+    )
+
+
+def test_apply_failed_outcome_rejects_expired_lease_without_reclaim() -> None:
+    uow, run = _prepared_run(RunStatus.RUNNING)
+    generation = _claim(uow, run.id)
+    expired_at = T0 + LEASE
+
+    with pytest.raises(ClaimLost):
+        ApplyFailedOutcome(
+            CountingUnitOfWorkFactory(uow),
+            FakeClock(expired_at),
+            retry_policy=RetryPolicy(3, timedelta(1), 2, timedelta(10)),
+        ).execute(run.id, "worker-1", "token-1", generation, RETRYABLE_FAILURE)
+
+    assert run.status is RunStatus.RUNNING
+    assert uow.event_store.appended == []
+    assert len(uow.run_repo.list_for_task(run.task_id)) == 1
+
+
+def test_apply_succeeded_outcome_rejects_expired_lease_without_reclaim() -> None:
+    uow, run = _prepared_run(RunStatus.RUNNING)
+    generation = _claim(uow, run.id)
+    expired_at = T0 + LEASE
+
+    with pytest.raises(ClaimLost):
+        ApplySucceededOutcome(CountingUnitOfWorkFactory(uow), FakeClock(expired_at)).execute(
+            run.id, "worker-1", "token-1", generation
+        )
+
+    assert run.status is RunStatus.RUNNING
+    assert uow.event_store.appended == []
+
+
+def test_apply_waiting_outcome_rejects_expired_lease_without_reclaim() -> None:
+    uow, run = _prepared_run(RunStatus.WAITING_FOR_APPROVAL)
+    generation = _claim(uow, run.id)
+    expired_at = T0 + LEASE
+
+    with pytest.raises(ClaimLost):
+        ApplyWaitingOutcome(CountingUnitOfWorkFactory(uow), FakeClock(expired_at)).execute(
+            run.id, "worker-1", "token-1", generation
+        )
+
+    assert run.status is RunStatus.WAITING_FOR_APPROVAL
+
+
 def test_apply_failed_outcome_fails_run_and_schedules_delayed_retry() -> None:
     uow, run = _prepared_run(RunStatus.RUNNING)
     generation = _claim(uow, run.id)

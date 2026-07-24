@@ -23,7 +23,6 @@ class _WorkerSettingsKwargs(TypedDict):
     retry_base_delay: timedelta
     retry_multiplier: float
     retry_max_delay: timedelta
-    maintenance_only: bool
 
 
 def _valid_kwargs() -> _WorkerSettingsKwargs:
@@ -40,7 +39,6 @@ def _valid_kwargs() -> _WorkerSettingsKwargs:
         "retry_base_delay": timedelta(seconds=5),
         "retry_multiplier": 2.0,
         "retry_max_delay": timedelta(seconds=300),
-        "maintenance_only": False,
     }
 
 

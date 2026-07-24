@@ -7,7 +7,7 @@ import threading
 import time
 
 from friday.application.errors import ClaimLost
-from friday.application.run_processor import ClaimContext, RunProcessor
+from friday.application.run_processor import ClaimContext, ProcessingOutcome, RunProcessor
 from friday.application.worker_coordination import (
     ApplyFailedOutcome,
     ApplySucceededOutcome,
@@ -89,17 +89,38 @@ class WorkerLoop:
             attempt_number=claim.attempt_number,
             is_lease_lost=lease_lost.is_set,
         )
+        processor_error: Exception | None = None
+        outcome: ProcessingOutcome | None = None
         try:
             outcome = processor.process(context)
         except Exception as exc:
-            if context.is_lease_lost():
+            processor_error = exc
+        finally:
+            stop_heartbeat.set()
+            heartbeat_thread.join()
+
+        if heartbeat_errors:
+            logger.error(
+                "Heartbeat thread failed with %s for run %s; lease state unknown, "
+                "skipping outcome application",
+                type(heartbeat_errors[0]).__name__,
+                claim.run_id,
+            )
+            return True
+
+        if lease_lost.is_set():
+            if processor_error is not None:
                 logger.error(
                     "Processor raised %s for run %s after its claim was already lost; "
                     "discarding outcome",
-                    type(exc).__name__,
+                    type(processor_error).__name__,
                     claim.run_id,
                 )
-                return True
+            else:
+                logger.info("Claim lost before applying outcome for run %s", claim.run_id)
+            return True
+
+        if processor_error is not None:
             failure = Failure(
                 code="processor_exception",
                 message="Run processor failed unexpectedly.",
@@ -108,7 +129,7 @@ class WorkerLoop:
             )
             logger.exception(
                 "Processor raised %s for run %s; recording as failure code %s",
-                type(exc).__name__,
+                type(processor_error).__name__,
                 claim.run_id,
                 failure.code,
             )
@@ -125,19 +146,8 @@ class WorkerLoop:
                     "Claim lost while applying synthetic failure outcome for run %s", claim.run_id
                 )
             return True
-        finally:
-            stop_heartbeat.set()
-            heartbeat_thread.join()
 
-        if heartbeat_errors:
-            logger.error(
-                "Heartbeat thread failed with %s for run %s; lease state unknown, "
-                "skipping outcome application",
-                type(heartbeat_errors[0]).__name__,
-                claim.run_id,
-            )
-            return True
-
+        assert outcome is not None
         try:
             if outcome.kind == "succeeded":
                 self._apply_succeeded.execute(
@@ -164,6 +174,25 @@ class WorkerLoop:
                     claim.claim_token,
                     claim.claim_generation,
                     outcome.available_at,
+                )
+            else:
+                logger.error(
+                    "Unrecognized processing outcome kind %r for run %s; failing the run "
+                    "instead of leaving its claim to stall",
+                    outcome.kind,
+                    claim.run_id,
+                )
+                self._apply_failed.execute(
+                    claim.run_id,
+                    claim.worker_id,
+                    claim.claim_token,
+                    claim.claim_generation,
+                    Failure(
+                        code="unknown_processing_outcome",
+                        message="Run processor returned an unrecognized outcome kind.",
+                        retryable=False,
+                        cause=FailureCause.RUNTIME,
+                    ),
                 )
         except ClaimLost:
             logger.info("Claim lost while applying outcome for run %s", claim.run_id)

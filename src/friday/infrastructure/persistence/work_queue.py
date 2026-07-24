@@ -134,7 +134,7 @@ class SqlAlchemyRunWorkQueue:
         return result.rowcount == 1
 
     def release_claim(
-        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int, now: datetime
     ) -> bool:
         stmt = (
             update(RunWorkItemRow)
@@ -143,6 +143,8 @@ class SqlAlchemyRunWorkQueue:
                 RunWorkItemRow.claimed_by == worker_id,
                 RunWorkItemRow.claim_token == claim_token,
                 RunWorkItemRow.claim_generation == claim_generation,
+                RunWorkItemRow.lease_expires_at.is_not(None),
+                RunWorkItemRow.lease_expires_at > now,
             )
             .values(
                 claimed_by=None,
@@ -164,6 +166,7 @@ class SqlAlchemyRunWorkQueue:
         claim_generation: int,
         available_at: datetime,
         enqueued_at: datetime,
+        now: datetime,
     ) -> bool:
         stmt = (
             update(RunWorkItemRow)
@@ -172,6 +175,8 @@ class SqlAlchemyRunWorkQueue:
                 RunWorkItemRow.claimed_by == worker_id,
                 RunWorkItemRow.claim_token == claim_token,
                 RunWorkItemRow.claim_generation == claim_generation,
+                RunWorkItemRow.lease_expires_at.is_not(None),
+                RunWorkItemRow.lease_expires_at > now,
             )
             .values(
                 available_at=available_at,
@@ -188,7 +193,7 @@ class SqlAlchemyRunWorkQueue:
         return result.rowcount == 1
 
     def remove_if_claimed(
-        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int, now: datetime
     ) -> bool:
         stmt = (
             delete(RunWorkItemRow)
@@ -197,6 +202,8 @@ class SqlAlchemyRunWorkQueue:
                 RunWorkItemRow.claimed_by == worker_id,
                 RunWorkItemRow.claim_token == claim_token,
                 RunWorkItemRow.claim_generation == claim_generation,
+                RunWorkItemRow.lease_expires_at.is_not(None),
+                RunWorkItemRow.lease_expires_at > now,
             )
             .execution_options(synchronize_session=False)
         )

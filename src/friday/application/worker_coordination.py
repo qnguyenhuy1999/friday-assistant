@@ -127,8 +127,9 @@ class ReleaseRunClaim:
         self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
     ) -> None:
         with self._uow_factory() as uow:
+            now = self._clock.now()
             released = uow.work_queue.release_claim(
-                run_id, worker_id, claim_token, claim_generation
+                run_id, worker_id, claim_token, claim_generation, now
             )
             uow.commit()
         if not released:
@@ -151,7 +152,7 @@ class RequeueClaimedRun:
         with self._uow_factory() as uow:
             now = self._clock.now()
             requeued = uow.work_queue.requeue_claimed(
-                run_id, worker_id, claim_token, claim_generation, available_at, now
+                run_id, worker_id, claim_token, claim_generation, available_at, now, now
             )
             uow.commit()
         if not requeued:
@@ -167,8 +168,9 @@ class CompleteRunWorkItem:
         self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
     ) -> None:
         with self._uow_factory() as uow:
+            now = self._clock.now()
             removed = uow.work_queue.remove_if_claimed(
-                run_id, worker_id, claim_token, claim_generation
+                run_id, worker_id, claim_token, claim_generation, now
             )
             uow.commit()
         if not removed:
@@ -209,8 +211,9 @@ class ApplyFailedOutcome:
         failure: Failure,
     ) -> RunResult:
         with self._uow_factory() as uow:
+            now = self._clock.now()
             removed = uow.work_queue.remove_if_claimed(
-                run_id, worker_id, claim_token, claim_generation
+                run_id, worker_id, claim_token, claim_generation, now
             )
             if not removed:
                 uow.commit()
@@ -221,7 +224,6 @@ class ApplyFailedOutcome:
                 uow.commit()
                 raise RunNotFound(run_id)
 
-            now = self._clock.now()
             specs = _fail_run_event_specs(uow, run, now, failure)
             LifecycleEvents.append_run_events(uow, run, now, specs)
 
@@ -257,6 +259,7 @@ class ApplySucceededOutcome:
         self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
     ) -> RunResult:
         with self._uow_factory() as uow:
+            now = self._clock.now()
             run = uow.runs.get(run_id)
             if run is None:
                 raise RunNotFound(run_id)
@@ -272,12 +275,11 @@ class ApplySucceededOutcome:
                 raise EntityConflict("run has non-terminal tool invocations")
 
             removed = uow.work_queue.remove_if_claimed(
-                run_id, worker_id, claim_token, claim_generation
+                run_id, worker_id, claim_token, claim_generation, now
             )
             if not removed:
                 raise ClaimLost(f"successful outcome lost claim for run {run_id}")
 
-            now = self._clock.now()
             specs = _succeed_run_event_specs(uow, run, now)
             LifecycleEvents.append_run_events(uow, run, now, specs)
             uow.commit()
@@ -303,8 +305,9 @@ class ApplyWaitingOutcome:
                     "processor reported waiting_for_approval but the run is not waiting"
                 )
             # RequestApproval normally removed this item before the outcome was returned.
+            now = self._clock.now()
             removed = uow.work_queue.remove_if_claimed(
-                run_id, worker_id, claim_token, claim_generation
+                run_id, worker_id, claim_token, claim_generation, now
             )
             if not removed:
                 raise ClaimLost(f"waiting outcome lost claim for run {run_id}")

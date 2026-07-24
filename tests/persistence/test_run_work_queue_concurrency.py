@@ -142,9 +142,11 @@ def test_expired_claim_recovery_increments_generation_and_fences_original_worker
         assert not SqlAlchemyRunWorkQueue(session_a).renew_lease(
             run_id, "worker-a", "token-a", 1, recovered_at, recovered_at + timedelta(minutes=1)
         )
-        assert not SqlAlchemyRunWorkQueue(session_a).release_claim(run_id, "worker-a", "token-a", 1)
+        assert not SqlAlchemyRunWorkQueue(session_a).release_claim(
+            run_id, "worker-a", "token-a", 1, recovered_at
+        )
         assert not SqlAlchemyRunWorkQueue(session_a).remove_if_claimed(
-            run_id, "worker-a", "token-a", 1
+            run_id, "worker-a", "token-a", 1, recovered_at
         )
     finally:
         seed.close()

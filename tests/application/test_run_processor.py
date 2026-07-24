@@ -11,6 +11,11 @@ from tests.application.fakes import T0
 FAILURE = Failure("test", "failed", retryable=False, cause=FailureCause.RUNTIME)
 
 
+def test_processing_outcome_rejects_unknown_kind() -> None:
+    with pytest.raises(ValueError):
+        ProcessingOutcome(kind="bogus")  # type: ignore[arg-type]
+
+
 def test_processing_outcome_rejects_missing_failed_failure() -> None:
     with pytest.raises(ValueError):
         ProcessingOutcome(kind="failed")

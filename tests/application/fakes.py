@@ -441,10 +441,10 @@ class FakeRunWorkQueue:
         return True
 
     def release_claim(
-        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int, now: datetime
     ) -> bool:
         item = self.items.get(run_id)
-        if not self._owns(item, worker_id, claim_token, claim_generation):
+        if not self._owns_active(item, worker_id, claim_token, claim_generation, now):
             return False
         assert item is not None
         self.items[run_id] = RunWorkItemView(
@@ -468,9 +468,10 @@ class FakeRunWorkQueue:
         claim_generation: int,
         available_at: datetime,
         enqueued_at: datetime,
+        now: datetime,
     ) -> bool:
         item = self.items.get(run_id)
-        if not self._owns(item, worker_id, claim_token, claim_generation):
+        if not self._owns_active(item, worker_id, claim_token, claim_generation, now):
             return False
         assert item is not None
         self.items[run_id] = RunWorkItemView(
@@ -487,10 +488,10 @@ class FakeRunWorkQueue:
         return True
 
     def remove_if_claimed(
-        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int, now: datetime
     ) -> bool:
         item = self.items.get(run_id)
-        if not self._owns(item, worker_id, claim_token, claim_generation):
+        if not self._owns_active(item, worker_id, claim_token, claim_generation, now):
             return False
         del self.items[run_id]
         return True
@@ -545,6 +546,21 @@ class FakeRunWorkQueue:
             and item.claimed_by == worker_id
             and item.claim_token == claim_token
             and item.claim_generation == claim_generation
+        )
+
+    @staticmethod
+    def _owns_active(
+        item: RunWorkItemView | None,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        return (
+            FakeRunWorkQueue._owns(item, worker_id, claim_token, claim_generation)
+            and item is not None
+            and item.lease_expires_at is not None
+            and item.lease_expires_at > now
         )
 
     @staticmethod

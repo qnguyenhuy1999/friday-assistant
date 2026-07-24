@@ -23,7 +23,6 @@ def test_create_worker_wires_real_infrastructure(tmp_path: Path) -> None:
         retry_base_delay=timedelta(seconds=5),
         retry_multiplier=2.0,
         retry_max_delay=timedelta(seconds=300),
-        maintenance_only=False,
     )
     worker = create_worker(settings)
     try:

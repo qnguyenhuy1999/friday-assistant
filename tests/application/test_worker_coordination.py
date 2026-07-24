@@ -5,7 +5,9 @@ from datetime import timedelta
 import pytest
 
 from friday.application.errors import ClaimLost
+from friday.application.retry_policy import RetryPolicy
 from friday.application.worker_coordination import (
+    ApplyFailedOutcome,
     ClaimNextRun,
     CompleteRunWorkItem,
     ReleaseRunClaim,
@@ -21,6 +23,7 @@ from tests.application.fakes import T0, CountingUnitOfWorkFactory, FakeClock, Fa
 
 LEASE = timedelta(minutes=1)
 FAILURE = Failure("test", "failed", retryable=False, cause=FailureCause.RUNTIME)
+RETRYABLE_FAILURE = Failure("retryable", "failed", retryable=True, cause=FailureCause.RUNTIME)
 
 
 def _prepared_run(status: RunStatus = RunStatus.QUEUED) -> tuple[FakeUnitOfWork, Run]:
@@ -277,3 +280,99 @@ def test_stale_worker_is_fenced_after_newer_claim_generation(operation: str) -> 
             CompleteRunWorkItem(CountingUnitOfWorkFactory(uow), FakeClock()).execute(
                 run.id, "worker-1", "token-1", old_generation
             )
+
+
+def test_apply_failed_outcome_fails_run_and_schedules_delayed_retry() -> None:
+    uow, run = _prepared_run(RunStatus.RUNNING)
+    generation = _claim(uow, run.id)
+    now = T0 + timedelta(seconds=10)
+    policy = RetryPolicy(3, timedelta(seconds=5), 2, timedelta(seconds=30))
+
+    result = ApplyFailedOutcome(
+        CountingUnitOfWorkFactory(uow), FakeClock(now), retry_policy=policy
+    ).execute(run.id, "worker-1", "token-1", generation, RETRYABLE_FAILURE)
+
+    assert result.run_id == run.id
+    assert run.status is RunStatus.FAILED
+    assert [event.type for event in uow.event_store.appended] == [
+        RunEventType.RUN_FAILED,
+        RunEventType.RUN_CREATED,
+    ]
+    runs = uow.run_repo.list_for_task(run.task_id)
+    assert len(runs) == 2
+    retry = next(item for item in runs if item.id != run.id)
+    work_item = uow.work_queue_repo.get(retry.id)
+    assert work_item is not None
+    available_at = now + policy.compute_delay(2)
+    assert work_item.available_at == available_at
+    assert retry.id not in {
+        item.run_id for item in uow.work_queue_repo.find_due_candidates(now, 10)
+    }
+    assert retry.id in {
+        item.run_id for item in uow.work_queue_repo.find_due_candidates(available_at, 10)
+    }
+
+
+def test_apply_failed_outcome_does_not_retry_non_retryable_failure() -> None:
+    uow, run = _prepared_run(RunStatus.RUNNING)
+    generation = _claim(uow, run.id)
+
+    ApplyFailedOutcome(
+        CountingUnitOfWorkFactory(uow),
+        FakeClock(),
+        retry_policy=RetryPolicy(3, timedelta(1), 2, timedelta(10)),
+    ).execute(run.id, "worker-1", "token-1", generation, FAILURE)
+
+    assert run.status is RunStatus.FAILED
+    assert len(uow.run_repo.list_for_task(run.task_id)) == 1
+
+
+def test_apply_failed_outcome_does_not_retry_after_attempt_budget() -> None:
+    uow, run = _prepared_run(RunStatus.RUNNING)
+    for _ in range(2):
+        prior = Run.new(id=RunId.new(), task_id=run.task_id, created_at=T0)
+        prior.start(T0)
+        prior.fail(T0, FAILURE)
+        uow.run_repo.add(prior)
+    generation = _claim(uow, run.id)
+
+    ApplyFailedOutcome(
+        CountingUnitOfWorkFactory(uow),
+        FakeClock(),
+        retry_policy=RetryPolicy(3, timedelta(1), 2, timedelta(10)),
+    ).execute(run.id, "worker-1", "token-1", generation, RETRYABLE_FAILURE)
+
+    assert run.status is RunStatus.FAILED
+    assert len(uow.run_repo.list_for_task(run.task_id)) == 3
+
+
+def test_apply_failed_outcome_stale_claim_does_not_mutate_or_schedule() -> None:
+    uow, run = _prepared_run(RunStatus.RUNNING)
+    generation = _claim(uow, run.id)
+
+    with pytest.raises(ClaimLost):
+        ApplyFailedOutcome(
+            CountingUnitOfWorkFactory(uow),
+            FakeClock(),
+            retry_policy=RetryPolicy(3, timedelta(1), 2, timedelta(10)),
+        ).execute(run.id, "wrong-worker", "token-1", generation, RETRYABLE_FAILURE)
+
+    assert run.status is RunStatus.RUNNING
+    assert uow.event_store.appended == []
+    assert len(uow.run_repo.list_for_task(run.task_id)) == 1
+
+
+def test_apply_failed_outcome_is_idempotent_against_replayed_claimed_outcome() -> None:
+    uow, run = _prepared_run(RunStatus.RUNNING)
+    generation = _claim(uow, run.id)
+    use_case = ApplyFailedOutcome(
+        CountingUnitOfWorkFactory(uow),
+        FakeClock(),
+        retry_policy=RetryPolicy(3, timedelta(1), 2, timedelta(10)),
+    )
+
+    use_case.execute(run.id, "worker-1", "token-1", generation, RETRYABLE_FAILURE)
+    with pytest.raises(ClaimLost):
+        use_case.execute(run.id, "worker-1", "token-1", generation, RETRYABLE_FAILURE)
+
+    assert len(uow.run_repo.list_for_task(run.task_id)) == 2

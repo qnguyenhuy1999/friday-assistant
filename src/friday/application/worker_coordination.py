@@ -13,13 +13,16 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta
 
-from friday.application.errors import ClaimLost
-from friday.application.lifecycle_events import LifecycleEvents
+from friday.application.errors import ClaimLost, RunNotFound
+from friday.application.lifecycle_events import LifecycleEvents, run_result
 from friday.application.ports import Clock, UnitOfWorkFactory
-from friday.application.results import RunClaimResult
+from friday.application.results import RunClaimResult, RunResult
+from friday.application.retry_policy import RetryPolicy
+from friday.application.run_lifecycle import _fail_run_event_specs
 from friday.domain.event import RunEventType
+from friday.domain.failure import Failure
 from friday.domain.identifiers import RunId
-from friday.domain.run import TERMINAL_RUN_STATUSES, RunStatus
+from friday.domain.run import TERMINAL_RUN_STATUSES, Run, RunStatus
 
 
 class ClaimNextRun:
@@ -184,3 +187,59 @@ class VerifyRunClaim:
             )
             uow.commit()
         return active
+
+
+class ApplyFailedOutcome:
+    def __init__(
+        self, uow_factory: UnitOfWorkFactory, clock: Clock, *, retry_policy: RetryPolicy
+    ) -> None:
+        self._uow_factory = uow_factory
+        self._clock = clock
+        self._retry_policy = retry_policy
+
+    def execute(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        failure: Failure,
+    ) -> RunResult:
+        with self._uow_factory() as uow:
+            removed = uow.work_queue.remove_if_claimed(
+                run_id, worker_id, claim_token, claim_generation
+            )
+            if not removed:
+                uow.commit()
+                raise ClaimLost(f"failed outcome lost claim for run {run_id}")
+
+            run = uow.runs.get(run_id)
+            if run is None:
+                uow.commit()
+                raise RunNotFound(run_id)
+
+            now = self._clock.now()
+            specs = _fail_run_event_specs(uow, run, now, failure)
+            LifecycleEvents.append_run_events(uow, run, now, specs)
+
+            attempt_number = len(uow.runs.list_for_task(run.task_id))
+            if self._retry_policy.is_retry_allowed(attempt_number, failure):
+                retry = Run.new(id=RunId.new(), task_id=run.task_id, created_at=now)
+                uow.runs.add(retry)
+                delay = self._retry_policy.compute_delay(attempt_number + 1)
+                uow.work_queue.enqueue(retry.id, available_at=now + delay, enqueued_at=now)
+                LifecycleEvents.append_run_events(
+                    uow,
+                    retry,
+                    now,
+                    [
+                        (
+                            RunEventType.RUN_CREATED,
+                            {"task_id": str(run.task_id), "retry_of": str(run.id)},
+                            None,
+                        )
+                    ],
+                )
+
+            uow.commit()
+            return run_result(run)

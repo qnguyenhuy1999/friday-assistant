@@ -31,7 +31,9 @@ while `list_pending_for_run` is non-empty. `expires_at` is optional; it is
 validated at creation (aware UTC, strictly after `requested_at`) and
 persisted, and `ExpireApproval` conflicts while `now < expires_at` or when
 no deadline exists. No scheduler runs in Phase 8 — expiry is an explicit
-command (Phase 10+ owns scheduling).
+command. Phase 10 added the scheduler: `ExpireDueApprovals` (see
+[worker-coordination.md](worker-coordination.md)) calls it on a bounded
+maintenance interval.
 
 ### Approval idempotency
 

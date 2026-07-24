@@ -20,7 +20,10 @@ exists yet.
 - **`apps/api`** — API delivery process. A thin composition root exposing
   Phase 6–8 use cases over local HTTP (see
   [api-delivery.md](api-delivery.md)).
-- **`apps/worker`** — worker delivery process. A thin composition root.
+- **`apps/worker`** — worker delivery process. A composition root plus a
+  claim/lease/retry coordination loop over the Phase 6–9 use cases (see
+  [worker-coordination.md](worker-coordination.md)). No tool/model
+  execution exists yet.
 - **`apps/web`** — browser control-plane delivery. A thin TypeScript
   package shell (no React/Vite yet).
 - **`packages/contracts`** — language-neutral schemas and cross-process

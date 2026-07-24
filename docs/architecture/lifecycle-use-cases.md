@@ -43,8 +43,10 @@ unchanged. Tool cancellation is durable metadata only.
 
 For a Run, the observable event batch begins with `run_cancelled`, followed
 by step cancellation, its tool cancellations, and run-owned tool cancellations. Each Run
-gets one `next_sequence()` call and consecutive event sequence values. The
-accepted cross-worker `next_sequence`/append race remains Phase 10 work.
+gets one `next_sequence()` call and consecutive event sequence values.
+Phase 10 replaced `next_sequence()` with atomic per-Run/per-Task counter
+reservation — see [worker-coordination.md](worker-coordination.md)
+("Atomic event sequence reservation").
 
 Existing `RunEvent` is intentionally non-nullably run-owned, so Task-only
 transitions cannot be attached to a fabricated or unrelated Run. Phase 7 adds
@@ -58,4 +60,5 @@ Approval, tool-invocation, and artifact use cases are Phase 8 work — see
 [approval-tool-artifact-use-cases.md](approval-tool-artifact-use-cases.md).
 Phase 10 owns durable
 worker claiming, cross-worker event sequence allocation, retry scheduling,
-and backoff. Phase 11 owns actual tool execution/cancellation.
+and backoff — see [worker-coordination.md](worker-coordination.md).
+Phase 11 owns actual tool execution/cancellation.

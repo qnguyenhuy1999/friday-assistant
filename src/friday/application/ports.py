@@ -115,6 +115,10 @@ class RunWorkQueue(Protocol):
         Returns False on ownership mismatch."""
         ...
 
+    def clear_expired_claim(self, run_id: RunId, now: datetime) -> bool: ...
+
+    def remove_if_lease_expired(self, run_id: RunId, now: datetime) -> bool: ...
+
     def is_claim_active(
         self,
         run_id: RunId,
@@ -174,6 +178,8 @@ class ApprovalRepository(Protocol):
     def list_pending_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
         """Ordered by requested_at, then id."""
         ...
+
+    def list_due_for_expiry(self, now: datetime, limit: int) -> list[ApprovalRequest]: ...
 
     def list_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
         """Ordered by requested_at, then id."""

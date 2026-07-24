@@ -19,7 +19,7 @@ from friday.application.ports import (
     TaskRepository,
     ToolInvocationRepository,
 )
-from friday.domain.approval import ApprovalCategory, ApprovalRequest
+from friday.domain.approval import ApprovalCategory, ApprovalRequest, ApprovalStatus
 from friday.domain.artifact import Artifact, ArtifactKind
 from friday.domain.event import RunEvent, RunEventType
 from friday.domain.identifiers import (
@@ -153,6 +153,17 @@ class _FakeApprovalRepository:
     def list_pending_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
         matches = [a for a in self._approvals.values() if a.run_id == run_id]
         return sorted(matches, key=lambda a: (a.requested_at, a.id.value))
+
+    def list_due_for_expiry(self, now: datetime, limit: int) -> list[ApprovalRequest]:
+        matches = [
+            approval
+            for approval in self._approvals.values()
+            if approval.status is ApprovalStatus.PENDING
+            and approval.expires_at is not None
+            and approval.expires_at <= now
+        ]
+        matches.sort(key=lambda approval: (approval.requested_at, approval.id.value))
+        return matches[:limit]
 
     def list_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
         matches = [a for a in self._approvals.values() if a.run_id == run_id]

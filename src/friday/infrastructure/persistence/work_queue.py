@@ -203,6 +203,41 @@ class SqlAlchemyRunWorkQueue:
         result = cast(CursorResult[Any], self._session.execute(stmt))
         return result.rowcount == 1
 
+    def clear_expired_claim(self, run_id: RunId, now: datetime) -> bool:
+        stmt = (
+            update(RunWorkItemRow)
+            .where(
+                RunWorkItemRow.run_id == str(run_id),
+                RunWorkItemRow.claimed_by.is_not(None),
+                RunWorkItemRow.lease_expires_at.is_not(None),
+                RunWorkItemRow.lease_expires_at <= now,
+            )
+            .values(
+                claimed_by=None,
+                claim_token=None,
+                claimed_at=None,
+                heartbeat_at=None,
+                lease_expires_at=None,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
+
+    def remove_if_lease_expired(self, run_id: RunId, now: datetime) -> bool:
+        stmt = (
+            delete(RunWorkItemRow)
+            .where(
+                RunWorkItemRow.run_id == str(run_id),
+                RunWorkItemRow.claimed_by.is_not(None),
+                RunWorkItemRow.lease_expires_at.is_not(None),
+                RunWorkItemRow.lease_expires_at <= now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
+
     def is_claim_active(
         self,
         run_id: RunId,

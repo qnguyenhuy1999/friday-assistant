@@ -264,6 +264,17 @@ class FakeApprovalRepository:
         ]
         return sorted(matching, key=lambda a: (a.requested_at, str(a.id)))
 
+    def list_due_for_expiry(self, now: datetime, limit: int) -> list[ApprovalRequest]:
+        matching = [
+            approval
+            for approval in self.items.values()
+            if approval.status is ApprovalStatus.PENDING
+            and approval.expires_at is not None
+            and approval.expires_at <= now
+        ]
+        matching.sort(key=lambda approval: (approval.requested_at, str(approval.id)))
+        return matching[:limit]
+
     def list_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
         return sorted(
             (approval for approval in self.items.values() if approval.run_id == run_id),
@@ -484,6 +495,31 @@ class FakeRunWorkQueue:
         del self.items[run_id]
         return True
 
+    def clear_expired_claim(self, run_id: RunId, now: datetime) -> bool:
+        item = self.items.get(run_id)
+        if not self._is_expired(item, now):
+            return False
+        assert item is not None
+        self.items[run_id] = RunWorkItemView(
+            run_id=item.run_id,
+            available_at=item.available_at,
+            enqueued_at=item.enqueued_at,
+            claimed_by=None,
+            claim_token=None,
+            claim_generation=item.claim_generation,
+            claimed_at=None,
+            heartbeat_at=None,
+            lease_expires_at=None,
+        )
+        return True
+
+    def remove_if_lease_expired(self, run_id: RunId, now: datetime) -> bool:
+        item = self.items.get(run_id)
+        if not self._is_expired(item, now):
+            return False
+        del self.items[run_id]
+        return True
+
     def is_claim_active(
         self,
         run_id: RunId,
@@ -509,6 +545,15 @@ class FakeRunWorkQueue:
             and item.claimed_by == worker_id
             and item.claim_token == claim_token
             and item.claim_generation == claim_generation
+        )
+
+    @staticmethod
+    def _is_expired(item: RunWorkItemView | None, now: datetime) -> bool:
+        return (
+            item is not None
+            and item.claimed_by is not None
+            and item.lease_expires_at is not None
+            and item.lease_expires_at <= now
         )
 
 

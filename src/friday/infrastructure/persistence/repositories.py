@@ -201,6 +201,19 @@ class ApprovalRepository:
         )
         return [approval_from_row(row) for row in self._session.execute(stmt).scalars()]
 
+    def list_due_for_expiry(self, now: object, limit: int) -> list[ApprovalRequest]:
+        stmt = (
+            select(ApprovalRequestRow)
+            .where(
+                ApprovalRequestRow.status == ApprovalStatus.PENDING.value,
+                ApprovalRequestRow.expires_at.is_not(None),
+                ApprovalRequestRow.expires_at <= now,
+            )
+            .order_by(ApprovalRequestRow.requested_at, ApprovalRequestRow.id)
+            .limit(limit)
+        )
+        return [approval_from_row(row) for row in self._session.execute(stmt).scalars()]
+
     def list_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
         stmt = (
             select(ApprovalRequestRow)

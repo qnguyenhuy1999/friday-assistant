@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.friday-agent-os.dev/v1/runtime/brain_action.json",
+  "title": "BrainAction",
+  "description": "Machine-readable action envelope a brain runtime proposes each turn. Friday validates, authorizes, executes; the brain only proposes. Mirrors friday.application.runtime_actions.",
+  "oneOf": [
+    {
+      "type": "object",
+      "title": "FinishAction",
+      "properties": {
+        "version": { "const": 1 },
+        "action": { "const": "finish" },
+        "result": {
+          "type": "object",
+          "properties": {
+            "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
+            "details": { "$ref": "../definitions/json_value.json" }
+          },
+          "required": ["summary"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["version", "action", "result"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "title": "FailAction",
+      "properties": {
+        "version": { "const": 1 },
+        "action": { "const": "fail" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      },
+      "required": ["version", "action", "reason"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "title": "YieldAction",
+      "properties": {
+        "version": { "const": 1 },
+        "action": { "const": "yield" },
+        "delay_seconds": { "type": "integer", "minimum": 0, "maximum": 86400 },
+        "reason": { "type": "string", "maxLength": 2000 }
+      },
+      "required": ["version", "action"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "title": "InvokeToolAction",
+      "properties": {
+        "version": { "const": 1 },
+        "action": { "const": "invoke_tool" },
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+        },
+        "input": { "type": "object" },
+        "reason": { "type": "string", "maxLength": 2000 }
+      },
+      "required": ["version", "action", "tool", "input"],
+      "additionalProperties": false
+    }
+  ]
+}

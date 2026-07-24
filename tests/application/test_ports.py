@@ -119,6 +119,10 @@ class _FakeApprovalRepository:
         matches = [a for a in self._approvals.values() if a.run_id == run_id]
         return sorted(matches, key=lambda a: (a.requested_at, a.id.value))
 
+    def list_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
+        matches = [a for a in self._approvals.values() if a.run_id == run_id]
+        return sorted(matches, key=lambda a: (a.requested_at, a.id.value))
+
 
 @dataclass
 class _FakeArtifactRepository:

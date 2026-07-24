@@ -31,6 +31,7 @@ from friday.infrastructure.persistence.mappers import (
     run_step_from_row,
     run_step_to_row,
     run_to_row,
+    task_event_from_row,
     task_event_to_row,
     task_from_row,
     task_to_row,
@@ -139,6 +140,14 @@ class ApprovalRepository:
         )
         return [approval_from_row(row) for row in self._session.execute(stmt).scalars()]
 
+    def list_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
+        stmt = (
+            select(ApprovalRequestRow)
+            .where(ApprovalRequestRow.run_id == str(run_id))
+            .order_by(ApprovalRequestRow.requested_at, ApprovalRequestRow.id)
+        )
+        return [approval_from_row(row) for row in self._session.execute(stmt).scalars()]
+
 
 class ArtifactRepository:
     def __init__(self, session: Session) -> None:
@@ -222,3 +231,11 @@ class TaskEventStore:
     def next_sequence(self, task_id: TaskId) -> int:
         stmt = select(func.max(TaskEventRow.sequence)).where(TaskEventRow.task_id == str(task_id))
         return (self._session.execute(stmt).scalar() or 0) + 1
+
+    def list_for_task(self, task_id: TaskId) -> list[TaskEvent]:
+        stmt = (
+            select(TaskEventRow)
+            .where(TaskEventRow.task_id == str(task_id))
+            .order_by(TaskEventRow.sequence)
+        )
+        return [task_event_from_row(row) for row in self._session.execute(stmt).scalars()]

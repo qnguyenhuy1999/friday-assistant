@@ -59,10 +59,10 @@ def test_friday_package_and_layers_import_successfully() -> None:
     assert friday.infrastructure.__name__ == "friday.infrastructure"
 
 
-def test_api_shell_entry_point_executes() -> None:
-    from apps.api.main import main
+def test_api_entry_point_exposes_asgi_app() -> None:
+    from apps.api.main import app
 
-    assert main() == "Friday Agent OS API shell"
+    assert app.title == "Friday Agent OS API"
 
 
 def test_worker_shell_entry_point_executes() -> None:

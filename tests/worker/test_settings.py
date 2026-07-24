@@ -3,13 +3,30 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import TypedDict
 
 import pytest
 
 from apps.worker.settings import WorkerSettings
 
 
-def _valid_kwargs() -> dict:
+class _WorkerSettingsKwargs(TypedDict):
+    database_url: str
+    worker_id: str
+    lease_duration: timedelta
+    candidate_limit: int
+    poll_interval_seconds: float
+    heartbeat_interval_seconds: float
+    maintenance_interval_seconds: float
+    maintenance_batch_size: int
+    retry_max_attempts: int
+    retry_base_delay: timedelta
+    retry_multiplier: float
+    retry_max_delay: timedelta
+    maintenance_only: bool
+
+
+def _valid_kwargs() -> _WorkerSettingsKwargs:
     return {
         "database_url": "sqlite:///./friday.db",
         "worker_id": "worker-1",

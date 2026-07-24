@@ -17,6 +17,7 @@ from friday.application.worker_coordination import (
     RequeueClaimedRun,
 )
 from friday.application.worker_maintenance import ExpireDueApprovals, RecoverExpiredLeases
+from friday.domain.failure import Failure, FailureCause
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class WorkerLoop:
 
         lease_lost = threading.Event()
         stop_heartbeat = threading.Event()
+        heartbeat_errors: list[BaseException] = []
 
         def heartbeat() -> None:
             while not stop_heartbeat.wait(self._heartbeat_interval_seconds):
@@ -69,6 +71,10 @@ class WorkerLoop:
                         claim.claim_generation,
                     )
                 except ClaimLost:
+                    lease_lost.set()
+                    return
+                except Exception as exc:  # noqa: BLE001 - recorded, thread must not die silently
+                    heartbeat_errors.append(exc)
                     lease_lost.set()
                     return
 
@@ -85,9 +91,52 @@ class WorkerLoop:
         )
         try:
             outcome = processor.process(context)
+        except Exception as exc:
+            if context.is_lease_lost():
+                logger.error(
+                    "Processor raised %s for run %s after its claim was already lost; "
+                    "discarding outcome",
+                    type(exc).__name__,
+                    claim.run_id,
+                )
+                return True
+            failure = Failure(
+                code="processor_exception",
+                message="Run processor failed unexpectedly.",
+                retryable=True,
+                cause=FailureCause.RUNTIME,
+            )
+            logger.exception(
+                "Processor raised %s for run %s; recording as failure code %s",
+                type(exc).__name__,
+                claim.run_id,
+                failure.code,
+            )
+            try:
+                self._apply_failed.execute(
+                    claim.run_id,
+                    claim.worker_id,
+                    claim.claim_token,
+                    claim.claim_generation,
+                    failure,
+                )
+            except ClaimLost:
+                logger.info(
+                    "Claim lost while applying synthetic failure outcome for run %s", claim.run_id
+                )
+            return True
         finally:
             stop_heartbeat.set()
             heartbeat_thread.join()
+
+        if heartbeat_errors:
+            logger.error(
+                "Heartbeat thread failed with %s for run %s; lease state unknown, "
+                "skipping outcome application",
+                type(heartbeat_errors[0]).__name__,
+                claim.run_id,
+            )
+            return True
 
         try:
             if outcome.kind == "succeeded":

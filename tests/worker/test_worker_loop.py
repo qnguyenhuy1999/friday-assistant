@@ -10,7 +10,7 @@ from threading import Event
 import pytest
 
 from apps.worker.worker_loop import WorkerLoop
-from friday.application.errors import ClaimLost
+from friday.application.errors import ClaimLost, TransactionFailure
 from friday.application.retry_policy import RetryPolicy
 from friday.application.run_processor import ClaimContext, ProcessingOutcome
 from friday.application.worker_coordination import (
@@ -43,6 +43,26 @@ class PresetProcessor:
         if self.before_outcome is not None:
             self.before_outcome(context)
         return self.outcome
+
+
+@dataclass
+class RaisingProcessor:
+    exc: BaseException
+    before_raise: Callable[[ClaimContext], None] | None = None
+
+    def process(self, context: ClaimContext) -> ProcessingOutcome:
+        if self.before_raise is not None:
+            self.before_raise(context)
+        raise self.exc
+
+
+@dataclass
+class RecordingApply:
+    calls: list[str]
+    label: str
+
+    def execute(self, *args: object, **kwargs: object) -> None:
+        self.calls.append(self.label)
 
 
 def _run_and_loop(
@@ -214,3 +234,84 @@ def test_serve_forever_runs_due_maintenance_before_shutdown(
     loop.serve_forever(shutdown)
     assert recovered == 1
     assert expired == 1
+
+
+def test_run_once_processor_exception_applies_synthetic_failure() -> None:
+    _, run, loop, _ = _run_and_loop(ProcessingOutcome.succeeded())
+    processor = RaisingProcessor(RuntimeError("boom at /etc/secret-path"))
+
+    assert loop.run_once(processor) is True
+    assert run.status is RunStatus.FAILED
+    assert run.failure is not None
+    assert run.failure.code == "processor_exception"
+    assert run.failure.message == "Run processor failed unexpectedly."
+    assert run.failure.retryable is True
+    assert "boom" not in run.failure.message
+    assert "/etc/secret-path" not in run.failure.message
+
+
+def test_run_once_processor_exception_after_lease_lost_skips_apply() -> None:
+    _, run, loop, _ = _run_and_loop(ProcessingOutcome.succeeded())
+    renewal_attempted = Event()
+
+    class ClaimLostRenewal:
+        def execute(self, *args: object) -> None:
+            renewal_attempted.set()
+            raise ClaimLost("lease was lost")
+
+    loop._renew_lease = ClaimLostRenewal()  # type: ignore[assignment]
+
+    apply_calls: list[str] = []
+    loop._apply_failed = RecordingApply(apply_calls, "failed")  # type: ignore[assignment]
+    loop._apply_succeeded = RecordingApply(apply_calls, "succeeded")  # type: ignore[assignment]
+    loop._apply_waiting = RecordingApply(apply_calls, "waiting")  # type: ignore[assignment]
+
+    def wait_for_lease_lost(context: ClaimContext) -> None:
+        assert renewal_attempted.wait(timeout=1)
+        assert context.is_lease_lost()
+
+    processor = RaisingProcessor(RuntimeError("late failure"), before_raise=wait_for_lease_lost)
+    assert loop.run_once(processor) is True
+    assert apply_calls == []
+    assert run.status is RunStatus.RUNNING
+
+
+def test_run_once_heartbeat_non_claim_lost_exception_skips_apply() -> None:
+    _, run, loop, processor = _run_and_loop(ProcessingOutcome.succeeded())
+    renewal_attempted = Event()
+
+    class FailingRenewal:
+        def execute(self, *args: object) -> None:
+            renewal_attempted.set()
+            raise TransactionFailure("renewal transaction failed")
+
+    loop._renew_lease = FailingRenewal()  # type: ignore[assignment]
+
+    apply_calls: list[str] = []
+    loop._apply_failed = RecordingApply(apply_calls, "failed")  # type: ignore[assignment]
+    loop._apply_succeeded = RecordingApply(apply_calls, "succeeded")  # type: ignore[assignment]
+    loop._apply_waiting = RecordingApply(apply_calls, "waiting")  # type: ignore[assignment]
+
+    def wait_for_heartbeat_error(_: ClaimContext) -> None:
+        assert renewal_attempted.wait(timeout=1)
+
+    processor.before_outcome = wait_for_heartbeat_error
+    assert loop.run_once(processor) is True
+    assert apply_calls == []
+    assert run.status is RunStatus.RUNNING
+
+
+def test_run_once_reraises_keyboard_interrupt_from_processor() -> None:
+    _, _, loop, _ = _run_and_loop(ProcessingOutcome.succeeded())
+    processor = RaisingProcessor(KeyboardInterrupt())
+
+    with pytest.raises(KeyboardInterrupt):
+        loop.run_once(processor)
+
+
+def test_run_once_reraises_system_exit_from_processor() -> None:
+    _, _, loop, _ = _run_and_loop(ProcessingOutcome.succeeded())
+    processor = RaisingProcessor(SystemExit())
+
+    with pytest.raises(SystemExit):
+        loop.run_once(processor)

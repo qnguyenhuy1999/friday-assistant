@@ -19,7 +19,7 @@ from friday.application.ports import (
     TaskRepository,
     ToolInvocationRepository,
 )
-from friday.domain.approval import ApprovalCategory, ApprovalRequest
+from friday.domain.approval import ApprovalCategory, ApprovalRequest, ApprovalStatus
 from friday.domain.artifact import Artifact, ArtifactKind
 from friday.domain.event import RunEvent, RunEventType
 from friday.domain.identifiers import (
@@ -154,6 +154,17 @@ class _FakeApprovalRepository:
         matches = [a for a in self._approvals.values() if a.run_id == run_id]
         return sorted(matches, key=lambda a: (a.requested_at, a.id.value))
 
+    def list_due_for_expiry(self, now: datetime, limit: int) -> list[ApprovalRequest]:
+        matches = [
+            approval
+            for approval in self._approvals.values()
+            if approval.status is ApprovalStatus.PENDING
+            and approval.expires_at is not None
+            and approval.expires_at <= now
+        ]
+        matches.sort(key=lambda approval: (approval.requested_at, approval.id.value))
+        return matches[:limit]
+
     def list_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
         matches = [a for a in self._approvals.values() if a.run_id == run_id]
         return sorted(matches, key=lambda a: (a.requested_at, a.id.value))
@@ -251,6 +262,7 @@ class _FakeToolInvocationRepository:
 @dataclass
 class _FakeRunEventStore:
     _events: dict[RunId, list[RunEvent]] = field(default_factory=dict)
+    _next_sequences: dict[RunId, int] = field(default_factory=dict)
 
     def append(self, event: RunEvent) -> None:
         self._events.setdefault(event.run_id, []).append(event)
@@ -263,8 +275,10 @@ class _FakeRunEventStore:
             :limit
         ]
 
-    def next_sequence(self, run_id: RunId) -> int:
-        return len(self._events.get(run_id, [])) + 1
+    def reserve_sequences(self, run_id: RunId, count: int) -> int:
+        start = self._next_sequences.get(run_id, 1)
+        self._next_sequences[run_id] = start + count
+        return start
 
 
 def test_fake_clock_satisfies_clock_protocol() -> None:
@@ -385,10 +399,10 @@ def test_tool_invocation_repository_lists_ordered_by_requested_at() -> None:
     assert repo.list_for_run(run_id) == [earlier, later]
 
 
-def test_run_event_store_next_sequence_and_ordering() -> None:
+def test_run_event_store_reserve_sequences_and_ordering() -> None:
     store: RunEventStore = _FakeRunEventStore()
     run_id = RunId.new()
-    assert store.next_sequence(run_id) == 1
+    assert store.reserve_sequences(run_id, 1) == 1
     first = RunEvent(
         id=RunEventId.new(),
         run_id=run_id,
@@ -397,7 +411,7 @@ def test_run_event_store_next_sequence_and_ordering() -> None:
         occurred_at=T0,
     )
     store.append(first)
-    assert store.next_sequence(run_id) == 2
+    assert store.reserve_sequences(run_id, 1) == 2
     second = RunEvent(
         id=RunEventId.new(),
         run_id=run_id,
@@ -409,7 +423,7 @@ def test_run_event_store_next_sequence_and_ordering() -> None:
     assert store.list_for_run(run_id) == [first, second]
 
 
-def test_run_event_store_next_sequence_is_per_run() -> None:
+def test_run_event_store_reserve_sequences_is_per_run() -> None:
     store: RunEventStore = _FakeRunEventStore()
     run_id = RunId.new()
     other_run_id = RunId.new()
@@ -422,4 +436,4 @@ def test_run_event_store_next_sequence_is_per_run() -> None:
             occurred_at=T0,
         )
     )
-    assert store.next_sequence(other_run_id) == 1
+    assert store.reserve_sequences(other_run_id, 1) == 1

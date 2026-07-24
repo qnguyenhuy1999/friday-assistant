@@ -37,6 +37,7 @@ from friday.infrastructure.persistence.repositories import (
     TaskRepository,
     ToolInvocationRepository,
 )
+from friday.infrastructure.persistence.work_queue import SqlAlchemyRunWorkQueue
 
 
 def _translated(exc: SQLAlchemyError) -> ApplicationError:
@@ -60,6 +61,7 @@ class SqlAlchemyUnitOfWork:
         self._tool_invocations = ToolInvocationRepository(session)
         self._events = RunEventStore(session)
         self._task_events = TaskEventStore(session)
+        self._work_queue = SqlAlchemyRunWorkQueue(session)
 
     @property
     def tasks(self) -> TaskRepository:
@@ -92,6 +94,10 @@ class SqlAlchemyUnitOfWork:
     @property
     def task_events(self) -> TaskEventStore:
         return self._task_events
+
+    @property
+    def work_queue(self) -> SqlAlchemyRunWorkQueue:
+        return self._work_queue
 
     def __enter__(self) -> Self:
         return self

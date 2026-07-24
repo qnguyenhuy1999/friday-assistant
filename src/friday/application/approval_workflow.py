@@ -133,6 +133,7 @@ class RequestApproval(LifecycleEvents):
             uow.approvals.add(approval)
             run.wait_for_approval(now, approval.id)
             uow.runs.save(run)
+            uow.work_queue.remove(run.id)
             if step is not None:
                 step.wait_for_approval(now, approval.id)
                 uow.steps.save(step)
@@ -222,6 +223,7 @@ class _ApprovalResolution(LifecycleEvents):
         if run.status is RunStatus.WAITING_FOR_APPROVAL and run.approval_request_id == approval.id:
             run.resume(now)
             uow.runs.save(run)
+            uow.work_queue.enqueue(run.id, available_at=now, enqueued_at=now)
             specs.append(
                 (
                     RunEventType.RUN_RESUMED,

@@ -347,3 +347,22 @@ def test_resolving_approval_of_missing_step_raises() -> None:
     del uow.step_repo.items[step.id]
     with pytest.raises(RunStepNotFound):
         ApproveRequest(factory, FakeClock(T1)).execute(ApproveRequestCommand(approval_id, "a"))
+
+
+def test_request_approval_removes_the_active_work_item() -> None:
+    uow, factory, run, _ = _prepared()
+    uow.work_queue_repo.enqueue(run.id, available_at=T0, enqueued_at=T0)
+    RequestApproval(factory, FakeClock(T1)).execute(_request_command(run))
+    assert uow.work_queue_repo.get(run.id) is None
+
+
+def test_approve_re_enqueues_the_resumed_run_as_due() -> None:
+    uow, factory, run, _ = _prepared()
+    approval_id = _pending_approval(factory, run)
+    ApproveRequest(factory, FakeClock(T1)).execute(
+        ApproveRequestCommand(approval_id, resolver="alice", resolution_note="ok")
+    )
+    work_item = uow.work_queue_repo.get(run.id)
+    assert work_item is not None
+    assert work_item.available_at == T1
+    assert work_item.claimed_by is None

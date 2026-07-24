@@ -11,6 +11,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from friday.application.ports import RunWorkItemView
 from friday.domain import (
     ApprovalCategory,
     ApprovalRequest,
@@ -47,6 +48,7 @@ from friday.infrastructure.persistence.models import (
     RunEventRow,
     RunRow,
     RunStepRow,
+    RunWorkItemRow,
     TaskEventRow,
     TaskRow,
     ToolInvocationRow,
@@ -319,4 +321,20 @@ def run_event_from_row(row: RunEventRow) -> RunEvent:
         sequence=row.sequence,
         occurred_at=_read_back_utc(row.occurred_at),
         payload=cast(JsonValue, row.payload),
+    )
+
+
+def run_work_item_from_row(row: RunWorkItemRow) -> RunWorkItemView:
+    return RunWorkItemView(
+        run_id=RunId.parse(row.run_id),
+        available_at=_read_back_utc(row.available_at),
+        enqueued_at=_read_back_utc(row.enqueued_at),
+        claimed_by=row.claimed_by,
+        claim_token=row.claim_token,
+        claim_generation=row.claim_generation,
+        claimed_at=_read_back_utc(row.claimed_at) if row.claimed_at is not None else None,
+        heartbeat_at=_read_back_utc(row.heartbeat_at) if row.heartbeat_at is not None else None,
+        lease_expires_at=_read_back_utc(row.lease_expires_at)
+        if row.lease_expires_at is not None
+        else None,
     )

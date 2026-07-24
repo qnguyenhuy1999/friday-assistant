@@ -97,6 +97,18 @@ class ToolInvocationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class RunClaimResult:
+    run_id: RunId
+    task_id: TaskId
+    worker_id: str
+    claim_token: str
+    claim_generation: int
+    attempt_number: int
+    acquired_at: datetime
+    lease_expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class ArtifactResult:
     artifact_id: ArtifactId
     run_id: RunId

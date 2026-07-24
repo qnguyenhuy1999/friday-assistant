@@ -109,9 +109,10 @@ no `*Row` ORM type leaking into `components.schemas`).
 ## Non-goals (explicitly out of scope for this phase)
 
 `POST /v1/runs/{run_id}/start` transitions queued -> running only — it
-never claims a Run, assigns worker ownership, or creates a lease (Phase
-10). ToolInvocation endpoints mutate metadata only; nothing is actually
-executed (Phase 11). Approval endpoints record a decision; nothing is
+never claims a Run, assigns worker ownership, or creates a lease. Claiming
+is a separate concern owned by `apps/worker`, added in Phase 10 (see
+[worker-coordination.md](worker-coordination.md)). ToolInvocation
+endpoints mutate metadata only; nothing is actually executed (Phase 11). Approval endpoints record a decision; nothing is
 automatically triggered by it. Artifact endpoints record metadata only —
 no upload/download or object storage. No WebSockets, no generic event
 bus, no TypeScript SDK generation (Phase 14).

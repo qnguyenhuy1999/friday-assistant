@@ -160,3 +160,18 @@ def test_result_exposes_typed_identifiers_only(
     assert isinstance(result, StartRunResult)
     assert isinstance(result.task_id, TaskId)
     assert isinstance(result.run_id, RunId)
+
+
+def test_run_is_atomically_enqueued_as_due_work(
+    fake_uow: FakeUnitOfWork, uow_factory: CountingUnitOfWorkFactory, clock: FakeClock
+) -> None:
+    task = _pending_task(fake_uow)
+
+    result = StartRun(uow_factory, clock).execute(StartRunCommand(task_id=task.id))
+
+    work_item = fake_uow.work_queue_repo.get(result.run_id)
+    assert work_item is not None
+    assert work_item.available_at == clock.fixed_now
+    assert work_item.enqueued_at == clock.fixed_now
+    assert work_item.claimed_by is None
+    assert work_item.claim_generation == 0

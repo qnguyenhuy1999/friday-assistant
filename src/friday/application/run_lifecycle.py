@@ -16,12 +16,44 @@ from friday.application.lifecycle_events import LifecycleEvents, run_result
 from friday.application.ports import UnitOfWork
 from friday.application.results import RunResult
 from friday.domain.event import RunEventType
+from friday.domain.failure import Failure
 from friday.domain.identifiers import RunId, RunStepId, TaskId
 from friday.domain.json_value import JsonValue
 from friday.domain.run import TERMINAL_RUN_STATUSES, Run, RunStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
 from friday.domain.task import TaskStatus
 from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
+
+
+def _fail_run_event_specs(
+    uow: UnitOfWork, run: Run, now: datetime, failure: Failure
+) -> list[tuple[RunEventType, JsonValue, RunStepId | None]]:
+    """Fail a run, cascade cancellation, and build its event specifications."""
+    run.fail(now, failure)
+    uow.runs.save(run)
+    specs: list[tuple[RunEventType, JsonValue, RunStepId | None]] = []
+    for step in uow.steps.list_for_run(run.id):
+        if step.status not in TERMINAL_RUN_STEP_STATUSES:
+            step.cancel(now)
+            uow.steps.save(step)
+            specs.append((RunEventType.STEP_CANCELLED, {"step_id": str(step.id)}, step.id))
+            specs.extend(
+                LifecycleEvents.cancel_tools(uow, uow.tool_invocations.list_for_step(step.id), now)
+            )
+    specs.extend(LifecycleEvents.cancel_tools(uow, uow.tool_invocations.list_for_run(run.id), now))
+    specs.append(
+        (RunEventType.RUN_FAILED, {"run_id": str(run.id), "failure_code": failure.code}, None)
+    )
+    return specs
+
+
+def _succeed_run_event_specs(
+    uow: UnitOfWork, run: Run, now: datetime
+) -> list[tuple[RunEventType, JsonValue, RunStepId | None]]:
+    """Succeed a run and build its event specification."""
+    run.succeed(now)
+    uow.runs.save(run)
+    return [(RunEventType.RUN_SUCCEEDED, {"run_id": str(run.id)}, None)]
 
 
 class _RunCancellation(LifecycleEvents):
@@ -31,6 +63,7 @@ class _RunCancellation(LifecycleEvents):
         ]
         run.cancel(now)
         uow.runs.save(run)
+        uow.work_queue.remove(run.id)
         for step in uow.steps.list_for_run(run.id):
             if step.status not in TERMINAL_RUN_STEP_STATUSES:
                 step.cancel(now)
@@ -121,11 +154,9 @@ class CompleteRun(LifecycleEvents):
             ):
                 raise EntityConflict("run has non-terminal tool invocations")
             now = self._clock.now()
-            run.succeed(now)
-            uow.runs.save(run)
-            self.append_run_events(
-                uow, run, now, [(RunEventType.RUN_SUCCEEDED, {"run_id": str(run.id)}, None)]
-            )
+            specs = _succeed_run_event_specs(uow, run, now)
+            uow.work_queue.remove(run.id)
+            self.append_run_events(uow, run, now, specs)
             uow.commit()
             return run_result(run)
 
@@ -146,26 +177,9 @@ class FailRun(LifecycleEvents):
             if run.status is not RunStatus.RUNNING:
                 raise EntityConflict("run cannot fail")
             now = self._clock.now()
-            run.fail(now, command.failure)
-            uow.runs.save(run)
-            specs: list[tuple[RunEventType, JsonValue, RunStepId | None]] = []
-            for step in uow.steps.list_for_run(run.id):
-                if step.status not in TERMINAL_RUN_STEP_STATUSES:
-                    step.cancel(now)
-                    uow.steps.save(step)
-                    specs.append((RunEventType.STEP_CANCELLED, {"step_id": str(step.id)}, step.id))
-                    specs.extend(
-                        self.cancel_tools(uow, uow.tool_invocations.list_for_step(step.id), now)
-                    )
-            specs.extend(self.cancel_tools(uow, uow.tool_invocations.list_for_run(run.id), now))
-            specs.append(
-                (
-                    RunEventType.RUN_FAILED,
-                    {"run_id": str(run.id), "failure_code": command.failure.code},
-                    None,
-                )
-            )
+            specs = _fail_run_event_specs(uow, run, now, command.failure)
             self.append_run_events(uow, run, now, specs)
+            uow.work_queue.remove(run.id)
             uow.commit()
             return run_result(run)
 
@@ -207,6 +221,7 @@ class RetryFailedRun(LifecycleEvents):
             now = self._clock.now()
             retry = Run.new(id=RunId.new(), task_id=task.id, created_at=now)
             uow.runs.add(retry)
+            uow.work_queue.enqueue(retry.id, available_at=now, enqueued_at=now)
             self.append_run_events(
                 uow,
                 retry,

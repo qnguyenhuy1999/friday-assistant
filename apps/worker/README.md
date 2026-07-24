@@ -2,15 +2,17 @@
 
 ## Owns
 
-- The worker delivery process's composition root (`main.py`).
-- Wiring together `friday.infrastructure`, `friday.application`, and
-  `friday.domain` once those layers have real behavior.
+- The worker delivery process's composition root (`app.py` and `main.py`).
+- The worker loop, heartbeat/lease-renewal supervisor, graceful shutdown, and
+  maintenance-only mode.
+- Wiring together the completed infrastructure and application use cases.
 
 ## Must Not Own
 
 - Domain rules, use cases, or infrastructure adapters — those belong in
   `src/friday/`.
-- Queue libraries, execution loops, or scheduling logic.
+- Queue libraries or concrete run processing.
+- A concrete `RunProcessor` implementation — that is Phase 11.
 
 ## May Compose
 
@@ -20,6 +22,10 @@
 
 ## Current Status
 
-No actual runtime exists yet. `main()` returns a static identification
-string only. No execution loop, queue library, or scheduling code is
-present.
+The delivery process has a real composition root and worker loop. It claims
+due runs, supervises each processor call with a heartbeat that renews its
+lease, applies the resulting outcome, and periodically runs bounded lease and
+approval maintenance. `FRIDAY_WORKER_MAINTENANCE_ONLY=true` runs the
+maintenance scheduler without a processor. The process handles SIGTERM and
+SIGINT and disposes its engine during shutdown. A concrete `RunProcessor` is
+deferred to Phase 11.

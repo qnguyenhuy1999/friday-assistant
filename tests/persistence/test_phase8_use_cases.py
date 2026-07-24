@@ -152,7 +152,7 @@ def _assert_no_partial_approval_state(
 
 @pytest.mark.parametrize(
     "boundary",
-    ["approvals_add", "runs_save", "steps_save", "next_sequence", "events_append", "commit"],
+    ["approvals_add", "runs_save", "steps_save", "reserve_sequences", "events_append", "commit"],
 )
 def test_request_approval_fault_injection_leaves_no_partial_state(
     session_factory: sessionmaker[Session], boundary: str
@@ -172,8 +172,8 @@ def test_request_approval_fault_injection_leaves_no_partial_state(
         uow.runs.save = boom  # type: ignore[method-assign]
     elif boundary == "steps_save":
         uow.steps.save = boom  # type: ignore[method-assign]
-    elif boundary == "next_sequence":
-        uow.events.next_sequence = boom  # type: ignore[method-assign, assignment]
+    elif boundary == "reserve_sequences":
+        uow.events.reserve_sequences = boom  # type: ignore[method-assign, assignment]
     elif boundary == "events_append":
         uow.events.append = boom  # type: ignore[method-assign]
     else:

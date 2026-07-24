@@ -590,3 +590,39 @@ def test_complete_skip_and_cancel_step_terminal_policy(status: RunStepStatus) ->
     else:
         with pytest.raises(EntityConflict):
             cancel.execute(CancelStepCommand(step.id))
+
+
+def test_retry_failed_run_enqueues_the_new_run_for_immediate_claim() -> None:
+    uow, factory, task, run = _prepared()
+    run.start(T0)
+    run.fail(T0, FAILURE)
+    clock = FakeClock(T0 + timedelta(minutes=1))
+    retry = RetryFailedRun(factory, clock).execute(RetryFailedRunCommand(run.id))
+    work_item = uow.work_queue_repo.get(retry.run_id)
+    assert work_item is not None
+    assert work_item.available_at == clock.fixed_now
+    assert work_item.claimed_by is None
+    assert uow.work_queue_repo.get(run.id) is None
+
+
+def test_complete_run_removes_its_work_item() -> None:
+    uow, factory, task, run = _prepared()
+    run.start(T0)
+    uow.work_queue_repo.enqueue(run.id, available_at=T0, enqueued_at=T0)
+    CompleteRun(factory, FakeClock()).execute(CompleteRunCommand(run.id))
+    assert uow.work_queue_repo.get(run.id) is None
+
+
+def test_fail_run_removes_its_work_item() -> None:
+    uow, factory, task, run = _prepared()
+    run.start(T0)
+    uow.work_queue_repo.enqueue(run.id, available_at=T0, enqueued_at=T0)
+    FailRun(factory, FakeClock()).execute(FailRunCommand(run.id, FAILURE))
+    assert uow.work_queue_repo.get(run.id) is None
+
+
+def test_cancel_run_removes_its_work_item() -> None:
+    uow, factory, task, run = _prepared()
+    uow.work_queue_repo.enqueue(run.id, available_at=T0, enqueued_at=T0)
+    CancelRun(factory, FakeClock()).execute(CancelRunCommand(run.id))
+    assert uow.work_queue_repo.get(run.id) is None

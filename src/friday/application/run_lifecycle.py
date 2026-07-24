@@ -31,6 +31,7 @@ class _RunCancellation(LifecycleEvents):
         ]
         run.cancel(now)
         uow.runs.save(run)
+        uow.work_queue.remove(run.id)
         for step in uow.steps.list_for_run(run.id):
             if step.status not in TERMINAL_RUN_STEP_STATUSES:
                 step.cancel(now)
@@ -123,6 +124,7 @@ class CompleteRun(LifecycleEvents):
             now = self._clock.now()
             run.succeed(now)
             uow.runs.save(run)
+            uow.work_queue.remove(run.id)
             self.append_run_events(
                 uow, run, now, [(RunEventType.RUN_SUCCEEDED, {"run_id": str(run.id)}, None)]
             )
@@ -148,6 +150,7 @@ class FailRun(LifecycleEvents):
             now = self._clock.now()
             run.fail(now, command.failure)
             uow.runs.save(run)
+            uow.work_queue.remove(run.id)
             specs: list[tuple[RunEventType, JsonValue, RunStepId | None]] = []
             for step in uow.steps.list_for_run(run.id):
                 if step.status not in TERMINAL_RUN_STEP_STATUSES:
@@ -207,6 +210,7 @@ class RetryFailedRun(LifecycleEvents):
             now = self._clock.now()
             retry = Run.new(id=RunId.new(), task_id=task.id, created_at=now)
             uow.runs.add(retry)
+            uow.work_queue.enqueue(retry.id, available_at=now, enqueued_at=now)
             self.append_run_events(
                 uow,
                 retry,

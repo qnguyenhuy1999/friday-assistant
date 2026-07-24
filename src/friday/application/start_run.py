@@ -42,6 +42,7 @@ class StartRun:
 
             run = Run.new(id=RunId.new(), task_id=task.id, created_at=now)
             uow.runs.add(run)
+            uow.work_queue.enqueue(run.id, available_at=now, enqueued_at=now)
 
             event = RunEvent(
                 id=RunEventId.new(),

@@ -16,6 +16,8 @@ from friday.application.ports import (
     RunEventStore,
     RunRepository,
     RunStepRepository,
+    RunWorkItemView,
+    RunWorkQueue,
     TaskEventStore,
     TaskRepository,
     ToolInvocationRepository,
@@ -305,6 +307,68 @@ class FakeArtifactRepository:
         return artifacts[:limit]
 
 
+class FakeRunWorkQueue:
+    def __init__(self) -> None:
+        self.items: dict[RunId, RunWorkItemView] = {}
+
+    def enqueue(self, run_id: RunId, available_at: datetime, enqueued_at: datetime) -> None:
+        existing = self.items.get(run_id)
+        if existing is None:
+            self.items[run_id] = RunWorkItemView(
+                run_id=run_id,
+                available_at=available_at,
+                enqueued_at=enqueued_at,
+                claimed_by=None,
+                claim_token=None,
+                claim_generation=0,
+                claimed_at=None,
+                heartbeat_at=None,
+                lease_expires_at=None,
+            )
+            return
+        self.items[run_id] = RunWorkItemView(
+            run_id=run_id,
+            available_at=available_at,
+            enqueued_at=enqueued_at,
+            claimed_by=existing.claimed_by,
+            claim_token=existing.claim_token,
+            claim_generation=existing.claim_generation,
+            claimed_at=existing.claimed_at,
+            heartbeat_at=existing.heartbeat_at,
+            lease_expires_at=existing.lease_expires_at,
+        )
+
+    def get(self, run_id: RunId) -> RunWorkItemView | None:
+        return self.items.get(run_id)
+
+    def find_due_candidates(self, now: datetime, limit: int) -> builtins.list[RunWorkItemView]:
+        candidates = [
+            item
+            for item in self.items.values()
+            if item.available_at <= now
+            and (
+                item.claimed_by is None
+                or (item.lease_expires_at is not None and item.lease_expires_at <= now)
+            )
+        ]
+        candidates.sort(key=lambda item: (item.available_at, item.enqueued_at, str(item.run_id)))
+        return candidates[:limit]
+
+    def find_expired_claims(self, now: datetime, limit: int) -> builtins.list[RunWorkItemView]:
+        candidates = [
+            item
+            for item in self.items.values()
+            if item.claimed_by is not None
+            and item.lease_expires_at is not None
+            and item.lease_expires_at <= now
+        ]
+        candidates.sort(key=lambda item: (item.available_at, item.enqueued_at, str(item.run_id)))
+        return candidates[:limit]
+
+    def remove(self, run_id: RunId) -> None:
+        self.items.pop(run_id, None)
+
+
 class FakeUnitOfWork:
     def __init__(self) -> None:
         self.task_repo = FakeTaskRepository()
@@ -315,6 +379,7 @@ class FakeUnitOfWork:
         self.tool_repo = FakeToolInvocationRepository()
         self.approval_repo = FakeApprovalRepository()
         self.artifact_repo = FakeArtifactRepository()
+        self.work_queue_repo = FakeRunWorkQueue()
         self.commit_count = 0
         self.rollback_count = 0
         self.closed = False
@@ -350,6 +415,10 @@ class FakeUnitOfWork:
     @property
     def task_events(self) -> TaskEventStore:
         return self.task_event_store
+
+    @property
+    def work_queue(self) -> RunWorkQueue:
+        return self.work_queue_repo
 
     def __enter__(self) -> Self:
         return self

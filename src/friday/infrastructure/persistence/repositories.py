@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import builtins
+from typing import Any, cast
 
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, and_, or_, select, update
+from sqlalchemy.dialects.sqlite import insert
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from friday.domain import (
@@ -44,9 +47,11 @@ from friday.infrastructure.persistence.models import (
     ApprovalRequestRow,
     ArtifactRow,
     RunEventRow,
+    RunEventSequenceCounterRow,
     RunRow,
     RunStepRow,
     TaskEventRow,
+    TaskEventSequenceCounterRow,
     TaskRow,
     ToolInvocationRow,
 )
@@ -367,10 +372,22 @@ class RunEventStore:
         )
         return [run_event_from_row(row) for row in self._session.execute(stmt).scalars()]
 
-    def next_sequence(self, run_id: RunId) -> int:
-        stmt = select(func.max(RunEventRow.sequence)).where(RunEventRow.run_id == str(run_id))
-        current_max = self._session.execute(stmt).scalar()
-        return (current_max or 0) + 1
+    def reserve_sequences(self, run_id: RunId, count: int) -> int:
+        self._session.execute(
+            insert(RunEventSequenceCounterRow)
+            .values(run_id=str(run_id), next_value=1)
+            .on_conflict_do_nothing(index_elements=[RunEventSequenceCounterRow.run_id])
+        )
+        stmt = (
+            update(RunEventSequenceCounterRow)
+            .where(RunEventSequenceCounterRow.run_id == str(run_id))
+            .values(next_value=RunEventSequenceCounterRow.next_value + count)
+            .returning(RunEventSequenceCounterRow.next_value)
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        post_increment_value = cast(int, result.scalar_one())
+        return post_increment_value - count
 
 
 class TaskEventStore:
@@ -380,9 +397,22 @@ class TaskEventStore:
     def append(self, event: TaskEvent) -> None:
         self._session.add(task_event_to_row(event))
 
-    def next_sequence(self, task_id: TaskId) -> int:
-        stmt = select(func.max(TaskEventRow.sequence)).where(TaskEventRow.task_id == str(task_id))
-        return (self._session.execute(stmt).scalar() or 0) + 1
+    def reserve_sequences(self, task_id: TaskId, count: int) -> int:
+        self._session.execute(
+            insert(TaskEventSequenceCounterRow)
+            .values(task_id=str(task_id), next_value=1)
+            .on_conflict_do_nothing(index_elements=[TaskEventSequenceCounterRow.task_id])
+        )
+        stmt = (
+            update(TaskEventSequenceCounterRow)
+            .where(TaskEventSequenceCounterRow.task_id == str(task_id))
+            .values(next_value=TaskEventSequenceCounterRow.next_value + count)
+            .returning(TaskEventSequenceCounterRow.next_value)
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        post_increment_value = cast(int, result.scalar_one())
+        return post_increment_value - count
 
     def list_for_task(self, task_id: TaskId) -> list[TaskEvent]:
         stmt = (

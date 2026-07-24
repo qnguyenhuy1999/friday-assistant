@@ -6,10 +6,9 @@ state. Durable claiming and the QUEUED -> RUNNING transition belong to the
 worker (Phase 10) and are intentionally absent.
 
 Application orchestration — not domain entities — allocates the Run ID, the
-RunEvent ID, and the event sequence number. `next_sequence()` and `append()`
-run inside the same transaction as the Task and Run writes, so no event can
-commit independently of them; the remaining cross-worker sequence race is
-explicitly deferred to Phase 10 (see docs/architecture/persistence.md).
+RunEvent ID, and the event sequence number. `reserve_sequences()` and
+`append()` run inside the same transaction as the Task and Run writes, so no
+event can commit independently of them.
 """
 
 from __future__ import annotations
@@ -48,7 +47,7 @@ class StartRun:
                 id=RunEventId.new(),
                 run_id=run.id,
                 type=RunEventType.RUN_CREATED,
-                sequence=uow.events.next_sequence(run.id),
+                sequence=uow.events.reserve_sequences(run.id, 1),
                 occurred_at=now,
                 payload={"task_id": str(task.id)},
             )

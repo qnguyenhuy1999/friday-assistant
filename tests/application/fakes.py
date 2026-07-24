@@ -112,6 +112,7 @@ class FakeRunRepository:
 class FakeRunEventStore:
     def __init__(self) -> None:
         self.appended: list[RunEvent] = []
+        self._next_sequences: dict[RunId, int] = {}
 
     def append(self, event: RunEvent) -> None:
         self.appended.append(event)
@@ -125,20 +126,24 @@ class FakeRunEventStore:
             :limit
         ]
 
-    def next_sequence(self, run_id: RunId) -> int:
-        sequences = [event.sequence for event in self.appended if event.run_id == run_id]
-        return max(sequences, default=0) + 1
+    def reserve_sequences(self, run_id: RunId, count: int) -> int:
+        start = self._next_sequences.get(run_id, 1)
+        self._next_sequences[run_id] = start + count
+        return start
 
 
 class FakeTaskEventStore:
     def __init__(self) -> None:
         self.appended: list[TaskEvent] = []
+        self._next_sequences: dict[TaskId, int] = {}
 
     def append(self, event: TaskEvent) -> None:
         self.appended.append(event)
 
-    def next_sequence(self, task_id: TaskId) -> int:
-        return sum(event.task_id == task_id for event in self.appended) + 1
+    def reserve_sequences(self, task_id: TaskId, count: int) -> int:
+        start = self._next_sequences.get(task_id, 1)
+        self._next_sequences[task_id] = start + count
+        return start
 
     def list_for_task(self, task_id: TaskId) -> list[TaskEvent]:
         return sorted(

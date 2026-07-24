@@ -158,10 +158,10 @@ def test_failure_during_sequence_allocation_rolls_back_all(
     task_id = _create_pending_task(session_factory)
 
     def sabotage(uow: SqlAlchemyUnitOfWork) -> None:
-        def failing_next_sequence(run_id: RunId) -> int:
+        def failing_reserve_sequences(run_id: RunId, count: int) -> int:
             raise RuntimeError("sequence allocation failed")
 
-        uow.events.next_sequence = failing_next_sequence  # type: ignore[method-assign]
+        uow.events.reserve_sequences = failing_reserve_sequences  # type: ignore[method-assign]
 
     _sabotaged_start_run(session_factory, sabotage, task_id)
     _assert_nothing_became_durable(session_factory, task_id)

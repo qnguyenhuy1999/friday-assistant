@@ -46,7 +46,7 @@ class LifecycleEvents:
         now: datetime,
         specs: list[tuple[RunEventType, JsonValue, RunStepId | None]],
     ) -> None:
-        start = uow.events.next_sequence(run.id)
+        start = uow.events.reserve_sequences(run.id, len(specs))
         for offset, (type_, payload, step_id) in enumerate(specs):
             uow.events.append(
                 RunEvent(RunEventId.new(), run.id, type_, start + offset, now, payload, step_id)
@@ -61,7 +61,7 @@ class LifecycleEvents:
                 TaskEventId.new(),
                 task.id,
                 type_,
-                uow.task_events.next_sequence(task.id),
+                uow.task_events.reserve_sequences(task.id, 1),
                 now,
                 payload,
             )

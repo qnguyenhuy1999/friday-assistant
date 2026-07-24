@@ -39,6 +39,13 @@ class TaskEventRow(Base):
     payload: Mapped[object | None] = mapped_column(JSON)
 
 
+class TaskEventSequenceCounterRow(Base):
+    __tablename__ = "task_event_sequence_counters"
+
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), primary_key=True)
+    next_value: Mapped[int]
+
+
 class RunRow(Base):
     __tablename__ = "runs"
     __table_args__ = (Index("ix_runs_task_id", "task_id"),)
@@ -168,3 +175,10 @@ class RunEventRow(Base):
     sequence: Mapped[int]
     occurred_at: Mapped[datetime]
     payload: Mapped[object | None] = mapped_column(JSON)
+
+
+class RunEventSequenceCounterRow(Base):
+    __tablename__ = "run_event_sequence_counters"
+
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), primary_key=True)
+    next_value: Mapped[int]

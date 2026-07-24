@@ -26,26 +26,17 @@ def _make_run(session: Session) -> RunId:
     return run.id
 
 
-def test_next_sequence_starts_at_one_for_a_new_run(session: Session) -> None:
+def test_reserve_sequences_starts_at_one_for_a_new_run(session: Session) -> None:
     store = RunEventStore(session)
     run_id = _make_run(session)
-    assert store.next_sequence(run_id) == 1
+    assert store.reserve_sequences(run_id, 1) == 1
 
 
-def test_next_sequence_increments_after_append(session: Session) -> None:
+def test_reserve_sequences_increments_after_reservation(session: Session) -> None:
     store = RunEventStore(session)
     run_id = _make_run(session)
-    store.append(
-        RunEvent(
-            id=RunEventId.new(),
-            run_id=run_id,
-            type=RunEventType.RUN_CREATED,
-            sequence=1,
-            occurred_at=T0,
-        )
-    )
-    session.flush()
-    assert store.next_sequence(run_id) == 2
+    assert store.reserve_sequences(run_id, 1) == 1
+    assert store.reserve_sequences(run_id, 1) == 2
 
 
 def test_list_for_run_orders_by_sequence(session: Session) -> None:

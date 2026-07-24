@@ -230,12 +230,17 @@ class RunEventStore(Protocol):
         self, run_id: RunId, after_sequence: int, limit: int
     ) -> list[RunEvent]: ...
 
-    def next_sequence(self, run_id: RunId) -> int: ...
+    def reserve_sequences(self, run_id: RunId, count: int) -> int:
+        """Atomically reserve a sequence block; count must be >= 1."""
+        ...
 
 
 class TaskEventStore(Protocol):
     def append(self, event: TaskEvent) -> None: ...
-    def next_sequence(self, task_id: TaskId) -> int: ...
+
+    def reserve_sequences(self, task_id: TaskId, count: int) -> int:
+        """Atomically reserve a sequence block; count must be >= 1."""
+        ...
 
     def list_for_task(self, task_id: TaskId) -> list[TaskEvent]:
         """Ordered by sequence."""

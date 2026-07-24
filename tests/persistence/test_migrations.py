@@ -30,6 +30,8 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "tool_invocations",
             "run_events",
             "run_work_items",
+            "run_event_sequence_counters",
+            "task_event_sequence_counters",
             "alembic_version",
         }
     finally:
@@ -45,7 +47,7 @@ def test_downgrade_then_upgrade_is_idempotent(tmp_path: Path) -> None:
     try:
         # Alembic's online downgrade clears the alembic_version table's rows but
         # doesn't drop the table itself (upstream issue sqlalchemy/alembic#545);
-        # only the --sql/offline path drops it. All 8 domain tables must be gone.
+        # only the --sql/offline path drops it. All application tables must be gone.
         assert set(inspect(engine).get_table_names()) <= {"alembic_version"}
     finally:
         engine.dispose()

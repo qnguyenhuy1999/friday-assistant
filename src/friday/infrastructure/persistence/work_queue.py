@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any, cast
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from friday.application.ports import RunWorkItemView
@@ -75,3 +77,146 @@ class SqlAlchemyRunWorkQueue:
         row = self._session.get(RunWorkItemRow, str(run_id))
         if row is not None:
             self._session.delete(row)
+
+    def try_claim(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> bool:
+        stmt = (
+            update(RunWorkItemRow)
+            .where(
+                RunWorkItemRow.run_id == str(run_id),
+                RunWorkItemRow.available_at <= now,
+                or_(
+                    RunWorkItemRow.claimed_by.is_(None),
+                    RunWorkItemRow.lease_expires_at <= now,
+                ),
+            )
+            .values(
+                claimed_by=worker_id,
+                claim_token=claim_token,
+                claim_generation=RunWorkItemRow.claim_generation + 1,
+                claimed_at=now,
+                heartbeat_at=now,
+                lease_expires_at=lease_expires_at,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
+
+    def renew_lease(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> bool:
+        stmt = (
+            update(RunWorkItemRow)
+            .where(
+                RunWorkItemRow.run_id == str(run_id),
+                RunWorkItemRow.claimed_by == worker_id,
+                RunWorkItemRow.claim_token == claim_token,
+                RunWorkItemRow.claim_generation == claim_generation,
+                RunWorkItemRow.lease_expires_at > now,
+            )
+            .values(heartbeat_at=now, lease_expires_at=lease_expires_at)
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
+
+    def release_claim(
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+    ) -> bool:
+        stmt = (
+            update(RunWorkItemRow)
+            .where(
+                RunWorkItemRow.run_id == str(run_id),
+                RunWorkItemRow.claimed_by == worker_id,
+                RunWorkItemRow.claim_token == claim_token,
+                RunWorkItemRow.claim_generation == claim_generation,
+            )
+            .values(
+                claimed_by=None,
+                claim_token=None,
+                claimed_at=None,
+                heartbeat_at=None,
+                lease_expires_at=None,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
+
+    def requeue_claimed(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        available_at: datetime,
+        enqueued_at: datetime,
+    ) -> bool:
+        stmt = (
+            update(RunWorkItemRow)
+            .where(
+                RunWorkItemRow.run_id == str(run_id),
+                RunWorkItemRow.claimed_by == worker_id,
+                RunWorkItemRow.claim_token == claim_token,
+                RunWorkItemRow.claim_generation == claim_generation,
+            )
+            .values(
+                available_at=available_at,
+                enqueued_at=enqueued_at,
+                claimed_by=None,
+                claim_token=None,
+                claimed_at=None,
+                heartbeat_at=None,
+                lease_expires_at=None,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
+
+    def remove_if_claimed(
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+    ) -> bool:
+        stmt = (
+            delete(RunWorkItemRow)
+            .where(
+                RunWorkItemRow.run_id == str(run_id),
+                RunWorkItemRow.claimed_by == worker_id,
+                RunWorkItemRow.claim_token == claim_token,
+                RunWorkItemRow.claim_generation == claim_generation,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
+
+    def is_claim_active(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        row = self._session.get(RunWorkItemRow, str(run_id))
+        return (
+            row is not None
+            and row.claimed_by == worker_id
+            and row.claim_token == claim_token
+            and row.claim_generation == claim_generation
+            and row.lease_expires_at is not None
+            and row.lease_expires_at > now
+        )

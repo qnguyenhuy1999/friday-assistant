@@ -60,6 +60,73 @@ class RunWorkQueue(Protocol):
     def find_expired_claims(self, now: datetime, limit: int) -> list[RunWorkItemView]: ...
     def remove(self, run_id: RunId) -> None: ...
 
+    def try_claim(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> bool:
+        """Atomically claim a due-or-expired work item in one conditional
+        UPDATE. Returns False (never raises) when the row no longer matches
+        — i.e. another worker won the race — so callers treat a lost claim
+        as an ordinary outcome, not an error."""
+        ...
+
+    def renew_lease(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> bool:
+        """Conditional on an exact (worker_id, claim_token, claim_generation)
+        match and an unexpired lease. Returns False on any mismatch."""
+        ...
+
+    def release_claim(
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+    ) -> bool:
+        """Clear ownership/lease fields but keep the row (and its
+        claim_generation) claimable again. Returns False on ownership
+        mismatch."""
+        ...
+
+    def requeue_claimed(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        available_at: datetime,
+        enqueued_at: datetime,
+    ) -> bool:
+        """Release ownership and reschedule availability in one conditional
+        UPDATE. Returns False on ownership mismatch."""
+        ...
+
+    def remove_if_claimed(
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+    ) -> bool:
+        """Delete the work item only if still owned by this exact claim.
+        Returns False on ownership mismatch."""
+        ...
+
+    def is_claim_active(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        """Read-only check: does this exact claim still hold an unexpired
+        lease?"""
+        ...
+
 
 class TaskRepository(Protocol):
     def add(self, task: Task) -> None: ...

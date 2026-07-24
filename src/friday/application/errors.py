@@ -67,3 +67,9 @@ class ConcurrencyConflict(ApplicationError):
 
 class TransactionFailure(ApplicationError):
     """A commit or rollback itself failed."""
+
+
+class ClaimLost(ApplicationError):
+    """A worker's claim no longer matches (expired, released, or fenced by
+    a newer claim generation). The caller must stop treating the run as
+    owned; it must not retry with the same token."""

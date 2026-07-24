@@ -368,6 +368,144 @@ class FakeRunWorkQueue:
     def remove(self, run_id: RunId) -> None:
         self.items.pop(run_id, None)
 
+    def try_claim(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> bool:
+        item = self.items.get(run_id)
+        if item is None or item.available_at > now:
+            return False
+        if item.claimed_by is not None and not (
+            item.lease_expires_at is not None and item.lease_expires_at <= now
+        ):
+            return False
+        self.items[run_id] = RunWorkItemView(
+            run_id=run_id,
+            available_at=item.available_at,
+            enqueued_at=item.enqueued_at,
+            claimed_by=worker_id,
+            claim_token=claim_token,
+            claim_generation=item.claim_generation + 1,
+            claimed_at=now,
+            heartbeat_at=now,
+            lease_expires_at=lease_expires_at,
+        )
+        return True
+
+    def renew_lease(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> bool:
+        item = self.items.get(run_id)
+        if not self._owns(item, worker_id, claim_token, claim_generation):
+            return False
+        assert item is not None
+        if item.lease_expires_at is None or item.lease_expires_at <= now:
+            return False
+        self.items[run_id] = RunWorkItemView(
+            run_id=run_id,
+            available_at=item.available_at,
+            enqueued_at=item.enqueued_at,
+            claimed_by=item.claimed_by,
+            claim_token=item.claim_token,
+            claim_generation=item.claim_generation,
+            claimed_at=item.claimed_at,
+            heartbeat_at=now,
+            lease_expires_at=lease_expires_at,
+        )
+        return True
+
+    def release_claim(
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+    ) -> bool:
+        item = self.items.get(run_id)
+        if not self._owns(item, worker_id, claim_token, claim_generation):
+            return False
+        assert item is not None
+        self.items[run_id] = RunWorkItemView(
+            run_id=run_id,
+            available_at=item.available_at,
+            enqueued_at=item.enqueued_at,
+            claimed_by=None,
+            claim_token=None,
+            claim_generation=item.claim_generation,
+            claimed_at=None,
+            heartbeat_at=None,
+            lease_expires_at=None,
+        )
+        return True
+
+    def requeue_claimed(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        available_at: datetime,
+        enqueued_at: datetime,
+    ) -> bool:
+        item = self.items.get(run_id)
+        if not self._owns(item, worker_id, claim_token, claim_generation):
+            return False
+        assert item is not None
+        self.items[run_id] = RunWorkItemView(
+            run_id=run_id,
+            available_at=available_at,
+            enqueued_at=enqueued_at,
+            claimed_by=None,
+            claim_token=None,
+            claim_generation=item.claim_generation,
+            claimed_at=None,
+            heartbeat_at=None,
+            lease_expires_at=None,
+        )
+        return True
+
+    def remove_if_claimed(
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+    ) -> bool:
+        item = self.items.get(run_id)
+        if not self._owns(item, worker_id, claim_token, claim_generation):
+            return False
+        del self.items[run_id]
+        return True
+
+    def is_claim_active(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        item = self.items.get(run_id)
+        return (
+            self._owns(item, worker_id, claim_token, claim_generation)
+            and item is not None
+            and item.lease_expires_at is not None
+            and item.lease_expires_at > now
+        )
+
+    @staticmethod
+    def _owns(
+        item: RunWorkItemView | None, worker_id: str, claim_token: str, claim_generation: int
+    ) -> bool:
+        return (
+            item is not None
+            and item.claimed_by == worker_id
+            and item.claim_token == claim_token
+            and item.claim_generation == claim_generation
+        )
+
 
 class FakeUnitOfWork:
     def __init__(self) -> None:

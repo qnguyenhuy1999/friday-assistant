@@ -80,6 +80,8 @@ class ApprovalRequestResult:
     resolved_at: datetime | None
     resolution_note: str | None
     resolver: str | None
+    authorization_fingerprint: str | None
+    consumed_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)

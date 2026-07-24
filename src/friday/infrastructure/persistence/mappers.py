@@ -206,6 +206,8 @@ def approval_to_row(approval: ApprovalRequest) -> ApprovalRequestRow:
         resolved_at=approval.resolved_at,
         resolution_note=approval.resolution_note,
         resolver=approval.resolver,
+        authorization_fingerprint=approval.authorization_fingerprint,
+        consumed_at=approval.consumed_at,
     )
 
 
@@ -225,6 +227,8 @@ def approval_from_row(row: ApprovalRequestRow) -> ApprovalRequest:
         _resolved_at=_read_back_utc(row.resolved_at) if row.resolved_at is not None else None,
         _resolution_note=row.resolution_note,
         _resolver=row.resolver,
+        _authorization_fingerprint=row.authorization_fingerprint,
+        _consumed_at=_read_back_utc(row.consumed_at) if row.consumed_at is not None else None,
     )
 
 

@@ -89,6 +89,29 @@
           "type": "null"
         }
       ]
+    },
+    "authorization_fingerprint": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "consumed_at": {
+      "anyOf": [
+        {
+          "$ref": "../definitions/timestamp.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -105,7 +128,9 @@
     "expires_at",
     "resolved_at",
     "resolution_note",
-    "resolver"
+    "resolver",
+    "authorization_fingerprint",
+    "consumed_at"
   ],
   "additionalProperties": false
 }

@@ -72,6 +72,8 @@ VALID_EXAMPLES: dict[str, dict[str, Any]] = {
         "resolved_at": None,
         "resolution_note": None,
         "resolver": None,
+        "authorization_fingerprint": None,
+        "consumed_at": None,
     },
     "artifact/artifact.json": {
         "id": "66666666-6666-6666-6666-666666666666",

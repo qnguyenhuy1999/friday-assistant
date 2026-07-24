@@ -58,6 +58,9 @@ lock-check:
 worker:
     uv run python -m apps.worker.main
 
+worker-check:
+    uv run python -m apps.worker.preflight
+
 pre-commit:
     uv run pre-commit run --all-files
     uv run pre-commit run --all-files --hook-stage pre-push

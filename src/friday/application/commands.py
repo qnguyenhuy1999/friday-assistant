@@ -115,6 +115,7 @@ class RequestApprovalCommand:
     requested_input: JsonValue
     step_id: RunStepId | None = None
     expires_at: datetime | None = None
+    authorization_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

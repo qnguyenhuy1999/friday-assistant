@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.orm import Session
 
 from friday.domain import Run, RunId, Task, TaskId
+from friday.infrastructure.persistence.models import RunWorkItemRow
 from friday.infrastructure.persistence.repositories import RunRepository, TaskRepository
 from friday.infrastructure.persistence.work_queue import SqlAlchemyRunWorkQueue
 
@@ -184,3 +185,133 @@ def test_remove_deletes_existing_row_and_is_noop_for_missing(session: Session) -
 
     queue.remove(RunId.new())
     session.flush()
+
+
+def test_requeue_claimed_clears_matching_claim_and_updates_schedule(session: Session) -> None:
+    run_id = _make_run(session)
+    queue = SqlAlchemyRunWorkQueue(session)
+    queue.enqueue(run_id, T0, T0)
+    session.flush()
+    row = session.get(RunWorkItemRow, str(run_id))
+    assert row is not None
+    row.claimed_by = "worker-1"
+    row.claim_token = "token-1"
+    row.claim_generation = 3
+    row.claimed_at = T0
+    row.heartbeat_at = T0
+    row.lease_expires_at = T0 + timedelta(minutes=1)
+    available_at = T0 + timedelta(minutes=5)
+    enqueued_at = T0 + timedelta(minutes=4)
+
+    assert queue.requeue_claimed(run_id, "worker-1", "token-1", 3, available_at, enqueued_at)
+    session.flush()
+    session.expire_all()
+    row = session.get(RunWorkItemRow, str(run_id))
+    assert row is not None
+    assert row.available_at == available_at.replace(tzinfo=None)
+    assert row.enqueued_at == enqueued_at.replace(tzinfo=None)
+    assert row.claimed_by is None and row.claim_token is None
+    assert row.claimed_at is None and row.heartbeat_at is None and row.lease_expires_at is None
+
+
+def test_requeue_claimed_rejects_mismatched_claim_without_changing_row(session: Session) -> None:
+    run_id = _make_run(session)
+    queue = SqlAlchemyRunWorkQueue(session)
+    queue.enqueue(run_id, T0, T0)
+    session.flush()
+    row = session.get(RunWorkItemRow, str(run_id))
+    assert row is not None
+    row.claimed_by = "worker-1"
+    row.claim_token = "token-1"
+    row.claim_generation = 3
+    row.lease_expires_at = T0 + timedelta(minutes=1)
+    assert not queue.requeue_claimed(
+        run_id, "wrong-worker", "token-1", 3, T0 + timedelta(minutes=5), T0
+    )
+    session.flush()
+    row = session.get(RunWorkItemRow, str(run_id))
+    assert row is not None and row.claimed_by == "worker-1" and row.claim_token == "token-1"
+
+
+def test_clear_expired_claim_clears_an_expired_claim(session: Session) -> None:
+    run_id = _make_run(session)
+    queue = SqlAlchemyRunWorkQueue(session)
+    queue.enqueue(run_id, T0, T0)
+    session.flush()
+    row = session.get(RunWorkItemRow, str(run_id))
+    assert row is not None
+    row.claimed_by = "worker-1"
+    row.claim_token = "token-1"
+    row.claim_generation = 2
+    row.lease_expires_at = T0 + timedelta(minutes=1)
+    assert queue.clear_expired_claim(run_id, T0 + timedelta(minutes=1))
+    session.flush()
+    session.expire_all()
+    row = session.get(RunWorkItemRow, str(run_id))
+    assert row is not None and row.claimed_by is None and row.claim_token is None
+    assert row.lease_expires_at is None
+
+
+def test_clear_expired_claim_rejects_active_and_unclaimed_rows(session: Session) -> None:
+    queue = SqlAlchemyRunWorkQueue(session)
+    active_id = _make_run(session)
+    queue.enqueue(active_id, T0, T0)
+    unclaimed_id = _make_run(session)
+    queue.enqueue(unclaimed_id, T0, T0)
+    session.flush()
+    row = session.get(RunWorkItemRow, str(active_id))
+    assert row is not None
+    row.claimed_by = "worker-1"
+    row.lease_expires_at = T0 + timedelta(minutes=1)
+    assert not queue.clear_expired_claim(active_id, T0)
+    assert not queue.clear_expired_claim(unclaimed_id, T0 + timedelta(minutes=1))
+
+
+def test_remove_if_lease_expired_deletes_an_expired_claim(session: Session) -> None:
+    run_id = _make_run(session)
+    queue = SqlAlchemyRunWorkQueue(session)
+    queue.enqueue(run_id, T0, T0)
+    session.flush()
+    row = session.get(RunWorkItemRow, str(run_id))
+    assert row is not None
+    row.claimed_by = "worker-1"
+    row.lease_expires_at = T0 + timedelta(minutes=1)
+    assert queue.remove_if_lease_expired(run_id, T0 + timedelta(minutes=1))
+    session.flush()
+    session.expire_all()
+    assert session.get(RunWorkItemRow, str(run_id)) is None
+
+
+def test_remove_if_lease_expired_leaves_active_and_unclaimed_rows(session: Session) -> None:
+    queue = SqlAlchemyRunWorkQueue(session)
+    active_id = _make_run(session)
+    queue.enqueue(active_id, T0, T0)
+    unclaimed_id = _make_run(session)
+    queue.enqueue(unclaimed_id, T0, T0)
+    session.flush()
+    row = session.get(RunWorkItemRow, str(active_id))
+    assert row is not None
+    row.claimed_by = "worker-1"
+    row.lease_expires_at = T0 + timedelta(minutes=1)
+    assert not queue.remove_if_lease_expired(active_id, T0)
+    assert not queue.remove_if_lease_expired(unclaimed_id, T0 + timedelta(minutes=1))
+    assert queue.get(active_id) is not None and queue.get(unclaimed_id) is not None
+
+
+def test_is_claim_active_requires_matching_unexpired_claim(session: Session) -> None:
+    run_id = _make_run(session)
+    queue = SqlAlchemyRunWorkQueue(session)
+    queue.enqueue(run_id, T0, T0)
+    session.flush()
+    row = session.get(RunWorkItemRow, str(run_id))
+    assert row is not None
+    row.claimed_by = "worker-1"
+    row.claim_token = "token-1"
+    row.claim_generation = 4
+    row.lease_expires_at = T0 + timedelta(minutes=1)
+    assert queue.is_claim_active(run_id, "worker-1", "token-1", 4, T0)
+    assert not queue.is_claim_active(run_id, "wrong-worker", "token-1", 4, T0)
+    assert not queue.is_claim_active(run_id, "worker-1", "wrong-token", 4, T0)
+    assert not queue.is_claim_active(run_id, "worker-1", "token-1", 5, T0)
+    assert not queue.is_claim_active(run_id, "worker-1", "token-1", 4, T0 + timedelta(minutes=1))
+    assert not queue.is_claim_active(RunId.new(), "worker-1", "token-1", 4, T0)

@@ -10,6 +10,7 @@ from threading import Event
 import pytest
 
 from apps.worker.worker_loop import WorkerLoop
+from friday.application.errors import ClaimLost
 from friday.application.retry_policy import RetryPolicy
 from friday.application.run_processor import ClaimContext, ProcessingOutcome
 from friday.application.worker_coordination import (
@@ -140,6 +141,25 @@ def test_run_once_swallow_claim_lost_during_outcome_application() -> None:
     assert run.status is RunStatus.RUNNING
 
 
+def test_run_once_marks_lease_lost_when_heartbeat_renewal_fails() -> None:
+    _, _, loop, processor = _run_and_loop(ProcessingOutcome.succeeded())
+    renewal_attempted = Event()
+
+    class ClaimLostRenewal:
+        def execute(self, *args: object) -> None:
+            renewal_attempted.set()
+            raise ClaimLost("lease was lost")
+
+    loop._renew_lease = ClaimLostRenewal()  # type: ignore[assignment]
+
+    def wait_for_heartbeat(context: ClaimContext) -> None:
+        assert renewal_attempted.wait(timeout=1)
+        assert context.is_lease_lost()
+
+    processor.before_outcome = wait_for_heartbeat
+    assert loop.run_once(processor) is True
+
+
 def test_run_maintenance_tick_recovers_expired_lease() -> None:
     uow, run, loop, _ = _run_and_loop(ProcessingOutcome.succeeded())
     factory = CountingUnitOfWorkFactory(uow)
@@ -161,3 +181,36 @@ def test_serve_forever_stops_when_shutdown_is_already_set() -> None:
     shutdown = Event()
     shutdown.set()
     loop.serve_forever(shutdown)
+
+
+def test_serve_forever_runs_due_maintenance_before_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, loop, _ = _run_and_loop(ProcessingOutcome.succeeded())
+    shutdown = Event()
+    recovered = 0
+    expired = 0
+
+    class Recover:
+        def execute(self) -> int:
+            nonlocal recovered
+            recovered += 1
+            shutdown.set()
+            return 0
+
+    class Expire:
+        def execute(self) -> list[object]:
+            nonlocal expired
+            expired += 1
+            return []
+
+    loop._recover_expired_leases = Recover()  # type: ignore[assignment]
+    loop._expire_due_approvals = Expire()  # type: ignore[assignment]
+    loop._maintenance_interval_seconds = 0
+
+    monotonic_values = iter((0.0, 1.0, 2.0))
+    monkeypatch.setattr("apps.worker.worker_loop.time.monotonic", lambda: next(monotonic_values))
+
+    loop.serve_forever(shutdown)
+    assert recovered == 1
+    assert expired == 1

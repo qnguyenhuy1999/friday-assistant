@@ -204,3 +204,59 @@ def _decode_action_json(result_text: str) -> object:
 def _repair_prompt(error: BrainResponseInvalid, previous: str) -> str:
     clipped = previous[:_MAX_REPAIR_ECHO_CHARS]
     return _REPAIR_PREAMBLE.format(error=error, previous=clipped)
+
+
+REQUIRED_CLI_FLAGS = (
+    "--print",
+    "--output-format",
+    "--tools",
+    "--safe-mode",
+    "--strict-mcp-config",
+    "--no-session-persistence",
+    "--system-prompt",
+)
+"""Flags the installed CLI must advertise for brain-only operation to be
+guaranteed at the process level. Missing any of them fails startup closed."""
+
+_VERIFY_TIMEOUT_SECONDS = 30.0
+_VERIFY_MAX_OUTPUT_BYTES = 1_000_000
+
+
+def verify_brain_only_support(settings: ClaudeCliSettings) -> str:
+    """Fail-closed startup verification: the executable must exist, run, and
+    advertise every flag brain-only mode depends on. Returns the CLI version
+    string. Raises BrainUnavailable otherwise — a worker must never claim a
+    Run with an unverified brain."""
+    version = _run_probe(settings.executable, "--version")
+    help_text = _run_probe(settings.executable, "--help")
+    missing = [flag for flag in REQUIRED_CLI_FLAGS if flag not in help_text]
+    if missing:
+        raise BrainUnavailable(
+            f"Claude CLI does not advertise required brain-only flag(s): {missing}"
+        )
+    return version.strip()[:200]
+
+
+def _run_probe(executable: str, flag: str) -> str:
+    environment = {
+        name: value for name in ENVIRONMENT_ALLOWLIST if (value := os.environ.get(name)) is not None
+    }
+    try:
+        completed = subprocess.run(  # noqa: S603 - argv list, allowlisted env
+            [executable, flag],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=environment,
+            timeout=_VERIFY_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise BrainUnavailable(f"Claude CLI executable not found: {executable}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise BrainUnavailable(f"Claude CLI probe timed out: {flag}") from exc
+    except OSError as exc:
+        raise BrainUnavailable("Claude CLI could not be started") from exc
+    if completed.returncode != 0:
+        raise BrainUnavailable(f"Claude CLI probe {flag} exited with {completed.returncode}")
+    return completed.stdout[:_VERIFY_MAX_OUTPUT_BYTES]

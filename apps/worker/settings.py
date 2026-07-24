@@ -35,6 +35,37 @@ class WorkerSettings:
     retry_max_delay: timedelta
     maintenance_only: bool
 
+    def __post_init__(self) -> None:
+        if not self.worker_id.strip():
+            raise ValueError("worker_id must not be empty or whitespace-only")
+        if self.lease_duration <= timedelta(0):
+            raise ValueError("lease_duration must be positive")
+        if self.heartbeat_interval_seconds <= 0:
+            raise ValueError("heartbeat_interval_seconds must be positive")
+        if self.heartbeat_interval_seconds >= self.lease_duration.total_seconds():
+            raise ValueError(
+                "heartbeat_interval_seconds must be less than lease_duration "
+                "so the heartbeat leaves real margin under the lease"
+            )
+        if self.poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be positive")
+        if self.maintenance_interval_seconds <= 0:
+            raise ValueError("maintenance_interval_seconds must be positive")
+        if self.candidate_limit <= 0:
+            raise ValueError("candidate_limit must be positive")
+        if self.maintenance_batch_size <= 0:
+            raise ValueError("maintenance_batch_size must be positive")
+        if self.retry_max_attempts <= 0:
+            raise ValueError("retry_max_attempts must be positive")
+        if self.retry_base_delay <= timedelta(0):
+            raise ValueError("retry_base_delay must be positive")
+        if self.retry_multiplier <= 0:
+            raise ValueError("retry_multiplier must be positive")
+        if self.retry_max_delay <= timedelta(0):
+            raise ValueError("retry_max_delay must be positive")
+        if self.retry_max_delay < self.retry_base_delay:
+            raise ValueError("retry_max_delay must be at least retry_base_delay")
+
     @classmethod
     def from_env(cls) -> WorkerSettings:
         maintenance_only = os.environ.get("FRIDAY_WORKER_MAINTENANCE_ONLY", "false").lower()

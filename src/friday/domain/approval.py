@@ -60,6 +60,8 @@ class ApprovalRequest:
     _resolved_at: datetime | None = field(default=None)
     _resolution_note: str | None = field(default=None)
     _resolver: str | None = field(default=None)
+    _authorization_fingerprint: str | None = field(default=None)
+    _consumed_at: datetime | None = field(default=None)
 
     @classmethod
     def new(
@@ -75,6 +77,7 @@ class ApprovalRequest:
         requested_at: datetime,
         step_id: RunStepId | None = None,
         expires_at: datetime | None = None,
+        authorization_fingerprint: str | None = None,
     ) -> ApprovalRequest:
         normalized_summary = summary.strip()
         normalized_action = requested_action.strip()
@@ -99,6 +102,7 @@ class ApprovalRequest:
             _requested_at=ensure_utc(requested_at),
             _step_id=step_id,
             _expires_at=normalized_expiry,
+            _authorization_fingerprint=authorization_fingerprint,
         )
 
     @property
@@ -157,6 +161,18 @@ class ApprovalRequest:
     def resolver(self) -> str | None:
         return self._resolver
 
+    @property
+    def authorization_fingerprint(self) -> str | None:
+        return self._authorization_fingerprint
+
+    @property
+    def consumed_at(self) -> datetime | None:
+        return self._consumed_at
+
+    @property
+    def is_consumed(self) -> bool:
+        return self._consumed_at is not None
+
     def _require_status(self, *allowed: ApprovalStatus, target: ApprovalStatus) -> None:
         if self._status not in allowed:
             raise InvalidStateTransition("ApprovalRequest", self._status.value, target.value)
@@ -185,3 +201,13 @@ class ApprovalRequest:
 
     def expire(self, at: datetime) -> None:
         self._resolve(ApprovalStatus.EXPIRED, at, resolver=None, resolution_note=None)
+
+    def consume(self, at: datetime) -> None:
+        """Record that this approval authorized one protected execution.
+        Only an APPROVED, never-consumed approval can be consumed — the
+        one-shot guarantee behind non-idempotent tool authorization."""
+        if self._status is not ApprovalStatus.APPROVED:
+            raise InvalidStateTransition("ApprovalRequest", self._status.value, "consumed")
+        if self._consumed_at is not None:
+            raise DomainValidationError("ApprovalRequest is already consumed")
+        self._consumed_at = ensure_utc(at)

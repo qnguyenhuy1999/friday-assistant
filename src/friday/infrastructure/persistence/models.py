@@ -123,6 +123,8 @@ class ApprovalRequestRow(Base):
     resolved_at: Mapped[datetime | None]
     resolution_note: Mapped[str | None]
     resolver: Mapped[str | None]
+    authorization_fingerprint: Mapped[str | None]
+    consumed_at: Mapped[datetime | None]
 
 
 class ArtifactRow(Base):

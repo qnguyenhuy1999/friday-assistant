@@ -79,6 +79,8 @@ class ApprovalResponse(BaseModel):
     resolved_at: datetime | None
     resolution_note: str | None
     resolver: str | None
+    authorization_fingerprint: str | None
+    consumed_at: datetime | None
 
     @classmethod
     def from_result(cls, result: ApprovalRequestResult) -> ApprovalResponse:
@@ -97,6 +99,8 @@ class ApprovalResponse(BaseModel):
             resolved_at=result.resolved_at,
             resolution_note=result.resolution_note,
             resolver=result.resolver,
+            authorization_fingerprint=result.authorization_fingerprint,
+            consumed_at=result.consumed_at,
         )
 
 

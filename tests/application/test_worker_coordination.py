@@ -4,7 +4,7 @@ from datetime import timedelta
 
 import pytest
 
-from friday.application.errors import ClaimLost, EntityConflict
+from friday.application.errors import ApprovalNotFound, ClaimLost, EntityConflict
 from friday.application.retry_policy import RetryPolicy
 from friday.application.worker_coordination import (
     ApplyFailedOutcome,
@@ -17,6 +17,7 @@ from friday.application.worker_coordination import (
     RequeueClaimedRun,
     VerifyRunClaim,
 )
+from friday.domain.approval import ApprovalCategory, ApprovalRequest
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.identifiers import ApprovalRequestId, RunId, RunStepId, TaskId, ToolInvocationId
@@ -36,7 +37,20 @@ def _prepared_run(status: RunStatus = RunStatus.QUEUED) -> tuple[FakeUnitOfWork,
     if status is not RunStatus.QUEUED:
         run.start(T0)
     if status is RunStatus.WAITING_FOR_APPROVAL:
-        run.wait_for_approval(T0, ApprovalRequestId.new())
+        approval_id = ApprovalRequestId.new()
+        run.wait_for_approval(T0, approval_id)
+        uow.approval_repo.add(
+            ApprovalRequest.new(
+                id=approval_id,
+                run_id=run.id,
+                category=ApprovalCategory.OTHER,
+                summary="test approval",
+                reason="test",
+                requested_action="test",
+                requested_input=None,
+                requested_at=T0,
+            )
+        )
     elif status is RunStatus.SUCCEEDED:
         run.succeed(T0)
     elif status is RunStatus.FAILED:
@@ -356,7 +370,11 @@ def test_apply_waiting_outcome_rejects_expired_lease_without_reclaim() -> None:
 
     with pytest.raises(ClaimLost):
         ApplyWaitingOutcome(CountingUnitOfWorkFactory(uow), FakeClock(expired_at)).execute(
-            run.id, "worker-1", "token-1", generation
+            run.id,
+            "worker-1",
+            "token-1",
+            generation,
+            run.approval_request_id,  # type: ignore[arg-type]
         )
 
     assert run.status is RunStatus.WAITING_FOR_APPROVAL
@@ -529,7 +547,11 @@ def test_apply_waiting_outcome_accepts_item_already_removed() -> None:
     uow.work_queue_repo.remove(run.id)
 
     result = ApplyWaitingOutcome(CountingUnitOfWorkFactory(uow), FakeClock(T0)).execute(
-        run.id, "worker-1", "token-1", 1
+        run.id,
+        "worker-1",
+        "token-1",
+        1,
+        run.approval_request_id,  # type: ignore[arg-type]
     )
 
     assert result.run_id == run.id
@@ -542,7 +564,11 @@ def test_apply_waiting_outcome_rejects_wrong_claim_for_waiting_run() -> None:
 
     with pytest.raises(ClaimLost, match="waiting outcome lost claim"):
         ApplyWaitingOutcome(CountingUnitOfWorkFactory(uow), FakeClock(T0)).execute(
-            run.id, "wrong-worker", "token-1", generation
+            run.id,
+            "wrong-worker",
+            "token-1",
+            generation,
+            run.approval_request_id,  # type: ignore[arg-type]
         )
 
     assert run.status is RunStatus.WAITING_FOR_APPROVAL
@@ -552,9 +578,9 @@ def test_apply_waiting_outcome_rejects_wrong_claim_for_waiting_run() -> None:
 def test_apply_waiting_outcome_rejects_run_that_is_not_waiting() -> None:
     uow, run = _prepared_run(RunStatus.RUNNING)
 
-    with pytest.raises(EntityConflict, match="not waiting"):
+    with pytest.raises(ApprovalNotFound):
         ApplyWaitingOutcome(CountingUnitOfWorkFactory(uow), FakeClock(T0)).execute(
-            run.id, "worker-1", "token-1", 1
+            run.id, "worker-1", "token-1", 1, ApprovalRequestId.new()
         )
 
     assert run.status is RunStatus.RUNNING

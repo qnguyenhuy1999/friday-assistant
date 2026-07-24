@@ -128,15 +128,10 @@ class WorkerLoop:
                 cause=FailureCause.RUNTIME,
             )
             logger.error(
-                "Processor raised %s for run %s; recording as failure code %s",
+                "Processor exception class %s for run %s; recording failure code %s",
                 type(processor_error).__name__,
                 claim.run_id,
                 failure.code,
-                exc_info=(
-                    type(processor_error),
-                    processor_error,
-                    processor_error.__traceback__,
-                ),
             )
             try:
                 self._apply_failed.execute(
@@ -168,8 +163,13 @@ class WorkerLoop:
                     outcome.failure,
                 )
             elif outcome.kind == "waiting_for_approval":
+                assert outcome.approval_request_id is not None
                 self._apply_waiting.execute(
-                    claim.run_id, claim.worker_id, claim.claim_token, claim.claim_generation
+                    claim.run_id,
+                    claim.worker_id,
+                    claim.claim_token,
+                    claim.claim_generation,
+                    outcome.approval_request_id,
                 )
             elif outcome.kind == "yielded":
                 assert outcome.available_at is not None

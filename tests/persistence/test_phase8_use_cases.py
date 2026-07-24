@@ -368,7 +368,7 @@ def test_approval_integration_worker_loop_does_not_report_claim_lost(
     clock.fixed_now += timedelta(seconds=5)
 
     # External caller (e.g. LLM) calls RequestApproval
-    RequestApproval(factory, clock).execute(_approval_command(run_id))
+    approval = RequestApproval(factory, clock).execute(_approval_command(run_id))
     clock.fixed_now += timedelta(seconds=5)
 
     # Worker's ApplyWaitingOutcome must handle the missing work item
@@ -377,7 +377,11 @@ def test_approval_integration_worker_loop_does_not_report_claim_lost(
         assert uow.work_queue.get(run_id) is None  # work item was removed
 
     ApplyWaitingOutcome(factory, clock).execute(
-        run_id, "worker-1", claim.claim_token, claim.claim_generation
+        run_id,
+        "worker-1",
+        claim.claim_token,
+        claim.claim_generation,
+        approval.approval_id,
     )
 
     with SqlAlchemyUnitOfWork(session_factory()) as uow:

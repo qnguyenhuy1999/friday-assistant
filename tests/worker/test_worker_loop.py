@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -23,6 +24,7 @@ from friday.application.worker_coordination import (
     RequeueClaimedRun,
 )
 from friday.application.worker_maintenance import ExpireDueApprovals, RecoverExpiredLeases
+from friday.domain.approval import ApprovalCategory, ApprovalRequest
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.identifiers import ApprovalRequestId, RunId, TaskId
 from friday.domain.run import Run, RunStatus
@@ -72,6 +74,21 @@ def _run_and_loop(
     run = Run.new(id=RunId.new(), task_id=TaskId.new(), created_at=T0)
     uow.runs.add(run)
     uow.work_queue.enqueue(run.id, T0, T0)
+    if outcome.kind == "waiting_for_approval":
+        assert outcome.approval_request_id is not None
+        approval_id = outcome.approval_request_id
+        uow.approvals.add(
+            ApprovalRequest.new(
+                id=approval_id,
+                run_id=run.id,
+                category=ApprovalCategory.OTHER,
+                summary="test approval",
+                reason="test",
+                requested_action="test",
+                requested_input=None,
+                requested_at=T0,
+            )
+        )
     factory = CountingUnitOfWorkFactory(uow)
     clock = FakeClock()
     retry = RetryPolicy(3, timedelta(seconds=1), 2.0, timedelta(seconds=10))
@@ -112,7 +129,7 @@ def test_run_once_returns_false_when_nothing_is_due() -> None:
     [
         ProcessingOutcome.succeeded(),
         ProcessingOutcome.failed(FAILURE),
-        ProcessingOutcome.waiting_for_approval(),
+        ProcessingOutcome.waiting_for_approval(ApprovalRequestId.new()),
         ProcessingOutcome.yielded(T0 + timedelta(minutes=5)),
     ],
 )
@@ -121,7 +138,8 @@ def test_run_once_dispatches_each_outcome(outcome: ProcessingOutcome) -> None:
     if outcome.kind == "waiting_for_approval":
 
         def wait_for_approval(_: ClaimContext) -> None:
-            run.wait_for_approval(T0, ApprovalRequestId.new())
+            assert outcome.approval_request_id is not None
+            run.wait_for_approval(T0, outcome.approval_request_id)
 
         processor.before_outcome = wait_for_approval
 
@@ -159,6 +177,58 @@ def test_run_once_swallow_claim_lost_during_outcome_application() -> None:
     )
     assert loop.run_once(processor) is True
     assert run.status is RunStatus.RUNNING
+
+
+def test_run_once_treats_resolved_approval_waiting_outcome_as_stale() -> None:
+    outcome = ProcessingOutcome.waiting_for_approval(ApprovalRequestId.new())
+    uow, run, loop, processor = _run_and_loop(outcome)
+    assert outcome.approval_request_id is not None
+    approval = uow.approval_repo.get(outcome.approval_request_id)
+    assert approval is not None
+
+    def resolve_approval(_: ClaimContext) -> None:
+        run.wait_for_approval(T0, approval.id)
+        uow.runs.save(run)
+        uow.work_queue_repo.remove(run.id)
+        approval.approve(T0, "alice")
+        uow.approval_repo.save(approval)
+        run.resume(T0)
+        uow.runs.save(run)
+        uow.work_queue_repo.enqueue(run.id, T0, T0)
+
+    processor.before_outcome = resolve_approval
+
+    assert loop.run_once(processor) is True
+    assert run.status is RunStatus.RUNNING
+    item = uow.work_queue_repo.get(run.id)
+    assert item is not None
+    assert item.claimed_by is None
+
+
+def test_run_once_does_not_log_processor_traceback_or_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _, run, loop, _ = _run_and_loop(ProcessingOutcome.succeeded())
+    logger = logging.getLogger("apps.worker.worker_loop")
+    logger.disabled = False
+    logger.propagate = True
+    caplog.set_level(logging.ERROR, logger="apps.worker.worker_loop")
+
+    loop.run_once(RaisingProcessor(RuntimeError("secret /local/path --token=abc")))
+
+    assert run.status is RunStatus.FAILED
+    record = next(
+        record
+        for record in caplog.records
+        if "recording failure code processor_exception" in record.message
+    )
+    assert record.exc_info is None
+    assert record.message == (
+        f"Processor exception class RuntimeError for run {run.id}; "
+        "recording failure code processor_exception"
+    )
+    assert "secret" not in record.message
+    assert "/local/path" not in record.message
 
 
 def test_run_once_marks_lease_lost_when_heartbeat_renewal_fails() -> None:

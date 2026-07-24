@@ -13,15 +13,16 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta
 
-from friday.application.errors import ClaimLost, EntityConflict, RunNotFound
+from friday.application.errors import ApprovalNotFound, ClaimLost, EntityConflict, RunNotFound
 from friday.application.lifecycle_events import LifecycleEvents, run_result
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.results import RunClaimResult, RunResult
 from friday.application.retry_policy import RetryPolicy
 from friday.application.run_lifecycle import _fail_run_event_specs, _succeed_run_event_specs
+from friday.domain.approval import TERMINAL_APPROVAL_STATUSES, ApprovalStatus
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure
-from friday.domain.identifiers import RunId
+from friday.domain.identifiers import ApprovalRequestId, RunId
 from friday.domain.run import TERMINAL_RUN_STATUSES, Run, RunStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
 from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
@@ -292,21 +293,61 @@ class ApplyWaitingOutcome:
         self._clock = clock
 
     def execute(
-        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        approval_request_id: ApprovalRequestId,
     ) -> RunResult:
         with self._uow_factory() as uow:
             run = uow.runs.get(run_id)
             if run is None:
                 uow.commit()
                 raise RunNotFound(run_id)
+            approval = uow.approvals.get(approval_request_id)
+            if approval is None:
+                uow.commit()
+                raise ApprovalNotFound(approval_request_id)
+            if approval.run_id != run.id:
+                uow.commit()
+                raise EntityConflict("approval request does not belong to run")
+
+            item = uow.work_queue.get(run_id)
+            if run.status is RunStatus.RUNNING and approval.status in TERMINAL_APPROVAL_STATUSES:
+                # Approval resolution resumed the run and enqueued a fresh item
+                # before the old processor returned. Never touch that item.
+                if item is None:
+                    uow.commit()
+                    return run_result(run)
+                if (
+                    item.claimed_by != worker_id
+                    or item.claim_token != claim_token
+                    or item.claim_generation != claim_generation
+                ):
+                    uow.commit()
+                    raise ClaimLost(f"stale waiting outcome for run {run_id}")
+                uow.commit()
+                raise EntityConflict(
+                    "processor reported waiting_for_approval after approval resolution"
+                )
+
             if run.status is not RunStatus.WAITING_FOR_APPROVAL:
                 uow.commit()
                 raise EntityConflict(
                     "processor reported waiting_for_approval but the run is not waiting"
                 )
+            if run.approval_request_id != approval.id:
+                uow.commit()
+                raise EntityConflict("run is waiting for a different approval request")
+            if approval.status not in {
+                ApprovalStatus.PENDING,
+                *TERMINAL_APPROVAL_STATUSES,
+            }:
+                uow.commit()
+                raise EntityConflict("approval request has an invalid status")
             # RequestApproval already parked the run and removed the work item in
             # the same transaction before the outcome was returned.
-            item = uow.work_queue.get(run_id)
             if item is None:
                 uow.commit()
                 return run_result(run)

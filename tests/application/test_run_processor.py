@@ -6,6 +6,7 @@ import pytest
 
 from friday.application.run_processor import ProcessingOutcome
 from friday.domain.failure import Failure, FailureCause
+from friday.domain.identifiers import ApprovalRequestId
 from tests.application.fakes import T0
 
 FAILURE = Failure("test", "failed", retryable=False, cause=FailureCause.RUNTIME)
@@ -35,7 +36,7 @@ def test_processing_outcome_rejects_missing_yielded_time() -> None:
 def test_processing_outcome_convenience_constructors() -> None:
     succeeded = ProcessingOutcome.succeeded()
     failed = ProcessingOutcome.failed(FAILURE)
-    waiting = ProcessingOutcome.waiting_for_approval()
+    waiting = ProcessingOutcome.waiting_for_approval(ApprovalRequestId.new())
     yielded = ProcessingOutcome.yielded(T0 + timedelta(minutes=1))
 
     assert succeeded.kind == "succeeded" and succeeded.failure is None

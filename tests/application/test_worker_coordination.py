@@ -521,17 +521,19 @@ def test_apply_succeeded_outcome_stale_claim_raises_claim_lost_without_mutation(
     assert uow.event_store.appended == []
 
 
-def test_apply_waiting_outcome_rejects_missing_claim_for_waiting_run() -> None:
+def test_apply_waiting_outcome_accepts_item_already_removed() -> None:
+    """Normal RequestApproval path — work item already deleted in the same
+    transaction that parked the run. ApplyWaitingOutcome should succeed
+    without raising ClaimLost."""
     uow, run = _prepared_run(RunStatus.WAITING_FOR_APPROVAL)
     uow.work_queue_repo.remove(run.id)
 
-    with pytest.raises(ClaimLost, match="waiting outcome lost claim"):
-        ApplyWaitingOutcome(CountingUnitOfWorkFactory(uow), FakeClock(T0)).execute(
-            run.id, "worker-1", "token-1", 1
-        )
+    result = ApplyWaitingOutcome(CountingUnitOfWorkFactory(uow), FakeClock(T0)).execute(
+        run.id, "worker-1", "token-1", 1
+    )
 
+    assert result.run_id == run.id
     assert run.status is RunStatus.WAITING_FOR_APPROVAL
-    assert uow.event_store.appended == []
 
 
 def test_apply_waiting_outcome_rejects_wrong_claim_for_waiting_run() -> None:

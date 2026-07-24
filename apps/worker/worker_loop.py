@@ -127,11 +127,16 @@ class WorkerLoop:
                 retryable=True,
                 cause=FailureCause.RUNTIME,
             )
-            logger.exception(
+            logger.error(
                 "Processor raised %s for run %s; recording as failure code %s",
                 type(processor_error).__name__,
                 claim.run_id,
                 failure.code,
+                exc_info=(
+                    type(processor_error),
+                    processor_error,
+                    processor_error.__traceback__,
+                ),
             )
             try:
                 self._apply_failed.execute(

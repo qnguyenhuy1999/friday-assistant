@@ -304,7 +304,14 @@ class ApplyWaitingOutcome:
                 raise EntityConflict(
                     "processor reported waiting_for_approval but the run is not waiting"
                 )
-            # RequestApproval normally removed this item before the outcome was returned.
+            # RequestApproval already parked the run and removed the work item in
+            # the same transaction before the outcome was returned.
+            item = uow.work_queue.get(run_id)
+            if item is None:
+                uow.commit()
+                return run_result(run)
+            # Item still present — race path (e.g. a non-approval parking happened
+            # between RequestApproval and outcome dispatch). Remove it here.
             now = self._clock.now()
             removed = uow.work_queue.remove_if_claimed(
                 run_id, worker_id, claim_token, claim_generation, now

@@ -39,6 +39,7 @@ from friday.application.errors import EntityConflict
 from friday.application.lifecycle import StartQueuedRun
 from friday.application.start_run import StartRun
 from friday.application.tool_invocation_lifecycle import RequestToolInvocation
+from friday.application.worker_coordination import ApplyWaitingOutcome, ClaimNextRun
 from friday.domain.approval import ApprovalCategory, ApprovalStatus
 from friday.domain.artifact import ArtifactKind
 from friday.domain.event import RunEvent
@@ -345,3 +346,42 @@ def test_cross_run_approval_reference_is_rejected(
         )
     with SqlAlchemyUnitOfWork(session_factory()) as fresh:
         assert fresh.tool_invocations.list_for_run(run_a) == []
+
+
+def test_approval_integration_worker_loop_does_not_report_claim_lost(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Claim a run, call RequestApproval (parks run + deletes work item),
+    return waiting_for_approval — ApplyWaitingOutcome must NOT raise
+    ClaimLost, the worker completes normally, Run stays waiting, work
+    item does not exist."""
+    factory = create_unit_of_work_factory(session_factory)
+    clock = FakeClock(T1)
+    run_id = _running_run(session_factory)
+    lease = timedelta(minutes=5)
+
+    # Worker #1 claims the run
+    claim = ClaimNextRun(
+        factory, clock, worker_id="worker-1", lease_duration=lease, candidate_limit=10
+    ).execute()
+    assert claim is not None and claim.run_id == run_id
+    clock.fixed_now += timedelta(seconds=5)
+
+    # External caller (e.g. LLM) calls RequestApproval
+    RequestApproval(factory, clock).execute(_approval_command(run_id))
+    clock.fixed_now += timedelta(seconds=5)
+
+    # Worker's ApplyWaitingOutcome must handle the missing work item
+    with SqlAlchemyUnitOfWork(session_factory()) as uow:
+        assert uow.runs.get(run_id) is not None  # run still exists
+        assert uow.work_queue.get(run_id) is None  # work item was removed
+
+    ApplyWaitingOutcome(factory, clock).execute(
+        run_id, "worker-1", claim.claim_token, claim.claim_generation
+    )
+
+    with SqlAlchemyUnitOfWork(session_factory()) as uow:
+        run = uow.runs.get(run_id)
+        assert run is not None
+        assert run.status is RunStatus.WAITING_FOR_APPROVAL
+        assert uow.work_queue.get(run_id) is None

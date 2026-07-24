@@ -58,9 +58,6 @@ lock-check:
 worker:
     uv run python -m apps.worker.main
 
-worker-maintenance:
-    FRIDAY_WORKER_MAINTENANCE_ONLY=true uv run python -m apps.worker.main
-
 pre-commit:
     uv run pre-commit run --all-files
     uv run pre-commit run --all-files --hook-stage pre-push

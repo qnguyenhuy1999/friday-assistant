@@ -162,8 +162,9 @@ computes `max(sequence) + 1` anymore.
 ## Worker loop
 
 `WorkerLoop.run_once(processor)` (`apps/worker/worker_loop.py:52`) returns
-`False` immediately if `processor is None` (maintenance-only mode never
-claims) or if no work is due. Otherwise it claims one Run, starts the
+`False` immediately if `processor is None` (Phase 10 passes `None` because a
+concrete `RunProcessor` does not exist yet) or if no work is due. Otherwise it
+claims one Run, starts the
 heartbeat thread, calls `processor.process(context)`, joins the heartbeat
 thread, and dispatches the `ProcessingOutcome` to the matching coordination
 use case (`succeeded` → `ApplySucceededOutcome`, `failed` →
@@ -178,19 +179,9 @@ shutdown_event, processor=None)` drives both on independent intervals: a
 monotonic-clock-gated maintenance tick, and `run_once` on every iteration,
 falling back to `shutdown_event.wait(poll_interval_seconds)` (an
 interruptible sleep, not a blocking `time.sleep`) whenever there was
-nothing to claim. `processor=None` runs maintenance only — no claim is
-ever attempted without a configured processor.
-
-## Maintenance-only mode
-
-`WorkerSettings.maintenance_only` (env `FRIDAY_WORKER_MAINTENANCE_ONLY`)
-signals a deployment that should run `RecoverExpiredLeases` and
-`ExpireDueApprovals` without claiming or processing Runs — useful for
-running maintenance on a schedule separate from claiming workers.
-`apps/worker/main.py` passes `processor=None` to `serve_forever` (Phase 11
-supplies a real processor); a `None` processor and `maintenance_only=True`
-currently produce the same claiming behavior (none), since no processor
-wiring exists yet.
+nothing to claim. Phase 10 passes `processor=None` because a concrete
+`RunProcessor` does not exist yet — this is not a configurable deployment
+mode, just a temporary wiring artifact until Phase 11.
 
 ## Graceful shutdown
 

@@ -4,10 +4,12 @@ from datetime import timedelta
 
 import pytest
 
-from friday.application.errors import ClaimLost
+from friday.application.errors import ClaimLost, EntityConflict
 from friday.application.retry_policy import RetryPolicy
 from friday.application.worker_coordination import (
     ApplyFailedOutcome,
+    ApplySucceededOutcome,
+    ApplyWaitingOutcome,
     ClaimNextRun,
     CompleteRunWorkItem,
     ReleaseRunClaim,
@@ -17,8 +19,10 @@ from friday.application.worker_coordination import (
 )
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import ApprovalRequestId, RunId, TaskId
+from friday.domain.identifiers import ApprovalRequestId, RunId, RunStepId, TaskId, ToolInvocationId
 from friday.domain.run import Run, RunStatus
+from friday.domain.step import RunStep
+from friday.domain.tool import ToolInvocation
 from tests.application.fakes import T0, CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
 
 LEASE = timedelta(minutes=1)
@@ -82,6 +86,7 @@ def test_claim_next_run_starts_queued_run_and_returns_fenced_claim() -> None:
     assert result.worker_id == "worker"
     assert result.claim_token
     assert result.claim_generation == 1
+    assert result.attempt_number == 1
     assert result.lease_expires_at == T0 + LEASE
     assert run.status is RunStatus.RUNNING
     assert [event.type for event in uow.event_store.appended] == [RunEventType.RUN_STARTED]
@@ -376,3 +381,83 @@ def test_apply_failed_outcome_is_idempotent_against_replayed_claimed_outcome() -
         use_case.execute(run.id, "worker-1", "token-1", generation, RETRYABLE_FAILURE)
 
     assert len(uow.run_repo.list_for_task(run.task_id)) == 2
+
+
+def test_apply_succeeded_outcome_succeeds_run_and_removes_claimed_work_item() -> None:
+    uow, run = _prepared_run(RunStatus.RUNNING)
+    generation = _claim(uow, run.id)
+
+    result = ApplySucceededOutcome(CountingUnitOfWorkFactory(uow), FakeClock(T0)).execute(
+        run.id, "worker-1", "token-1", generation
+    )
+
+    assert result.run_id == run.id
+    assert run.status is RunStatus.SUCCEEDED
+    assert [event.type for event in uow.event_store.appended] == [RunEventType.RUN_SUCCEEDED]
+    assert uow.work_queue_repo.get(run.id) is None
+
+
+@pytest.mark.parametrize("descendant", ["step", "tool"])
+def test_apply_succeeded_outcome_rejects_non_terminal_descendants(descendant: str) -> None:
+    uow, run = _prepared_run(RunStatus.RUNNING)
+    if descendant == "step":
+        step = RunStep.new(
+            id=RunStepId.new(), run_id=run.id, name="step", position=0, created_at=T0
+        )
+        uow.step_repo.add(step)
+    else:
+        tool = ToolInvocation.new(
+            id=ToolInvocationId.new(),
+            run_id=run.id,
+            step_id=None,
+            tool_name="tool",
+            requested_input=None,
+            requested_at=T0,
+        )
+        uow.tool_repo.add(tool)
+    generation = _claim(uow, run.id)
+
+    with pytest.raises(EntityConflict):
+        ApplySucceededOutcome(CountingUnitOfWorkFactory(uow), FakeClock(T0)).execute(
+            run.id, "worker-1", "token-1", generation
+        )
+
+    assert run.status is RunStatus.RUNNING
+    assert uow.event_store.appended == []
+
+
+def test_apply_succeeded_outcome_stale_claim_raises_claim_lost_without_mutation() -> None:
+    uow, run = _prepared_run(RunStatus.RUNNING)
+    generation = _claim(uow, run.id)
+
+    with pytest.raises(ClaimLost):
+        ApplySucceededOutcome(CountingUnitOfWorkFactory(uow), FakeClock(T0)).execute(
+            run.id, "wrong-worker", "token-1", generation
+        )
+
+    assert run.status is RunStatus.RUNNING
+    assert uow.event_store.appended == []
+
+
+def test_apply_waiting_outcome_accepts_already_waiting_run_without_work_item() -> None:
+    uow, run = _prepared_run(RunStatus.WAITING_FOR_APPROVAL)
+    uow.work_queue_repo.remove(run.id)
+
+    result = ApplyWaitingOutcome(CountingUnitOfWorkFactory(uow), FakeClock(T0)).execute(
+        run.id, "worker-1", "token-1", 1
+    )
+
+    assert result.run_id == run.id
+    assert run.status is RunStatus.WAITING_FOR_APPROVAL
+    assert uow.event_store.appended == []
+
+
+def test_apply_waiting_outcome_rejects_run_that_is_not_waiting() -> None:
+    uow, run = _prepared_run(RunStatus.RUNNING)
+
+    with pytest.raises(EntityConflict, match="not waiting"):
+        ApplyWaitingOutcome(CountingUnitOfWorkFactory(uow), FakeClock(T0)).execute(
+            run.id, "worker-1", "token-1", 1
+        )
+
+    assert run.status is RunStatus.RUNNING

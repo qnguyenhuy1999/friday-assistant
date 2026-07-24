@@ -103,6 +103,7 @@ class RunClaimResult:
     worker_id: str
     claim_token: str
     claim_generation: int
+    attempt_number: int
     acquired_at: datetime
     lease_expires_at: datetime
 

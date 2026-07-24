@@ -13,16 +13,18 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta
 
-from friday.application.errors import ClaimLost, RunNotFound
+from friday.application.errors import ClaimLost, EntityConflict, RunNotFound
 from friday.application.lifecycle_events import LifecycleEvents, run_result
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.results import RunClaimResult, RunResult
 from friday.application.retry_policy import RetryPolicy
-from friday.application.run_lifecycle import _fail_run_event_specs
+from friday.application.run_lifecycle import _fail_run_event_specs, _succeed_run_event_specs
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure
 from friday.domain.identifiers import RunId
 from friday.domain.run import TERMINAL_RUN_STATUSES, Run, RunStatus
+from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
+from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
 
 
 class ClaimNextRun:
@@ -84,6 +86,7 @@ class ClaimNextRun:
                     worker_id=self._worker_id,
                     claim_token=claim_token,
                     claim_generation=item.claim_generation,
+                    attempt_number=len(uow.runs.list_for_task(run.task_id)),
                     acquired_at=now,
                     lease_expires_at=lease_expires_at,
                 )
@@ -241,5 +244,69 @@ class ApplyFailedOutcome:
                     ],
                 )
 
+            uow.commit()
+            return run_result(run)
+
+
+class ApplySucceededOutcome:
+    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
+        self._uow_factory = uow_factory
+        self._clock = clock
+
+    def execute(
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+    ) -> RunResult:
+        with self._uow_factory() as uow:
+            removed = uow.work_queue.remove_if_claimed(
+                run_id, worker_id, claim_token, claim_generation
+            )
+            if not removed:
+                uow.commit()
+                raise ClaimLost(f"successful outcome lost claim for run {run_id}")
+
+            run = uow.runs.get(run_id)
+            if run is None:
+                uow.commit()
+                raise RunNotFound(run_id)
+            if any(
+                step.status not in TERMINAL_RUN_STEP_STATUSES
+                for step in uow.steps.list_for_run(run.id)
+            ):
+                uow.commit()
+                raise EntityConflict("run has non-terminal steps")
+            if any(
+                tool.status not in TERMINAL_TOOL_INVOCATION_STATUSES
+                for tool in uow.tool_invocations.list_for_run(run.id)
+            ):
+                uow.commit()
+                raise EntityConflict("run has non-terminal tool invocations")
+
+            now = self._clock.now()
+            specs = _succeed_run_event_specs(uow, run, now)
+            LifecycleEvents.append_run_events(uow, run, now, specs)
+            uow.commit()
+            return run_result(run)
+
+
+class ApplyWaitingOutcome:
+    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
+        self._uow_factory = uow_factory
+        self._clock = clock
+
+    def execute(
+        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+    ) -> RunResult:
+        with self._uow_factory() as uow:
+            run = uow.runs.get(run_id)
+            if run is None:
+                uow.commit()
+                raise RunNotFound(run_id)
+            if run.status is not RunStatus.WAITING_FOR_APPROVAL:
+                uow.commit()
+                raise EntityConflict(
+                    "processor reported waiting_for_approval but the run is not waiting"
+                )
+            # RequestApproval normally removed this item before the outcome was returned.
+            uow.work_queue.remove_if_claimed(run_id, worker_id, claim_token, claim_generation)
             uow.commit()
             return run_result(run)

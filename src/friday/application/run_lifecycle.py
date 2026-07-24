@@ -47,6 +47,15 @@ def _fail_run_event_specs(
     return specs
 
 
+def _succeed_run_event_specs(
+    uow: UnitOfWork, run: Run, now: datetime
+) -> list[tuple[RunEventType, JsonValue, RunStepId | None]]:
+    """Succeed a run and build its event specification."""
+    run.succeed(now)
+    uow.runs.save(run)
+    return [(RunEventType.RUN_SUCCEEDED, {"run_id": str(run.id)}, None)]
+
+
 class _RunCancellation(LifecycleEvents):
     def _cancel_run(self, uow: UnitOfWork, run: Run, now: datetime) -> None:
         specs: list[tuple[RunEventType, JsonValue, RunStepId | None]] = [
@@ -145,12 +154,9 @@ class CompleteRun(LifecycleEvents):
             ):
                 raise EntityConflict("run has non-terminal tool invocations")
             now = self._clock.now()
-            run.succeed(now)
-            uow.runs.save(run)
+            specs = _succeed_run_event_specs(uow, run, now)
             uow.work_queue.remove(run.id)
-            self.append_run_events(
-                uow, run, now, [(RunEventType.RUN_SUCCEEDED, {"run_id": str(run.id)}, None)]
-            )
+            self.append_run_events(uow, run, now, specs)
             uow.commit()
             return run_result(run)
 

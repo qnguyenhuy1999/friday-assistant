@@ -29,6 +29,7 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "artifacts",
             "tool_invocations",
             "run_events",
+            "run_work_items",
             "alembic_version",
         }
     finally:

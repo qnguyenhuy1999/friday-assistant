@@ -55,6 +55,30 @@ class RunRow(Base):
     approval_request_id: Mapped[str | None] = mapped_column(index=True)
 
 
+class RunWorkItemRow(Base):
+    __tablename__ = "run_work_items"
+    __table_args__ = (
+        Index("ix_run_work_items_available_at", "available_at"),
+        Index("ix_run_work_items_lease_expires_at", "lease_expires_at"),
+        Index(
+            "ix_run_work_items_available_at_enqueued_at_run_id",
+            "available_at",
+            "enqueued_at",
+            "run_id",
+        ),
+    )
+
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), primary_key=True)
+    available_at: Mapped[datetime]
+    enqueued_at: Mapped[datetime]
+    claimed_by: Mapped[str | None]
+    claim_token: Mapped[str | None]
+    claim_generation: Mapped[int] = mapped_column(default=0, server_default="0")
+    claimed_at: Mapped[datetime | None]
+    heartbeat_at: Mapped[datetime | None]
+    lease_expires_at: Mapped[datetime | None]
+
+
 class RunStepRow(Base):
     __tablename__ = "run_steps"
     __table_args__ = (

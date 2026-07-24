@@ -257,29 +257,25 @@ class ApplySucceededOutcome:
         self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
     ) -> RunResult:
         with self._uow_factory() as uow:
-            removed = uow.work_queue.remove_if_claimed(
-                run_id, worker_id, claim_token, claim_generation
-            )
-            if not removed:
-                uow.commit()
-                raise ClaimLost(f"successful outcome lost claim for run {run_id}")
-
             run = uow.runs.get(run_id)
             if run is None:
-                uow.commit()
                 raise RunNotFound(run_id)
             if any(
                 step.status not in TERMINAL_RUN_STEP_STATUSES
                 for step in uow.steps.list_for_run(run.id)
             ):
-                uow.commit()
                 raise EntityConflict("run has non-terminal steps")
             if any(
                 tool.status not in TERMINAL_TOOL_INVOCATION_STATUSES
                 for tool in uow.tool_invocations.list_for_run(run.id)
             ):
-                uow.commit()
                 raise EntityConflict("run has non-terminal tool invocations")
+
+            removed = uow.work_queue.remove_if_claimed(
+                run_id, worker_id, claim_token, claim_generation
+            )
+            if not removed:
+                raise ClaimLost(f"successful outcome lost claim for run {run_id}")
 
             now = self._clock.now()
             specs = _succeed_run_event_specs(uow, run, now)
@@ -307,6 +303,10 @@ class ApplyWaitingOutcome:
                     "processor reported waiting_for_approval but the run is not waiting"
                 )
             # RequestApproval normally removed this item before the outcome was returned.
-            uow.work_queue.remove_if_claimed(run_id, worker_id, claim_token, claim_generation)
+            removed = uow.work_queue.remove_if_claimed(
+                run_id, worker_id, claim_token, claim_generation
+            )
+            if not removed:
+                raise ClaimLost(f"waiting outcome lost claim for run {run_id}")
             uow.commit()
             return run_result(run)

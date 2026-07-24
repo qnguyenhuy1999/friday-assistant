@@ -424,6 +424,13 @@ def test_apply_succeeded_outcome_rejects_non_terminal_descendants(descendant: st
 
     assert run.status is RunStatus.RUNNING
     assert uow.event_store.appended == []
+    work_item = uow.work_queue_repo.get(run.id)
+    assert work_item is not None
+    assert (work_item.claimed_by, work_item.claim_token, work_item.claim_generation) == (
+        "worker-1",
+        "token-1",
+        generation,
+    )
 
 
 def test_apply_succeeded_outcome_stale_claim_raises_claim_lost_without_mutation() -> None:
@@ -439,17 +446,30 @@ def test_apply_succeeded_outcome_stale_claim_raises_claim_lost_without_mutation(
     assert uow.event_store.appended == []
 
 
-def test_apply_waiting_outcome_accepts_already_waiting_run_without_work_item() -> None:
+def test_apply_waiting_outcome_rejects_missing_claim_for_waiting_run() -> None:
     uow, run = _prepared_run(RunStatus.WAITING_FOR_APPROVAL)
     uow.work_queue_repo.remove(run.id)
 
-    result = ApplyWaitingOutcome(CountingUnitOfWorkFactory(uow), FakeClock(T0)).execute(
-        run.id, "worker-1", "token-1", 1
-    )
+    with pytest.raises(ClaimLost, match="waiting outcome lost claim"):
+        ApplyWaitingOutcome(CountingUnitOfWorkFactory(uow), FakeClock(T0)).execute(
+            run.id, "worker-1", "token-1", 1
+        )
 
-    assert result.run_id == run.id
     assert run.status is RunStatus.WAITING_FOR_APPROVAL
     assert uow.event_store.appended == []
+
+
+def test_apply_waiting_outcome_rejects_wrong_claim_for_waiting_run() -> None:
+    uow, run = _prepared_run(RunStatus.WAITING_FOR_APPROVAL)
+    generation = _claim(uow, run.id)
+
+    with pytest.raises(ClaimLost, match="waiting outcome lost claim"):
+        ApplyWaitingOutcome(CountingUnitOfWorkFactory(uow), FakeClock(T0)).execute(
+            run.id, "wrong-worker", "token-1", generation
+        )
+
+    assert run.status is RunStatus.WAITING_FOR_APPROVAL
+    assert uow.work_queue_repo.get(run.id) is not None
 
 
 def test_apply_waiting_outcome_rejects_run_that_is_not_waiting() -> None:

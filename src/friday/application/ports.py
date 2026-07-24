@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import builtins
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from types import TracebackType
 from typing import Protocol, Self
@@ -37,6 +38,27 @@ from friday.domain.tool import ToolInvocation
 
 class Clock(Protocol):
     def now(self) -> datetime: ...
+
+
+@dataclass(frozen=True, slots=True)
+class RunWorkItemView:
+    run_id: RunId
+    available_at: datetime
+    enqueued_at: datetime
+    claimed_by: str | None
+    claim_token: str | None
+    claim_generation: int
+    claimed_at: datetime | None
+    heartbeat_at: datetime | None
+    lease_expires_at: datetime | None
+
+
+class RunWorkQueue(Protocol):
+    def enqueue(self, run_id: RunId, available_at: datetime, enqueued_at: datetime) -> None: ...
+    def get(self, run_id: RunId) -> RunWorkItemView | None: ...
+    def find_due_candidates(self, now: datetime, limit: int) -> list[RunWorkItemView]: ...
+    def find_expired_claims(self, now: datetime, limit: int) -> list[RunWorkItemView]: ...
+    def remove(self, run_id: RunId) -> None: ...
 
 
 class TaskRepository(Protocol):
@@ -180,6 +202,8 @@ class UnitOfWork(Protocol):
     def events(self) -> RunEventStore: ...
     @property
     def task_events(self) -> TaskEventStore: ...
+    @property
+    def work_queue(self) -> RunWorkQueue: ...
 
     def __enter__(self) -> Self: ...
     def __exit__(

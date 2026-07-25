@@ -30,6 +30,7 @@ Weight constants (documented here, the one source of truth):
 from __future__ import annotations
 
 import hashlib
+import itertools
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -42,6 +43,7 @@ from friday.application.memory.models import (
     RetrievalMethod,
 )
 from friday.infrastructure.memory.markdown_parser import parse_markdown
+from friday.infrastructure.memory.note_eligibility import is_note_private
 from friday.infrastructure.memory.vault_paths import (
     resolve_vault_path,
     resolve_vault_root,
@@ -57,6 +59,10 @@ _PHRASE_MATCH_WEIGHT = 4.0
 _BODY_TERM_MATCH_WEIGHT = 1.0
 
 _DEFAULT_MAX_FILES_SCANNED = 5000
+_MAX_DIRECTORY_ENTRIES_SCANNED = 200_000
+"""Hard ceiling on raw .md paths pulled from rglob() before sorting -- the
+policy-level max_files_scanned cap only applies during the per-file loop
+below, so this bounds the enumeration itself against a pathological vault."""
 _BUILTIN_EXCLUSIONS = (
     ".obsidian/**",
     ".trash/**",
@@ -77,6 +83,7 @@ class _CachedNoteInfo:
     aliases: tuple[str, ...]
     tags: tuple[str, ...]
     headings: tuple[str, ...]
+    is_private: bool
 
 
 class LexicalIndexStore:
@@ -146,6 +153,7 @@ class LexicalIndexStore:
             aliases=parsed.frontmatter.aliases,
             tags=parsed.frontmatter.tags,
             headings=tuple(h.text for h in parsed.headings),
+            is_private=is_note_private(text),
         )
         self._cache[relative] = info
         return info
@@ -227,7 +235,8 @@ class LexicalIndexStore:
         scored: list[tuple[float, str, MemoryCandidate]] = []
         scanned = 0
 
-        for file_path in sorted(self._root.rglob("*.md")):
+        candidates = itertools.islice(self._root.rglob("*.md"), _MAX_DIRECTORY_ENTRIES_SCANNED)
+        for file_path in sorted(candidates):
             if scanned >= self._max_files_scanned:
                 break
             scanned += 1
@@ -243,7 +252,7 @@ class LexicalIndexStore:
                 continue
 
             info = self._load_metadata(relative)
-            if info is None:
+            if info is None or info.is_private:
                 continue
 
             score = 0.0

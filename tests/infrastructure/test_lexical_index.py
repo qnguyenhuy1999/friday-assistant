@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from friday.application.memory.models import (
     MemoryQuery,
     MemoryVaultPolicy,
@@ -616,3 +618,50 @@ class TestCoverageBranches:
             limit=5,
         )
         assert len(results) == 1
+
+
+class TestPrivacyEligibility:
+    def test_lexical_search_excludes_private_note(self, tmp_path: Path) -> None:
+        _write(tmp_path, "p.md", "---\nprivate: true\n---\nneedle content")
+        store = _store(tmp_path)
+        results = store.search(MemoryQuery(terms=("needle",)), limit=5)
+        assert results == ()
+
+    def test_lexical_search_excludes_sensitive_note(self, tmp_path: Path) -> None:
+        _write(tmp_path, "s.md", "---\nsensitive: true\n---\nneedle content")
+        store = _store(tmp_path)
+        results = store.search(MemoryQuery(terms=("needle",)), limit=5)
+        assert results == ()
+
+    def test_lexical_search_excludes_friday_index_false_note(self, tmp_path: Path) -> None:
+        _write(tmp_path, "i.md", "---\nfriday_index: false\n---\nneedle content")
+        store = _store(tmp_path)
+        results = store.search(MemoryQuery(terms=("needle",)), limit=5)
+        assert results == ()
+
+    def test_lexical_search_still_returns_public_note_alongside_private(
+        self, tmp_path: Path
+    ) -> None:
+        _write(tmp_path, "p.md", "---\nprivate: true\n---\nneedle content")
+        _write(tmp_path, "g.md", "---\ntitle: Good\n---\nneedle content")
+        store = _store(tmp_path)
+        results = store.search(MemoryQuery(terms=("needle",)), limit=5)
+        assert [r.path for r in results] == ["g.md"]
+
+
+class TestScanCeiling:
+    def test_search_honors_directory_entry_scan_ceiling(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The raw rglob() enumeration itself must be bounded before
+        sorting -- not just the per-file scan loop -- so a pathological
+        vault can't force an unbounded path list into memory."""
+        import friday.infrastructure.memory.lexical_index as lexical_index_module
+
+        for i in range(10):
+            _write(tmp_path, f"{i}.md", f"---\ntitle: Note{i}\n---\ncontent")
+        monkeypatch.setattr(lexical_index_module, "_MAX_DIRECTORY_ENTRIES_SCANNED", 3)
+
+        store = _store(tmp_path)
+        results = store.search(MemoryQuery(titles=("Note",)), limit=100)
+        assert len(results) <= 3

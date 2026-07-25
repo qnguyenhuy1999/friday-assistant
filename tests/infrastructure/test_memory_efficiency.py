@@ -145,7 +145,7 @@ def test_high_degree_graph_and_duplicate_aliases_remain_bounded() -> None:
         ),
     )
 
-    context = retriever.retrieve(query=MemoryQuery(terms=("hub",)), source_snapshot_hash="source")
+    context = retriever.retrieve(query=MemoryQuery(terms=("hub",)))
 
     assert index.neighbor_calls == [("notes/hub.md", 1, 5)]
     assert len(store.reads) <= 3

@@ -288,3 +288,144 @@ def test_remaining_search_heading_miss_and_atomic_cleanup(
     with pytest.raises(OSError):
         store._atomic_write(tmp_path / "atomic.md", "content")
     assert not tuple(tmp_path.glob(".friday-*"))
+
+
+def test_lexical_retrieval_excludes_private_note(tmp_path: Path) -> None:
+    _write(tmp_path, "p.md", "---\nprivate: true\n---\nneedle content")
+    store = _store(tmp_path)
+    assert store.search_lexical(MemoryQuery(terms=("needle",)), limit=5) == ()
+
+
+def test_lexical_retrieval_excludes_sensitive_note(tmp_path: Path) -> None:
+    _write(tmp_path, "s.md", "---\nsensitive: true\n---\nneedle content")
+    store = _store(tmp_path)
+    assert store.search_lexical(MemoryQuery(terms=("needle",)), limit=5) == ()
+
+
+def test_lexical_retrieval_excludes_friday_index_false_note(tmp_path: Path) -> None:
+    _write(tmp_path, "i.md", "---\nfriday_index: false\n---\nneedle content")
+    store = _store(tmp_path)
+    assert store.search_lexical(MemoryQuery(terms=("needle",)), limit=5) == ()
+
+
+def test_read_excerpt_rechecks_eligibility(tmp_path: Path) -> None:
+    """A candidate must not bypass eligibility just because it names a path
+    that was never validated by included_paths() -- e.g. a structural index
+    result. read_excerpt is the single authoritative choke point."""
+    _write(tmp_path, "p.md", "---\nprivate: true\n---\nSECRET PROJECT INFO")
+    store = _store(tmp_path)
+    candidate = MemoryCandidate("p.md", "p", (RetrievalMethod.STRUCTURAL_NODE,), 1.0)
+
+    with pytest.raises(MemoryAccessDenied):
+        store.read_excerpt(candidate, max_chars=100)
+
+
+def test_structural_candidate_cannot_bypass_vault_policy(tmp_path: Path) -> None:
+    """A candidate path outside the include-glob policy (as a corrupt or
+    stale structural index could hand back) must also fail closed."""
+    _write(tmp_path, "Attachments/leak.md", "not really an attachment")
+    store = ObsidianVaultStore(
+        tmp_path, MemoryVaultPolicy(("**/*.md",), ("Attachments/**",), 20, 10000)
+    )
+    candidate = MemoryCandidate(
+        "Attachments/leak.md", "leak", (RetrievalMethod.STRUCTURAL_NODE,), 1.0
+    )
+
+    with pytest.raises(MemoryAccessDenied):
+        store.read_excerpt(candidate, max_chars=100)
+
+
+def test_create_loses_race_to_human_file_and_does_not_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """os.link fails atomically if the target already exists -- there is no
+    check-then-write window for a concurrent create to race through."""
+    store = _store(tmp_path)
+    target = tmp_path / "Friday/Inbox/new.md"
+    original_link = os.link
+
+    def race_then_link(source: str, dest: str) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("human content", encoding="utf-8")
+        original_link(source, dest)
+
+    monkeypatch.setattr(os, "link", race_then_link)
+
+    with pytest.raises(MemoryWriteDenied):
+        store.write_candidate(_candidate("Friday/Inbox/new.md"))
+
+    assert target.read_text() == "human content"
+
+
+def test_append_loses_race_to_human_edit_and_returns_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The append path re-reads and re-hashes the note immediately before
+    publication, closing the window between the initial check and the
+    write where a human edit could otherwise be silently clobbered."""
+    store = _store(tmp_path)
+    original = "---\nfriday_managed: true\n---\nold"
+    _write(tmp_path, "Friday/Inbox/a.md", original)
+    expected_hash = hashlib.sha256(original.encode()).hexdigest()
+    note_path = tmp_path / "Friday/Inbox/a.md"
+
+    calls = 0
+    original_require_text = ObsidianVaultStore._require_text
+
+    def race_on_second_read(self: ObsidianVaultStore, relative: str) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            note_path.write_text("---\nfriday_managed: true\n---\nhuman-edit", encoding="utf-8")
+        return original_require_text(self, relative)
+
+    monkeypatch.setattr(ObsidianVaultStore, "_require_text", race_on_second_read)
+
+    append = _candidate(
+        "Friday/Inbox/a.md",
+        operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
+        expected_content_hash=expected_hash,
+        frontmatter=(),
+    )
+    with pytest.raises(MemoryWriteConflict):
+        store.write_candidate(append)
+
+    assert "human-edit" in note_path.read_text()
+
+
+def test_two_concurrent_appends_only_one_expected_hash_wins(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    original = "---\nfriday_managed: true\n---\nold"
+    _write(tmp_path, "Friday/Inbox/a.md", original)
+    expected_hash = hashlib.sha256(original.encode()).hexdigest()
+
+    def append_attempt() -> MemoryWriteCandidate:
+        return _candidate(
+            "Friday/Inbox/a.md",
+            operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
+            expected_content_hash=expected_hash,
+            frontmatter=(),
+            payload="from-writer",
+        )
+
+    first = store.write_candidate(append_attempt())
+    assert first.created is False
+
+    with pytest.raises(MemoryWriteConflict):
+        store.write_candidate(append_attempt())
+
+    content = (tmp_path / "Friday/Inbox/a.md").read_text()
+    assert content.count("from-writer") == 1
+
+
+def test_included_paths_honors_directory_entry_scan_ceiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The raw rglob() enumeration itself must be bounded before sorting --
+    not just the accepted-file count -- so a pathological vault can't force
+    an unbounded path list into memory."""
+    for i in range(10):
+        _write(tmp_path, f"{i}.md", "x")
+    monkeypatch.setattr(obsidian_vault, "_MAX_DIRECTORY_ENTRIES_SCANNED", 3)
+
+    assert len(_store(tmp_path, maximum=100).included_paths()) <= 3

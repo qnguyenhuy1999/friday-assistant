@@ -18,6 +18,10 @@ from datetime import datetime
 from types import TracebackType
 from typing import Protocol, Self
 
+from friday.application.memory.ports import (
+    MemoryIndexSnapshotRepository,
+    MemoryRetrievalRecordRepository,
+)
 from friday.domain.approval import ApprovalRequest
 from friday.domain.artifact import Artifact
 from friday.domain.event import RunEvent
@@ -290,6 +294,10 @@ class UnitOfWork(Protocol):
     def task_events(self) -> TaskEventStore: ...
     @property
     def work_queue(self) -> RunWorkQueue: ...
+    @property
+    def memory_index_snapshots(self) -> MemoryIndexSnapshotRepository: ...
+    @property
+    def memory_retrieval_records(self) -> MemoryRetrievalRecordRepository: ...
 
     def __enter__(self) -> Self: ...
     def __exit__(

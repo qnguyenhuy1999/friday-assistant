@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import os
-import re
 import tempfile
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
@@ -25,7 +25,9 @@ from friday.application.memory.models import (
     MemoryWriteResult,
     RetrievalMethod,
 )
+from friday.infrastructure.memory.file_lock import FileLock
 from friday.infrastructure.memory.markdown_parser import parse_markdown
+from friday.infrastructure.memory.note_eligibility import is_note_private
 from friday.infrastructure.memory.vault_paths import (
     is_confined_symlink,
     resolve_vault_path,
@@ -35,6 +37,12 @@ from friday.infrastructure.memory.vault_paths import (
 
 _DEFAULT_MANAGED_ROOT = "Friday"
 _BUILTIN_EXCLUSIONS = (".obsidian/**", ".trash/**", ".git/**", ".claude/**", "graphify-out/**")
+_WRITE_LOCK_TTL_SECONDS = 30.0
+_MAX_DIRECTORY_ENTRIES_SCANNED = 200_000
+"""Hard ceiling on raw .md paths pulled from rglob() before sorting/capping
+by policy -- protects against a pathological vault (or a misconfigured
+vault_root pointed at something enormous) from materializing an unbounded
+path list in memory before max_files ever gets a chance to apply."""
 
 
 @dataclass(slots=True)
@@ -55,7 +63,8 @@ class ObsidianVaultStore:
         """Return included Markdown paths in stable order; exclusions win."""
         self.cap_hit = False
         included: list[str] = []
-        for file_path in sorted(self.root.rglob("*.md")):
+        candidates = itertools.islice(self.root.rglob("*.md"), _MAX_DIRECTORY_ENTRIES_SCANNED)
+        for file_path in sorted(candidates):
             try:
                 if not is_confined_symlink(self.root, file_path):
                     continue
@@ -105,9 +114,20 @@ class ObsidianVaultStore:
         return tuple(results)
 
     def read_excerpt(self, candidate: MemoryCandidate, *, max_chars: int) -> MemoryExcerpt:
+        """Authoritative read for every retrieval path (lexical or structural).
+
+        Re-checks eligibility here rather than trusting the caller's
+        candidate: a structural (Graphify) candidate never passed through
+        ``included_paths()``, so this is the only place that can fail closed
+        on a private/sensitive/excluded note before its text leaves the
+        vault boundary."""
         if max_chars <= 0:
             raise ValueError("max_chars must be positive")
+        if not self._path_is_included(candidate.path):
+            raise MemoryAccessDenied("note is not eligible for retrieval")
         text = self._require_text(candidate.path)
+        if self._is_private(text):
+            raise MemoryAccessDenied("note is not eligible for retrieval")
         parsed = parse_markdown(text)
         lines = text.splitlines(keepends=True)
         heading = candidate.headings[0] if candidate.headings else None
@@ -136,15 +156,33 @@ class ObsidianVaultStore:
         if not self._is_managed(candidate.path):
             raise MemoryWriteDenied("write target is outside the managed root")
         path = resolve_vault_path(self.root, candidate.path)
-        if candidate.operation is MemoryWriteOperation.CREATE_NOTE:
-            if path.exists():
-                raise MemoryWriteDenied("refusing to overwrite an existing note")
-            content = _render_created_note(candidate)
-            self._atomic_write(path, content)
-            return MemoryWriteResult(
-                candidate.path, candidate.operation, _hash(content), True, len(content.encode())
-            )
-        return self._append(path, candidate)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock = self._note_lock(path)
+        if not lock.acquire():
+            raise MemoryWriteConflict("another write to this note is in progress")
+        try:
+            if candidate.operation is MemoryWriteOperation.CREATE_NOTE:
+                content = _render_created_note(candidate)
+                self._atomic_create(path, content)
+                return MemoryWriteResult(
+                    candidate.path,
+                    candidate.operation,
+                    _hash(content),
+                    True,
+                    len(content.encode()),
+                )
+            return self._append(path, candidate)
+        finally:
+            lock.release()
+
+    def _note_lock(self, path: Path) -> FileLock:
+        """Serialize Friday's own concurrent writers for one note. A human
+        editor bypasses this (it has no reason to know about it), so
+        _append still re-verifies the content hash immediately before
+        publication rather than relying on the lock alone."""
+        return FileLock(
+            path.parent / f".friday-lock-{path.name}", _WRITE_LOCK_TTL_SECONDS, "memory-write"
+        )
 
     def _append(self, path: Path, candidate: MemoryWriteCandidate) -> MemoryWriteResult:
         if not path.exists():
@@ -160,10 +198,35 @@ class ObsidianVaultStore:
             + ("" if before.endswith(("\n", "\r")) else newline)
             + candidate.payload.replace("\n", newline)
         )
+        # Re-verify immediately before publication: the lock above only
+        # serializes Friday's own writers, so this closes as much of the
+        # remaining external-mutation window as possible.
+        current = self._require_text(candidate.path)
+        if _hash(current) != candidate.expected_content_hash:
+            raise MemoryWriteConflict("managed note changed before append")
         self._atomic_write(path, content)
         return MemoryWriteResult(
             candidate.path, candidate.operation, _hash(content), False, len(content.encode())
         )
+
+    def _atomic_create(self, path: Path, content: str) -> None:
+        """Publish via a hard link, which atomically fails if *path* already
+        exists -- unlike os.replace(), there is no check-then-write window
+        for a concurrent create to race through."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(prefix=".friday-", dir=path.parent)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(content.encode("utf-8"))
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                raise MemoryWriteDenied("refusing to overwrite an existing note") from None
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
     def _read_text(self, relative: str) -> str | None:
         try:
@@ -195,19 +258,14 @@ class ObsidianVaultStore:
         return any(_glob_matches(relative, pattern) for pattern in self.policy.include_globs)
 
     def _is_private(self, text: str) -> bool:
-        frontmatter = parse_markdown(text).frontmatter
-        index_disabled = bool(re.search(r"(?im)^friday_index:\s*(?:false|no|0)\s*$", text))
-        return index_disabled or frontmatter.private or frontmatter.sensitive
+        return is_note_private(text)
 
     def _is_managed(self, relative: str) -> bool:
         return relative.startswith(f"{self.managed_root.rstrip('/')}/") and relative.endswith(".md")
 
     def _remaining_candidates(self, after: str) -> tuple[Path, ...]:
-        return tuple(
-            path
-            for path in self.root.rglob("*.md")
-            if path.relative_to(self.root).as_posix() > after
-        )
+        candidates = itertools.islice(self.root.rglob("*.md"), _MAX_DIRECTORY_ENTRIES_SCANNED)
+        return tuple(path for path in candidates if path.relative_to(self.root).as_posix() > after)
 
     def _atomic_write(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

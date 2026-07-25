@@ -580,6 +580,12 @@ class MemoryRetrievalRecordRepository:
                 "item cap per record"
             )
         self._session.add(memory_retrieval_record_to_row(record))
+        # No ORM relationship links record and item rows, so SQLAlchemy's
+        # flush-time dependency sort has no way to order the parent insert
+        # before the children's -- force it explicitly or a real commit (as
+        # opposed to a mid-transaction flush a caller never commits) can
+        # attempt the item inserts first and fail the record_id FK.
+        self._session.flush()
         for item in record.items:
             self._session.add(memory_retrieval_item_to_row(item, record_id=record.id))
 

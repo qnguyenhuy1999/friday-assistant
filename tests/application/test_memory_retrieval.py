@@ -101,7 +101,7 @@ def _retriever(store: FakeStore, index: FakeIndex, **settings: int) -> MemoryRet
 
 def test_retrieves_lexical_candidate_with_store_text_and_provenance() -> None:
     store = FakeStore((_candidate("a.md"),), {"a.md": "canonical text"})
-    context = _retriever(store, FakeIndex()).retrieve(query=_query(), source_snapshot_hash="source")
+    context = _retriever(store, FakeIndex()).retrieve(query=_query())
 
     assert context.mode is RetrievalMode.HYBRID
     assert context.excerpts[0].text == "canonical text"
@@ -112,9 +112,7 @@ def test_retrieves_lexical_candidate_with_store_text_and_provenance() -> None:
 def test_uses_authoritative_store_text_for_structural_candidate() -> None:
     structural = _candidate("graph.md", methods=(RetrievalMethod.STRUCTURAL_NODE,), distance=1)
     store = FakeStore(texts={"graph.md": "vault text"})
-    context = _retriever(store, FakeIndex(structural=(structural,))).retrieve(
-        query=_query(), source_snapshot_hash="source"
-    )
+    context = _retriever(store, FakeIndex(structural=(structural,))).retrieve(query=_query())
 
     assert context.excerpts[0].text == "vault text"
     assert context.excerpts[0].title == "store graph.md"
@@ -127,9 +125,7 @@ def test_merges_duplicate_aliases_methods_and_boosts_rank() -> None:
     )
     other = _candidate("other.md", score=1.5)
     store = FakeStore((lexical, other), {"notes/plan.md": "plan", "other.md": "other"})
-    context = _retriever(store, FakeIndex(structural=(structural,))).retrieve(
-        query=_query(), source_snapshot_hash="source"
-    )
+    context = _retriever(store, FakeIndex(structural=(structural,))).retrieve(query=_query())
 
     assert [item.path for item in context.excerpts] == ["notes/plan.md", "other.md"]
     assert context.provenance[0].methods == (
@@ -140,7 +136,7 @@ def test_merges_duplicate_aliases_methods_and_boosts_rank() -> None:
 
 def test_orders_equal_scores_by_path_deterministically() -> None:
     store = FakeStore((_candidate("z.md"), _candidate("a.md")), {"a.md": "a", "z.md": "z"})
-    context = _retriever(store, FakeIndex()).retrieve(query=_query(), source_snapshot_hash="source")
+    context = _retriever(store, FakeIndex()).retrieve(query=_query())
 
     assert [excerpt.path for excerpt in context.excerpts] == ["a.md", "z.md"]
 
@@ -159,7 +155,7 @@ def test_enforces_candidate_excerpt_and_context_bounds() -> None:
         max_total_context_chars=6,
         max_graph_depth=1,
         max_graph_nodes_visited=1,
-    ).retrieve(query=_query(), source_snapshot_hash="source")
+    ).retrieve(query=_query())
 
     assert [excerpt.path for excerpt in context.excerpts] == ["a.md", "b.md"]
     assert context.total_chars == 6
@@ -178,7 +174,7 @@ def test_stops_before_an_excerpt_that_exceeds_total_budget() -> None:
         max_total_context_chars=3,
         max_graph_depth=1,
         max_graph_nodes_visited=1,
-    ).retrieve(query=_query(), source_snapshot_hash="source")
+    ).retrieve(query=_query())
 
     assert context.excerpts == ()
     assert context.provenance == ()
@@ -195,7 +191,7 @@ def test_stops_when_excerpt_count_reaches_its_bound() -> None:
         max_total_context_chars=10,
         max_graph_depth=1,
         max_graph_nodes_visited=1,
-    ).retrieve(query=_query(), source_snapshot_hash="source")
+    ).retrieve(query=_query())
 
     assert [excerpt.path for excerpt in context.excerpts] == ["a.md"]
 
@@ -211,7 +207,7 @@ def test_stops_when_excerpt_count_reaches_its_bound() -> None:
 def test_degrades_to_lexical_only_for_unusable_index(state: IndexState, reason: str) -> None:
     store = FakeStore((_candidate("a.md"),), {"a.md": "a"})
     index = FakeIndex(state=state, structural=(_candidate("graph.md"),))
-    context = _retriever(store, index).retrieve(query=_query(), source_snapshot_hash="source")
+    context = _retriever(store, index).retrieve(query=_query())
 
     assert context.mode is RetrievalMode.LEXICAL_ONLY
     assert reason in (context.degraded_reason or "")
@@ -220,9 +216,7 @@ def test_degrades_to_lexical_only_for_unusable_index(state: IndexState, reason: 
 
 def test_disabled_index_returns_disabled_mode() -> None:
     store = FakeStore((_candidate("a.md"),), {"a.md": "a"})
-    context = _retriever(store, FakeIndex(state=IndexState.DISABLED)).retrieve(
-        query=_query(), source_snapshot_hash="source"
-    )
+    context = _retriever(store, FakeIndex(state=IndexState.DISABLED)).retrieve(query=_query())
 
     assert context.mode is RetrievalMode.DISABLED
     assert context.degraded_reason == "structural index is disabled"
@@ -230,12 +224,8 @@ def test_disabled_index_returns_disabled_mode() -> None:
 
 def test_structural_status_or_search_failures_degrade_without_raising() -> None:
     store = FakeStore((_candidate("a.md"),), {"a.md": "a"})
-    status_context = _retriever(store, FakeIndex(fail_status=True)).retrieve(
-        query=_query(), source_snapshot_hash="source"
-    )
-    search_context = _retriever(store, FakeIndex(fail_search=True)).retrieve(
-        query=_query(), source_snapshot_hash="source"
-    )
+    status_context = _retriever(store, FakeIndex(fail_status=True)).retrieve(query=_query())
+    search_context = _retriever(store, FakeIndex(fail_search=True)).retrieve(query=_query())
 
     assert status_context.mode is RetrievalMode.LEXICAL_ONLY
     assert search_context.mode is RetrievalMode.LEXICAL_ONLY
@@ -244,9 +234,7 @@ def test_structural_status_or_search_failures_degrade_without_raising() -> None:
 
 
 def test_lexical_failure_returns_empty_unavailable_context() -> None:
-    context = _retriever(FakeStore(fail_search=True), FakeIndex()).retrieve(
-        query=_query(), source_snapshot_hash="source"
-    )
+    context = _retriever(FakeStore(fail_search=True), FakeIndex()).retrieve(query=_query())
 
     assert context.mode is RetrievalMode.UNAVAILABLE
     assert context.excerpts == ()
@@ -267,7 +255,7 @@ def test_neighbor_search_honors_depth_and_node_bound() -> None:
         max_total_context_chars=20,
         max_graph_depth=2,
         max_graph_nodes_visited=1,
-    ).retrieve(query=_query(), source_snapshot_hash="source")
+    ).retrieve(query=_query())
 
     assert index.calls == [("root.md", 2, 1)]
 
@@ -287,7 +275,7 @@ def test_neighbor_search_stops_after_visiting_its_node_bound() -> None:
         max_total_context_chars=20,
         max_graph_depth=1,
         max_graph_nodes_visited=1,
-    ).retrieve(query=_query(), source_snapshot_hash="source")
+    ).retrieve(query=_query())
 
     assert index.calls == [("first.md", 1, 1)]
 
@@ -304,7 +292,7 @@ def test_skips_unreadable_excerpt_without_losing_other_provenance() -> None:
         {"a.md": "a", "b.md": "b"},
         fail_reads={"a.md"},
     )
-    context = _retriever(store, FakeIndex()).retrieve(query=_query(), source_snapshot_hash="source")
+    context = _retriever(store, FakeIndex()).retrieve(query=_query())
 
     assert [excerpt.path for excerpt in context.excerpts] == ["b.md"]
     assert context.provenance[0].rank == 0

@@ -6,7 +6,6 @@ and edge to MemoryCandidate."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections import deque
 from dataclasses import dataclass
@@ -20,6 +19,7 @@ from friday.application.memory.models import (
     MemoryQuery,
     RetrievalMethod,
 )
+from friday.application.memory.ports import MemoryStore
 from friday.infrastructure.memory.index_metadata import IndexMetadata
 
 _DEFAULT_MAX_GRAPH_BYTES = 100 * 1024 * 1024  # 100 MiB
@@ -48,18 +48,6 @@ _TOP_LEVEL_KEYS: frozenset[str] = frozenset(
 
 _DOCUMENT_FILE_TYPES: frozenset[str] = frozenset({"document"})
 
-_EXCLUDED_SOURCE_DIRS: frozenset[str] = frozenset(
-    {
-        ".obsidian",
-        ".claude",
-        ".git",
-        "graphify-out",
-        "Attachments",
-        "Templates",
-        "Archive",
-    }
-)
-
 
 @dataclass(frozen=True, slots=True)
 class GraphifyJsonIndexSettings:
@@ -71,51 +59,6 @@ class GraphifyJsonIndexSettings:
     def __post_init__(self) -> None:
         if self.max_graph_bytes <= 0:
             raise ValueError("max_graph_bytes must be positive")
-
-
-def _vault_source_hash(vault_root: Path) -> str:
-    """Deterministic SHA-256 of every .md file in the vault.
-
-    Excludes directories listed in ``_EXCLUDED_SOURCE_DIRS``.  The hash
-    covers each file's vault-relative POSIX path and its raw bytes so that
-    any rename, deletion, or content change produces a different digest.
-    """
-    digest = hashlib.sha256()
-    try:
-        root = vault_root.resolve(strict=False)
-    except OSError:
-        return digest.hexdigest()
-    if not root.is_dir():
-        return digest.hexdigest()
-    all_md: list[Path] = []
-    try:
-        for candidate in sorted(root.rglob("*.md"), key=lambda p: p.relative_to(root).as_posix()):
-            if not candidate.is_file():
-                continue
-            try:
-                rel = candidate.relative_to(root).as_posix()
-            except ValueError:
-                continue
-            parts = rel.split("/")
-            if any(part in _EXCLUDED_SOURCE_DIRS for part in parts):
-                continue
-            all_md.append(candidate)
-    except OSError:
-        pass
-    for file in all_md:
-        try:
-            rel = file.relative_to(root).as_posix()
-        except ValueError:
-            continue
-        digest.update(rel.encode("utf-8"))
-        digest.update(b"\x00")
-        try:
-            content = file.read_bytes()
-        except OSError:
-            continue
-        digest.update(content)
-        digest.update(b"\x00")
-    return digest.hexdigest()
 
 
 def _check_path_safe(source_file: str) -> str | None:
@@ -187,8 +130,13 @@ class GraphifyJsonIndex:
     ``Run`` from structural retrieval.
     """
 
-    def __init__(self, settings: GraphifyJsonIndexSettings) -> None:
+    def __init__(self, settings: GraphifyJsonIndexSettings, store: MemoryStore) -> None:
+        """``store`` supplies the curated source-set hash -- the same one
+        the builder recorded in metadata -- so freshness is judged by the
+        one authoritative eligibility definition, not an independent
+        full-vault scan that would flag excluded-note edits as staleness."""
         self._settings = settings
+        self._store = store
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -321,8 +269,12 @@ class GraphifyJsonIndex:
                 failure_code=failure,
             )
 
-        # Freshness
-        current_hash = _vault_source_hash(self._settings.vault_root)
+        # Freshness: compare against the store's curated snapshot hash, the
+        # same source-set algorithm the builder used to stamp metadata.
+        try:
+            current_hash = self._store.source_snapshot_hash()
+        except Exception:
+            current_hash = None
         state = (
             IndexState.FRESH if current_hash == metadata.source_snapshot_hash else IndexState.STALE
         )

@@ -81,8 +81,20 @@ class MemoryRetriever(MemoryRetrieverPort):
         self._structural_index = structural_index
         self._settings = settings or MemoryRetrievalSettings()
 
-    def retrieve(self, *, query: MemoryQuery, source_snapshot_hash: str) -> MemoryContext:
+    def retrieve(self, *, query: MemoryQuery) -> MemoryContext:
+        """Compute the source snapshot hash here rather than accepting it
+        from the caller: the processor has no legitimate way to know the
+        vault's true snapshot, and a caller-supplied value would let
+        provenance report an arbitrary, unverifiable source."""
         state, degraded_reason = self._index_state()
+        try:
+            source_snapshot_hash = self._store.source_snapshot_hash()
+        except Exception:
+            return self._empty_context(
+                RetrievalMode.UNAVAILABLE,
+                "memory source snapshot is unavailable",
+                state,
+            )
         try:
             lexical = self._store.search_lexical(query, limit=self._settings.max_candidates)
         except Exception:

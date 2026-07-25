@@ -84,19 +84,23 @@ class GraphifyCliIndexBuilder:
                 request, started, IndexState.DISABLED, None, None, 0, 0, "executable_missing"
             )
         staging = vault_dir / "staging"
+        source_corpus = vault_dir / "source"
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir()
+        shutil.rmtree(source_corpus, ignore_errors=True)
+        source_corpus.mkdir()
         try:
+            self._stage_source_corpus(request, source_corpus)
             version = self._version(executable or self._settings.executable)
             result = _run_bounded(
                 [
                     executable or self._settings.executable,
                     "extract",
-                    str(self._settings.vault_root),
+                    str(source_corpus),
                     "--out",
                     str(staging),
                 ],
-                self._settings.vault_root,
+                source_corpus,
                 self._settings.timeout_seconds,
                 self._settings.max_stdout_bytes,
                 self._settings.max_stderr_bytes,
@@ -158,6 +162,29 @@ class GraphifyCliIndexBuilder:
             )
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+            shutil.rmtree(source_corpus, ignore_errors=True)
+
+    def _stage_source_corpus(self, request: IndexBuildRequest, destination: Path) -> None:
+        """Copy only the caller-approved included paths into a staging
+        corpus outside the vault -- Graphify must never see excluded,
+        private, or otherwise ineligible notes."""
+        for relative in request.included_paths:
+            source = self._resolve_within_vault(relative)
+            if source is None:
+                continue
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copy2(source, target)
+            except OSError:
+                continue
+
+    def _resolve_within_vault(self, relative: str) -> Path | None:
+        candidate = (self._settings.vault_root / relative).resolve(strict=False)
+        root = self._settings.vault_root.resolve(strict=False)
+        if candidate.is_relative_to(root) and candidate.is_file():
+            return candidate
+        return None
 
     def _version(self, executable: str) -> str:
         result = _run_bounded(

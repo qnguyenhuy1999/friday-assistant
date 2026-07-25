@@ -23,7 +23,9 @@ from friday.application.memory.index_coordination import (
 )
 from friday.application.memory.models import (
     IndexBuildRequest,
+    IndexSnapshot,
     IndexState,
+    IndexStatus,
     MemoryCandidate,
     MemoryContext,
     MemoryExcerpt,
@@ -34,6 +36,7 @@ from friday.application.memory.models import (
     RetrievalMode,
 )
 from friday.application.memory.retrieval import MemoryRetrievalSettings, MemoryRetriever
+from friday.application.ports import UnitOfWorkFactory
 from friday.application.retry_policy import RetryPolicy
 from friday.application.tool_authorization import RequestToolApproval
 from friday.application.worker_coordination import (
@@ -62,6 +65,7 @@ from friday.infrastructure.tools.gateway import (
     WorkspaceToolGateway,
     WorkspaceToolGatewaySettings,
 )
+from friday.infrastructure.tools.memory_tools import MemoryToolSettings
 
 
 @dataclass(slots=True)
@@ -75,9 +79,29 @@ class Worker:
 class _DisabledMemoryRetriever:
     """Explicit no-I/O retriever used whenever memory is not safely configured."""
 
-    def retrieve(self, *, query: MemoryQuery, source_snapshot_hash: str) -> MemoryContext:
-        del query, source_snapshot_hash
+    def retrieve(self, *, query: MemoryQuery) -> MemoryContext:
+        del query
         return MemoryContext(RetrievalMode.DISABLED, (), (), None, IndexState.DISABLED, 0)
+
+
+class _DisabledStructuralIndex:
+    """Structural index used whenever Graphify is disabled: always reports
+    MISSING so a stale on-disk graph.json from a previous run can never
+    influence retrieval. The flag must guarantee zero structural influence,
+    not just zero rebuilds. MISSING (not DISABLED) keeps retrieval in its
+    normal lexical-only mode -- lexical search is unaffected by this flag,
+    only structural search is."""
+
+    def status(self) -> IndexStatus:
+        return IndexStatus(IndexState.MISSING, None, None, None, 0, 0, None, None)
+
+    def search(self, query: MemoryQuery, *, limit: int) -> tuple[MemoryCandidate, ...]:
+        del query, limit
+        return ()
+
+    def neighbors(self, path: str, *, depth: int, max_nodes: int) -> tuple[MemoryCandidate, ...]:
+        del path, depth, max_nodes
+        return ()
 
 
 class _LexicalMemoryStore:
@@ -100,14 +124,39 @@ class _LexicalMemoryStore:
         return self._vault.write_candidate(candidate)
 
 
+class _UowBackedIndexSnapshotRepository:
+    """Adapts the durable snapshot repository to BuildMemoryIndex's
+    UnitOfWork-free call site: index builds happen outside any Run's
+    transaction, so each call here opens its own short transaction and
+    commits immediately rather than relying on a caller to do so."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def add(self, snapshot: IndexSnapshot) -> None:
+        with self._uow_factory() as uow:
+            uow.memory_index_snapshots.add(snapshot)
+            uow.commit()
+
+    def latest(self) -> IndexSnapshot | None:
+        with self._uow_factory() as uow:
+            return uow.memory_index_snapshots.latest()
+
+    def mark_stale(self, snapshot_id: str) -> None:
+        with self._uow_factory() as uow:
+            uow.memory_index_snapshots.mark_stale(snapshot_id)
+            uow.commit()
+
+
 @dataclass(frozen=True, slots=True)
 class _MemoryStack:
     retriever: MemoryRetriever | _DisabledMemoryRetriever
     refresh_index: RefreshMemoryIndexIfStale | None
     maintenance_interval_seconds: float | None
+    tool_settings: MemoryToolSettings | None
 
 
-def _memory_stack() -> _MemoryStack:
+def _memory_stack(uow_factory: UnitOfWorkFactory) -> _MemoryStack:
     """Construct opt-in memory dependencies without ever scanning an invalid vault."""
     try:
         settings = MemorySettings.from_env()
@@ -129,6 +178,28 @@ def _memory_stack() -> _MemoryStack:
         settings.vault_root, policy, max_files_scanned=settings.index_max_files_per_scan
     )
     store = _LexicalMemoryStore(vault, lexical)
+    tool_settings = MemoryToolSettings(
+        vault_root=settings.vault_root,
+        policy=policy,
+        max_search_limit=settings.max_candidates,
+        max_excerpt_chars=settings.max_excerpt_chars,
+    )
+    retrieval_settings = MemoryRetrievalSettings(
+        max_candidates=settings.max_candidates,
+        max_excerpts=settings.max_excerpts,
+        max_excerpt_chars=settings.max_excerpt_chars,
+        max_total_context_chars=settings.max_total_context_chars,
+        max_graph_depth=settings.max_graph_depth,
+        max_graph_nodes_visited=settings.max_graph_nodes_visited,
+    )
+
+    if not settings.graphify_enabled:
+        # Fail-closed: no GraphifyJsonIndex is even constructed, so a stale
+        # active/graph.json left on disk from a previous run cannot leak
+        # structural results back into retrieval.
+        retriever = MemoryRetriever(store, _DisabledStructuralIndex(), settings=retrieval_settings)
+        return _MemoryStack(retriever, None, None, tool_settings)
+
     vault_identity_hash = hashlib.sha256(str(vault.root).encode("utf-8")).hexdigest()
     index = GraphifyJsonIndex(
         GraphifyJsonIndexSettings(
@@ -136,22 +207,10 @@ def _memory_stack() -> _MemoryStack:
             index_root=settings.graphify_index_root,
             vault_identity_hash=vault_identity_hash,
             max_graph_bytes=settings.graphify_max_graph_bytes,
-        )
-    )
-    retriever = MemoryRetriever(
-        store,
-        index,
-        settings=MemoryRetrievalSettings(
-            max_candidates=settings.max_candidates,
-            max_excerpts=settings.max_excerpts,
-            max_excerpt_chars=settings.max_excerpt_chars,
-            max_total_context_chars=settings.max_total_context_chars,
-            max_graph_depth=settings.max_graph_depth,
-            max_graph_nodes_visited=settings.max_graph_nodes_visited,
         ),
+        store,
     )
-    if not settings.graphify_enabled:
-        return _MemoryStack(retriever, None, None)
+    retriever = MemoryRetriever(store, index, settings=retrieval_settings)
 
     builder = GraphifyCliIndexBuilder(
         GraphifyCliSettings(
@@ -175,14 +234,16 @@ def _memory_stack() -> _MemoryStack:
             settings.graphify_max_graph_bytes,
         )
 
+    snapshots = _UowBackedIndexSnapshotRepository(uow_factory)
     refresh = RefreshMemoryIndexIfStale(
-        InspectMemoryIndex(index, store), BuildMemoryIndex(builder, store, request_factory)
+        InspectMemoryIndex(index, store),
+        BuildMemoryIndex(builder, store, request_factory, snapshots),
     )
-    return _MemoryStack(retriever, refresh, settings.index_maintenance_seconds)
+    return _MemoryStack(retriever, refresh, settings.index_maintenance_seconds, tool_settings)
 
 
 def _disabled_memory_stack() -> _MemoryStack:
-    return _MemoryStack(_DisabledMemoryRetriever(), None, None)
+    return _MemoryStack(_DisabledMemoryRetriever(), None, None, None)
 
 
 def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
@@ -195,17 +256,6 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
         max_stderr_bytes=runtime.claude_max_stderr_bytes,
     )
     verify_brain_only_support(claude_settings)  # raises BrainUnavailable
-    gateway = WorkspaceToolGateway(  # raises WorkspaceAccessDenied
-        WorkspaceToolGatewaySettings(
-            workspace_root=runtime.workspace_root,
-            max_file_bytes=runtime.tool_max_file_bytes,
-            max_list_entries=runtime.tool_max_list_entries,
-            process_timeout_seconds=runtime.tool_timeout_seconds,
-            process_max_timeout_seconds=runtime.tool_max_timeout_seconds,
-            max_stdout_bytes=runtime.tool_max_stdout_bytes,
-            max_stderr_bytes=runtime.tool_max_stderr_bytes,
-        )
-    )
 
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
@@ -217,7 +267,19 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
         multiplier=settings.retry_multiplier,
         max_delay=settings.retry_max_delay,
     )
-    memory = _memory_stack()
+    memory = _memory_stack(uow_factory)
+    gateway = WorkspaceToolGateway(  # raises WorkspaceAccessDenied
+        WorkspaceToolGatewaySettings(
+            workspace_root=runtime.workspace_root,
+            max_file_bytes=runtime.tool_max_file_bytes,
+            max_list_entries=runtime.tool_max_list_entries,
+            process_timeout_seconds=runtime.tool_timeout_seconds,
+            process_max_timeout_seconds=runtime.tool_max_timeout_seconds,
+            max_stdout_bytes=runtime.tool_max_stdout_bytes,
+            max_stderr_bytes=runtime.tool_max_stderr_bytes,
+            memory=memory.tool_settings,
+        )
+    )
 
     brain = ClaudeCliBrainRuntime(claude_settings)
     processor = AgentRunProcessor(

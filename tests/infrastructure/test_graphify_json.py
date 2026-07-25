@@ -10,15 +10,15 @@ from typing import Any
 
 import pytest
 
-from friday.application.memory.models import IndexState, MemoryQuery
+from friday.application.memory.models import IndexState, MemoryQuery, MemoryVaultPolicy
 from friday.infrastructure.memory.graphify_json import (
     GraphifyJsonIndex,
     GraphifyJsonIndexSettings,
     _check_graph_shape,
     _check_path_safe,
-    _vault_source_hash,
 )
 from friday.infrastructure.memory.index_metadata import IndexMetadata
+from friday.infrastructure.memory.obsidian_vault import ObsidianVaultStore
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -140,6 +140,13 @@ def _make_settings(
     )
 
 
+def _store_for(vault_root: Path) -> ObsidianVaultStore:
+    """A permissive store mirroring what the real ObsidianVaultStore would
+    compute -- used so tests can supply GraphifyJsonIndex the same curated
+    source-set hash the builder would have stamped into metadata."""
+    return ObsidianVaultStore(vault_root, MemoryVaultPolicy(("**/*.md",), (), 10_000, 10_000_000))
+
+
 def _active_dir(settings: GraphifyJsonIndexSettings) -> Path:
     return settings.index_root / settings.vault_identity_hash[:32] / "active"
 
@@ -228,61 +235,6 @@ def test_settings_rejects_negative_max_graph_bytes():
             vault_identity_hash="h",
             max_graph_bytes=-1,
         )
-
-
-# ---------------------------------------------------------------------------
-# _vault_source_hash
-# ---------------------------------------------------------------------------
-
-
-def test_vault_source_hash_empty(tmp_path):
-    vault = tmp_path / "vault"
-    vault.mkdir()
-    assert _vault_source_hash(vault) == _empty_hash()
-
-
-def test_vault_source_hash_includes_md_content(tmp_path):
-    vault = tmp_path / "vault"
-    (vault / "00-Inbox").mkdir(parents=True)
-    (vault / "00-Inbox" / "a.md").write_text("hello", encoding="utf-8")
-    h1 = _vault_source_hash(vault)
-    (vault / "00-Inbox" / "b.md").write_text("world", encoding="utf-8")
-    h2 = _vault_source_hash(vault)
-    assert h1 != h2
-    assert h1 != _empty_hash()
-
-
-def test_vault_source_hash_changes_on_rename(tmp_path):
-    vault = tmp_path / "vault"
-    (vault / "00-Inbox").mkdir(parents=True)
-    (vault / "00-Inbox" / "a.md").write_text("data", encoding="utf-8")
-    h1 = _vault_source_hash(vault)
-    (vault / "00-Inbox" / "a.md").rename(vault / "00-Inbox" / "b.md")
-    h2 = _vault_source_hash(vault)
-    assert h1 != h2
-
-
-def test_vault_source_hash_excludes_dirs(tmp_path):
-    vault = tmp_path / "vault"
-    (vault / "00-Inbox").mkdir(parents=True)
-    (vault / "00-Inbox" / "keep.md").write_text("keep", encoding="utf-8")
-    (vault / ".obsidian").mkdir(parents=True)
-    (vault / ".obsidian" / "cfg.md").write_text("secret", encoding="utf-8")
-    (vault / ".claude").mkdir(parents=True)
-    (vault / ".claude" / "cl.md").write_text("claude", encoding="utf-8")
-    h = _vault_source_hash(vault)
-    assert "keep" in (vault / "00-Inbox" / "keep.md").read_text(encoding="utf-8")
-    assert h != _empty_hash()
-
-
-def test_vault_source_hash_non_existent_root(tmp_path):
-    assert _vault_source_hash(tmp_path / "nonexistent") == _empty_hash()
-
-
-def test_vault_source_hash_non_dir_path(tmp_path):
-    f = tmp_path / "file"
-    f.write_text("x", encoding="utf-8")
-    assert _vault_source_hash(f) == _empty_hash()
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +335,8 @@ def test_graph_shape_valid():
 
 
 def test_status_missing_when_active_dir_absent(tmp_path):
-    idx = GraphifyJsonIndex(_make_settings(tmp_path))
+    settings = _make_settings(tmp_path)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.MISSING
     assert st.failure_code == "index_missing"
@@ -393,7 +346,7 @@ def test_status_missing_when_graph_file_absent(tmp_path):
     settings = _make_settings(tmp_path)
     active = _active_dir(settings)
     active.mkdir(parents=True)
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.MISSING
     assert st.failure_code == "index_missing"
@@ -408,7 +361,7 @@ def test_status_corrupt_oversized_graph(tmp_path):
     settings = _make_settings(tmp_path, max_graph_bytes=5)
     active = _active_dir(settings)
     _write_graph(active, raw_text='{"x":1}')
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.CORRUPT
     assert st.failure_code == "oversized_graph"
@@ -421,7 +374,7 @@ def test_status_corrupt_invalid_metadata(tmp_path):
     # Write a truncated metadata file
     active.mkdir(parents=True, exist_ok=True)
     (active / "index-metadata.json").write_text("{truncated", encoding="utf-8")
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.CORRUPT
     assert st.failure_code == "invalid_metadata"
@@ -432,7 +385,7 @@ def test_status_corrupt_invalid_json(tmp_path):
     active = _active_dir(settings)
     _write_metadata(active)
     _write_graph(active, raw_text="not json")
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.CORRUPT
     assert st.failure_code == "invalid_json"
@@ -444,7 +397,7 @@ def test_status_corrupt_invalid_utf8(tmp_path):
     _write_metadata(active)
     graph_path = active / "graph.json"
     graph_path.write_bytes(b"\xff\xfe\x00\x01")
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.CORRUPT
     assert st.failure_code == "invalid_utf8"
@@ -455,7 +408,7 @@ def test_status_corrupt_not_an_object(tmp_path):
     active = _active_dir(settings)
     _write_metadata(active)
     _write_graph(active, raw_text="[]")
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.CORRUPT
 
@@ -465,7 +418,7 @@ def test_status_corrupt_wrong_top_level_keys(tmp_path):
     active = _active_dir(settings)
     _write_metadata(active)
     _write_graph(active, raw_text='{"nodes":[],"extra":true}')
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.CORRUPT
     assert st.failure_code == "invalid_top_level_keys"
@@ -486,7 +439,7 @@ def test_status_corrupt_extra_top_level_key(tmp_path):
         "unexpected": True,
     }
     _write_graph(active, raw_text=json.dumps(data))
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.CORRUPT
     assert st.failure_code == "invalid_top_level_keys"
@@ -498,7 +451,7 @@ def test_status_corrupt_duplicate_node_id(tmp_path):
     _write_metadata(active)
     nodes = [{"id": "n1"}, {"id": "n1"}]
     _write_graph(active, nodes=nodes, links=[])
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.CORRUPT
     assert st.failure_code == "duplicate_node_id"
@@ -511,7 +464,7 @@ def test_status_corrupt_dangling_edge(tmp_path):
     nodes = [{"id": "n1"}]
     links = [{"source": "n1", "target": "n99"}]
     _write_graph(active, nodes=nodes, links=links)
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.CORRUPT
     assert st.failure_code == "dangling_edge_target"
@@ -522,7 +475,7 @@ def test_status_corrupt_node_id_non_string(tmp_path):
     active = _active_dir(settings)
     _write_metadata(active)
     _write_graph(active, nodes=[{"id": 7}], links=[])
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.CORRUPT
     assert st.failure_code == "missing_or_invalid_node_id"
@@ -538,11 +491,11 @@ def test_status_fresh(tmp_path):
     active = _active_dir(settings)
     vault = settings.vault_root
     _make_vault_md(vault, "00-Inbox/alpha.md")
-    source_hash = _vault_source_hash(vault)
+    source_hash = _store_for(vault).source_snapshot_hash()
     nodes = [{**{"id": "n1"}, **_A_NODE}]
     _write_graph(active, nodes=nodes, links=[])
     _write_metadata(active, source_snapshot_hash=source_hash, node_count=1)
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.FRESH
     assert st.failure_code is None
@@ -556,7 +509,7 @@ def test_status_stale(tmp_path):
     nodes = [{**{"id": "n1"}, **_A_NODE}]
     _write_graph(active, nodes=nodes, links=[])
     _write_metadata(active, source_snapshot_hash="old-hash", node_count=1)
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.STALE
 
@@ -567,7 +520,7 @@ def test_status_fresh_no_md_files_empty_hash(tmp_path):
     _write_graph(active, nodes=[], links=[])
     empty = _empty_hash()
     _write_metadata(active, source_snapshot_hash=empty)
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.FRESH
     assert st.failure_code is None
@@ -583,13 +536,13 @@ def test_status_preserves_metadata_fields(tmp_path):
     active = _active_dir(settings)
     vault = settings.vault_root
     _make_vault_md(vault, "00-Inbox/a.md")
-    source_hash = _vault_source_hash(vault)
+    source_hash = _store_for(vault).source_snapshot_hash()
     nodes = [{**{"id": "n1"}, **_A_NODE}]
     _write_graph(active, nodes=nodes, links=[])
     _write_metadata(
         active, source_snapshot_hash=source_hash, node_count=1, edge_count=0, graph_checksum="chk-1"
     )
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     st = idx.status()
     assert st.state is IndexState.FRESH
     assert st.graph_checksum == "chk-1"
@@ -612,7 +565,7 @@ def _make_index_with_nodes(
     settings = _make_settings(tmp_path, vault_identity_hash=vault_identity_hash)
     active = _active_dir(settings)
     _write_graph(active, nodes=nodes, links=links or [])
-    return GraphifyJsonIndex(settings)
+    return GraphifyJsonIndex(settings, _store_for(settings.vault_root))
 
 
 def test_search_title_exact_match(tmp_path):
@@ -711,7 +664,7 @@ def test_search_when_graph_corrupt_returns_empty(tmp_path):
     active = _active_dir(settings)
     active.mkdir(parents=True)
     (active / "graph.json").write_text("corrupt", encoding="utf-8")
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     candidates = idx.search(MemoryQuery(titles=("x",)), limit=10)
     assert len(candidates) == 0
 
@@ -836,7 +789,7 @@ def test_neighbors_when_graph_corrupt_returns_empty(tmp_path):
     active = _active_dir(settings)
     active.mkdir(parents=True)
     (active / "graph.json").write_text("bad", encoding="utf-8")
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     result = idx.neighbors("x.md", depth=1, max_nodes=10)
     assert len(result) == 0
 
@@ -895,18 +848,9 @@ def test_neighbors_skips_node_without_source_file(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_vault_source_hash_skips_dirs_masquerading_as_md(tmp_path):
-    vault = tmp_path / "vault"
-    (vault / "00-Inbox").mkdir(parents=True)
-    dir_path = vault / "00-Inbox" / "not_a_file.md"
-    dir_path.mkdir()
-    h = _vault_source_hash(vault)
-    assert h == hashlib.sha256(b"").hexdigest()
-
-
 def test_search_when_graph_missing(tmp_path):
     settings = _make_settings(tmp_path)
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     candidates = idx.search(MemoryQuery(titles=("x",)), limit=10)
     assert len(candidates) == 0
 
@@ -915,14 +859,14 @@ def test_search_when_graph_oversized(tmp_path):
     settings = _make_settings(tmp_path, max_graph_bytes=5)
     active = _active_dir(settings)
     _write_graph(active, nodes=[_A_NODE], links=[])
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     candidates = idx.search(MemoryQuery(titles=("Alpha Note",)), limit=10)
     assert len(candidates) == 0
 
 
 def test_neighbors_when_graph_missing(tmp_path):
     settings = _make_settings(tmp_path)
-    idx = GraphifyJsonIndex(settings)
+    idx = GraphifyJsonIndex(settings, _store_for(settings.vault_root))
     result = idx.neighbors("x.md", depth=1, max_nodes=10)
     assert len(result) == 0
 
@@ -955,3 +899,50 @@ def test_search_term_then_phrase_fallback(tmp_path):
     candidates = idx.search(MemoryQuery(terms=("beta",), phrases=("gamma",)), limit=10)
     assert len(candidates) == 1
     assert candidates[0].path == "10-Projects/beta.md"
+
+
+# ---------------------------------------------------------------------------
+# freshness uses the curated (included_paths) source-set, not a raw vault scan
+# ---------------------------------------------------------------------------
+
+
+def test_excluded_note_change_does_not_mark_index_stale(tmp_path):
+    settings = _make_settings(tmp_path)
+    vault = settings.vault_root
+    policy = MemoryVaultPolicy(("**/*.md",), ("00-Inbox/**",), 10_000, 10_000_000)
+    store = ObsidianVaultStore(vault, policy)
+    _make_vault_md(vault, "10-Projects/alpha.md")
+    (vault / "00-Inbox").mkdir(parents=True, exist_ok=True)
+    (vault / "00-Inbox" / "excluded.md").write_text(
+        "not part of the include policy", encoding="utf-8"
+    )
+    source_hash = store.source_snapshot_hash()
+    active = _active_dir(settings)
+    nodes = [{**_A_NODE, "id": "n1", "source_file": "10-Projects/alpha.md"}]
+    _write_graph(active, nodes=nodes, links=[])
+    _write_metadata(active, source_snapshot_hash=source_hash, node_count=1)
+    idx = GraphifyJsonIndex(settings, store)
+    assert idx.status().state is IndexState.FRESH
+
+    # Editing a note OUTSIDE the include policy must not flip freshness --
+    # Graphify's source-set and the builder's must agree on what "changed".
+    (vault / "00-Inbox" / "excluded.md").write_text("changed content", encoding="utf-8")
+    assert idx.status().state is IndexState.FRESH
+
+
+def test_included_note_change_marks_index_stale(tmp_path):
+    settings = _make_settings(tmp_path)
+    vault = settings.vault_root
+    policy = MemoryVaultPolicy(("**/*.md",), ("00-Inbox/**",), 10_000, 10_000_000)
+    store = ObsidianVaultStore(vault, policy)
+    _make_vault_md(vault, "10-Projects/alpha.md")
+    source_hash = store.source_snapshot_hash()
+    active = _active_dir(settings)
+    nodes = [{**_A_NODE, "id": "n1", "source_file": "10-Projects/alpha.md"}]
+    _write_graph(active, nodes=nodes, links=[])
+    _write_metadata(active, source_snapshot_hash=source_hash, node_count=1)
+    idx = GraphifyJsonIndex(settings, store)
+    assert idx.status().state is IndexState.FRESH
+
+    (vault / "10-Projects" / "alpha.md").write_text("edited content", encoding="utf-8")
+    assert idx.status().state is IndexState.STALE

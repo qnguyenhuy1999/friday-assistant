@@ -6,10 +6,16 @@ repository holds real in-memory state as of Phase 8."""
 from __future__ import annotations
 
 import builtins
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Self
 
+from friday.application.memory.models import IndexSnapshot, IndexState, MemoryRetrievalRecord
+from friday.application.memory.ports import (
+    MemoryIndexSnapshotRepository,
+    MemoryRetrievalRecordRepository,
+)
 from friday.application.ports import (
     ApprovalRepository,
     ArtifactRepository,
@@ -593,6 +599,32 @@ class FakeRunWorkQueue:
         )
 
 
+class FakeMemoryIndexSnapshotRepository:
+    def __init__(self) -> None:
+        self.items: list[IndexSnapshot] = []
+
+    def add(self, snapshot: IndexSnapshot) -> None:
+        self.items.append(snapshot)
+
+    def latest(self) -> IndexSnapshot | None:
+        if not self.items:
+            return None
+        return max(self.items, key=lambda snapshot: snapshot.built_at)
+
+    def mark_stale(self, snapshot_id: str) -> None:
+        for index, snapshot in enumerate(self.items):
+            if snapshot.id == snapshot_id:
+                self.items[index] = replace(snapshot, state=IndexState.STALE)
+
+
+class FakeMemoryRetrievalRecordRepository:
+    def __init__(self) -> None:
+        self.added: list[MemoryRetrievalRecord] = []
+
+    def add(self, record: MemoryRetrievalRecord) -> None:
+        self.added.append(record)
+
+
 class FakeUnitOfWork:
     def __init__(self) -> None:
         self.task_repo = FakeTaskRepository()
@@ -604,6 +636,8 @@ class FakeUnitOfWork:
         self.approval_repo = FakeApprovalRepository()
         self.artifact_repo = FakeArtifactRepository()
         self.work_queue_repo = FakeRunWorkQueue()
+        self.memory_snapshot_repo = FakeMemoryIndexSnapshotRepository()
+        self.memory_retrieval_repo = FakeMemoryRetrievalRecordRepository()
         self.commit_count = 0
         self.rollback_count = 0
         self.closed = False
@@ -643,6 +677,14 @@ class FakeUnitOfWork:
     @property
     def work_queue(self) -> RunWorkQueue:
         return self.work_queue_repo
+
+    @property
+    def memory_index_snapshots(self) -> MemoryIndexSnapshotRepository:
+        return self.memory_snapshot_repo
+
+    @property
+    def memory_retrieval_records(self) -> MemoryRetrievalRecordRepository:
+        return self.memory_retrieval_repo
 
     def __enter__(self) -> Self:
         return self

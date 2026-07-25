@@ -293,3 +293,97 @@ def test_environment_is_limited_to_the_allowlist(tmp_path, monkeypatch):
     assert _builder(tmp_path, executable).build(_request()).state is IndexState.FRESH
 
     assert "FRIDAY_TEST_SENTINEL=secret" not in environment.read_text(encoding="utf-8")
+
+
+def test_graphify_never_receives_canonical_vault_root(tmp_path):
+    captured = tmp_path / "captured_source.txt"
+    executable = tmp_path / "graphify"
+    executable.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = --version ]; then echo fake; exit 0; fi\n'
+        f'printf "%s" "$2" > "{captured}"\n'
+        "out=\n"
+        'while [ "$#" -gt 0 ]; do\n'
+        '  if [ "$1" = --out ]; then out="$2"; break; fi\n'
+        "  shift\n"
+        "done\n" + _valid_body(),
+        encoding="utf-8",
+    )
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+    builder = _builder(tmp_path, executable)
+
+    result = builder.build(_request())
+
+    assert result.state is IndexState.FRESH
+    source_passed = captured.read_text()
+    canonical_vault_root = str((tmp_path / "vault").resolve())
+    assert source_passed != canonical_vault_root
+    assert not Path(source_passed).is_relative_to(Path(canonical_vault_root))
+
+
+def test_graphify_input_contains_only_included_notes(tmp_path):
+    listing = tmp_path / "listing.txt"
+    executable = tmp_path / "graphify"
+    executable.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = --version ]; then echo fake; exit 0; fi\n'
+        f'(cd "$2" && find . -type f | sort) > "{listing}"\n'
+        "out=\n"
+        'while [ "$#" -gt 0 ]; do\n'
+        '  if [ "$1" = --out ]; then out="$2"; break; fi\n'
+        "  shift\n"
+        "done\n" + _valid_body(),
+        encoding="utf-8",
+    )
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+
+    vault = tmp_path / "vault"
+    vault.mkdir(exist_ok=True)
+    (vault / "note.md").write_text("note", encoding="utf-8")
+    (vault / "not-included.md").write_text("never scanned by graphify", encoding="utf-8")
+
+    builder = GraphifyCliIndexBuilder(
+        GraphifyCliSettings(vault, tmp_path / "indexes", str(executable), 1, 100, 100, 1_000, 60, 1)
+    )
+    result = builder.build(_request())
+
+    assert result.state is IndexState.FRESH
+    assert listing.read_text().split() == ["./note.md"]
+
+
+def test_graphify_input_excludes_private_sensitive_notes(tmp_path):
+    """The staging step only copies request.included_paths -- private and
+    sensitive notes never reach it because ObsidianVaultStore.included_paths()
+    already excludes them before the request is built."""
+    listing = tmp_path / "listing.txt"
+    executable = tmp_path / "graphify"
+    executable.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = --version ]; then echo fake; exit 0; fi\n'
+        f'(cd "$2" && find . -type f | sort) > "{listing}"\n'
+        "out=\n"
+        'while [ "$#" -gt 0 ]; do\n'
+        '  if [ "$1" = --out ]; then out="$2"; break; fi\n'
+        "  shift\n"
+        "done\n" + _valid_body(),
+        encoding="utf-8",
+    )
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+
+    vault = tmp_path / "vault"
+    vault.mkdir(exist_ok=True)
+    (vault / "note.md").write_text("note", encoding="utf-8")
+    (vault / "private.md").write_text(
+        "---\nprivate: true\n---\nsecret project info", encoding="utf-8"
+    )
+    (vault / "sensitive.md").write_text("---\nsensitive: true\n---\nsecret", encoding="utf-8")
+
+    builder = GraphifyCliIndexBuilder(
+        GraphifyCliSettings(vault, tmp_path / "indexes", str(executable), 1, 100, 100, 1_000, 60, 1)
+    )
+    # request.included_paths mirrors what ObsidianVaultStore.included_paths()
+    # would return -- private.md/sensitive.md are already filtered upstream.
+    result = builder.build(_request())
+
+    assert result.state is IndexState.FRESH
+    assert listing.read_text().split() == ["./note.md"]

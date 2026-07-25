@@ -33,9 +33,10 @@ Failure policy (stable codes, bounded messages):
 from __future__ import annotations
 
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from friday.application.brain_runtime import BrainRequest, BrainResponse, BrainRuntime
@@ -52,7 +53,14 @@ from friday.application.errors import (
     ToolNotFound,
 )
 from friday.application.lifecycle_events import LifecycleEvents
-from friday.application.memory.models import IndexState, MemoryContext, RetrievalMode
+from friday.application.memory.models import (
+    IndexState,
+    MemoryContext,
+    MemoryQuery,
+    MemoryRetrievalItem,
+    MemoryRetrievalRecord,
+    RetrievalMode,
+)
 from friday.application.memory.ports import MemoryRetrieverPort
 from friday.application.memory.query_builder import (
     MemoryQueryBuilder,
@@ -90,6 +98,7 @@ from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
 
 _MAX_TURN_NOTE_CHARS = 500
 _MAX_RECENT_EVENTS = 50
+_MEMORY_WRITE_TOOLS = frozenset({"memory.create_note", "memory.append_managed_note"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,7 +183,7 @@ class AgentRunProcessor:
                 memory_retrieval_is_refresh = memory_refresh_needed
             previous_objective = objective
             if memory_refresh_needed:
-                memory = self._retrieve_memory(context, snapshot)
+                memory = self._retrieve_memory(context, snapshot, turn)
                 memory_refresh_needed = False
                 if memory_retrieval_is_refresh:
                     memory_refresh_available = False
@@ -224,14 +233,16 @@ class AgentRunProcessor:
 
             if self._monotonic() >= deadline:
                 return self._yield_now()
-            outcome, note, tool_call_used = self._dispatch(context, response, snapshot, deadline)
+            outcome, note, tool_call_used, successful_memory_write = self._dispatch(
+                context, response, snapshot, deadline
+            )
             if outcome is not None:
                 return outcome
             if note is not None:
                 turn_notes.append(note[:_MAX_TURN_NOTE_CHARS])
             if tool_call_used:
                 tool_calls += 1
-                if self._is_successful_memory_write(response):
+                if successful_memory_write:
                     memory_refresh_needed = memory_refresh_available
                     memory_retrieval_is_refresh = memory_refresh_needed
                 if tool_calls >= self._limits.max_tool_calls_per_claim:
@@ -247,16 +258,17 @@ class AgentRunProcessor:
         response: BrainResponse,
         snapshot: RunSnapshot,
         deadline: float,
-    ) -> tuple[ProcessingOutcome | None, str | None, bool]:
-        """Returns (final outcome | None to continue, turn note, tool used)."""
+    ) -> tuple[ProcessingOutcome | None, str | None, bool, bool]:
+        """Returns (final outcome | None to continue, turn note, tool used,
+        successful memory write)."""
         action: BrainAction = response.action
         if isinstance(action, FinishAction):
             blocker = self._finish_blocker(context.run_id, snapshot)
             if blocker is not None:
-                return None, f"finish rejected: {blocker}", False
+                return None, f"finish rejected: {blocker}", False, False
             if not self._claim_holds(context):
-                return self._yield_now(), None, False
-            return ProcessingOutcome.succeeded(action.summary, action.details), None, False
+                return self._yield_now(), None, False, False
+            return ProcessingOutcome.succeeded(action.summary, action.details), None, False, False
 
         if isinstance(action, FailAction):
             return (
@@ -267,25 +279,26 @@ class AgentRunProcessor:
                 ),
                 None,
                 False,
+                False,
             )
 
         if isinstance(action, YieldAction):
             delay = min(action.delay_seconds or 0, self._limits.max_yield_seconds)
             available_at = self._clock.now() + timedelta(seconds=delay)
-            return ProcessingOutcome.yielded(available_at), None, False
+            return ProcessingOutcome.yielded(available_at), None, False, False
 
         return self._dispatch_tool(context, action, deadline)
 
     def _dispatch_tool(
         self, context: ClaimContext, action: InvokeToolAction, deadline: float
-    ) -> tuple[ProcessingOutcome | None, str | None, bool]:
+    ) -> tuple[ProcessingOutcome | None, str | None, bool, bool]:
         remaining = deadline - self._monotonic()
         if remaining <= 0:
-            return self._yield_now(), None, False
+            return self._yield_now(), None, False, False
         try:
             call = ToolCall(tool=action.tool, tool_input=action.tool_input)
         except ToolInputInvalid as exc:
-            return None, f"invalid tool input for {action.tool}: {exc}", False
+            return None, f"invalid tool input for {action.tool}: {exc}", False, False
 
         try:
             result = self._execute_tool_action.execute(
@@ -308,6 +321,7 @@ class AgentRunProcessor:
                 ),
                 None,
                 False,
+                False,
             )
         except ToolExecutionAmbiguous as exc:
             return (
@@ -319,18 +333,19 @@ class AgentRunProcessor:
                 ),
                 None,
                 False,
+                False,
             )
         except ClaimLost:
-            return self._yield_now(), None, False
+            return self._yield_now(), None, False, False
 
         if result.kind == "approval_required":
-            return self._request_approval(context, action, call), None, False
+            return self._request_approval(context, action, call), None, False, False
 
         status = result.result.status if result.result is not None else "unknown"
         note = f"invoked {call.tool} -> {status}"
         if result.replayed:
             note += " (replayed durable result)"
-        return None, note, True
+        return None, note, True, _is_successful_memory_write(call.tool, status)
 
     def _request_approval(
         self, context: ClaimContext, action: InvokeToolAction, call: ToolCall
@@ -396,7 +411,7 @@ class AgentRunProcessor:
             )
 
     def _retrieve_memory(
-        self, context: ClaimContext, snapshot: RunSnapshot
+        self, context: ClaimContext, snapshot: RunSnapshot, turn: int
     ) -> MemoryContext | None:
         """Retrieve outside a transaction and discard results on claim loss."""
         query = self._memory_query_builder.build(
@@ -415,9 +430,7 @@ class AgentRunProcessor:
             return MemoryContext(RetrievalMode.DISABLED, (), (), None, IndexState.DISABLED, 0)
         try:
             assert self._memory_retriever is not None
-            memory = self._memory_retriever.retrieve(
-                query=query, source_snapshot_hash=query.query_hash
-            )
+            memory = self._memory_retriever.retrieve(query=query)
         except Exception:
             memory = MemoryContext(
                 RetrievalMode.UNAVAILABLE,
@@ -429,10 +442,12 @@ class AgentRunProcessor:
             )
         if not self._claim_holds(context):
             return None
-        self._record_memory_events(context, memory)
+        self._record_memory_events(context, turn, query, memory)
         return memory
 
-    def _record_memory_events(self, context: ClaimContext, memory: MemoryContext) -> None:
+    def _record_memory_events(
+        self, context: ClaimContext, turn: int, query: MemoryQuery, memory: MemoryContext
+    ) -> None:
         specs: list[tuple[RunEventType, JsonValue, RunStepId | None]] = [
             (
                 RunEventType.MEMORY_CONTEXT_ATTACHED,
@@ -444,7 +459,7 @@ class AgentRunProcessor:
             specs.append(
                 (
                     RunEventType.MEMORY_RETRIEVAL_DEGRADED,
-                    {"mode": memory.mode.value, "reason": "memory retrieval unavailable"},
+                    {"mode": memory.mode.value, "reason": memory.degraded_reason},
                     None,
                 )
             )
@@ -452,11 +467,10 @@ class AgentRunProcessor:
             run = uow.runs.get(context.run_id)
             if run is not None:
                 LifecycleEvents.append_run_events(uow, run, self._clock.now(), specs)
-
-    @staticmethod
-    def _is_successful_memory_write(response: BrainResponse) -> bool:
-        action = response.action
-        return isinstance(action, InvokeToolAction) and action.tool.startswith("memory.")
+                uow.memory_retrieval_records.add(
+                    _build_memory_retrieval_record(context, turn, query, memory, self._clock.now())
+                )
+            uow.commit()
 
     def _finish_blocker(self, run_id: object, snapshot: RunSnapshot | None = None) -> str | None:
         with self._uow_factory() as uow:
@@ -521,3 +535,43 @@ def _bounded_read(repository: object, run_id: object, limit: int) -> Any:
     # Compatibility for in-memory ports used by older callers; production
     # repositories implement the bounded query above.
     return list(getattr(repository, "list_for_run")(run_id))[-limit:]  # noqa: B009
+
+
+def _build_memory_retrieval_record(
+    context: ClaimContext, turn: int, query: MemoryQuery, memory: MemoryContext, now: datetime
+) -> MemoryRetrievalRecord:
+    """Durable audit of one retrieval: bounded metadata and per-excerpt
+    provenance only -- no excerpt bodies or query text are persisted."""
+    items = tuple(
+        MemoryRetrievalItem(
+            path=provenance.path,
+            heading=provenance.heading,
+            start_line=provenance.start_line,
+            end_line=provenance.end_line,
+            content_hash=provenance.content_hash,
+            rank=provenance.rank,
+            methods=provenance.methods,
+            truncated=provenance.truncated,
+        )
+        for provenance in memory.provenance
+    )
+    first = memory.provenance[0] if memory.provenance else None
+    return MemoryRetrievalRecord(
+        id=str(uuid.uuid4()),
+        run_id=context.run_id,
+        turn_number=turn,
+        query_hash=query.query_hash,
+        source_snapshot_id=first.source_snapshot_id if first is not None else None,
+        index_snapshot_id=first.index_snapshot_id if first is not None else None,
+        created_at=now,
+        candidate_count=len(memory.excerpts),
+        selected_count=len(memory.excerpts),
+        items=items,
+    )
+
+
+def _is_successful_memory_write(tool: str, status: str) -> bool:
+    """A refresh is only warranted for a write that actually happened --
+    memory.search/read_note never mutate anything, and a failed
+    create/append leaves nothing new for the next retrieval to see."""
+    return tool in _MEMORY_WRITE_TOOLS and status == "succeeded"

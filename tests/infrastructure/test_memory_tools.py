@@ -298,3 +298,153 @@ def test_gateway_maps_existing_error_paths_and_cancellation(
     assert invalid.failure is not None and invalid.failure.code == "tool_invalid_input"
     assert process.failure is not None and process.failure.code == "tool_invalid_input"
     assert os_failure.failure is not None and os_failure.failure.code == "tool_invalid_input"
+
+
+# --- sensitivity denial at the tool boundary ---------------------------
+
+
+def test_read_note_denies_sensitive_note_and_search_excludes_it(
+    gateway: tuple[WorkspaceToolGateway, Path],
+) -> None:
+    vault = gateway[1]
+    (vault / "Notes" / "sensitive.md").write_text(
+        "---\nsensitive: true\n---\nclassified medical record\n"
+    )
+    result = call(gateway[0], "memory.read_note", {"path": "Notes/sensitive.md"})
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.code == "memory_access_denied"
+    assert result.output is None
+
+    search = call(gateway[0], "memory.search", {"query": "classified", "limit": 10})
+    assert search.status == "succeeded"
+    assert isinstance(search.output, dict)
+    raw = search.output["results"]
+    assert isinstance(raw, list)
+    paths: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            p = item.get("path")
+            if isinstance(p, str):
+                paths.append(p)
+    assert "Notes/sensitive.md" not in paths
+
+
+def test_read_note_denies_friday_index_false_and_search_excludes_it(
+    gateway: tuple[WorkspaceToolGateway, Path],
+) -> None:
+    vault = gateway[1]
+    (vault / "Notes" / "no_index.md").write_text(
+        "---\nfriday_index: false\n---\nprivate thoughts\n"
+    )
+    result = call(gateway[0], "memory.read_note", {"path": "Notes/no_index.md"})
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.code == "memory_access_denied"
+    assert result.output is None
+
+    search = call(gateway[0], "memory.search", {"query": "thoughts", "limit": 10})
+    assert search.status == "succeeded"
+    assert isinstance(search.output, dict)
+    raw = search.output["results"]
+    assert isinstance(raw, list)
+    paths: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            p = item.get("path")
+            if isinstance(p, str):
+                paths.append(p)
+    assert "Notes/no_index.md" not in paths
+
+
+def test_read_note_denies_builtin_excluded_glob_and_search_excludes_it(
+    gateway: tuple[WorkspaceToolGateway, Path],
+) -> None:
+    vault = gateway[1]
+    (vault / ".obsidian").mkdir(parents=True)
+    (vault / ".obsidian" / "config.md").write_text("---\ntitle: Config\n---\nsome vault config\n")
+    result = call(gateway[0], "memory.read_note", {"path": ".obsidian/config.md"})
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.code == "memory_access_denied"
+    assert result.output is None
+
+    search = call(gateway[0], "memory.search", {"query": "vault config", "limit": 10})
+    assert search.status == "succeeded"
+    assert isinstance(search.output, dict)
+    raw = search.output["results"]
+    assert isinstance(raw, list)
+    paths: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            p = item.get("path")
+            if isinstance(p, str):
+                paths.append(p)
+    assert ".obsidian/config.md" not in paths
+
+
+# --- stale-claim no-write ---------------------------------------------
+
+
+def test_stale_claim_prevents_create_note_write(
+    gateway: tuple[WorkspaceToolGateway, Path],
+) -> None:
+    vault = gateway[1]
+    target = vault / "Friday/Inbox/stale.md"
+    request = ToolExecutionRequest(
+        invocation_id=ToolInvocationId.new(),
+        run_id=RunId.new(),
+        step_id=None,
+        call=ToolCall(
+            "memory.create_note",
+            {
+                "path": "Friday/Inbox/stale.md",
+                "payload": "should not appear\n",
+                "memory_category": MemoryCategory.EXPLICIT_USER_REQUEST_TO_REMEMBER.value,
+                "frontmatter": {
+                    "friday_managed": "true",
+                    "friday_memory_id": "m-stale",
+                    "source_run_id": "r-stale",
+                    "created_at": "now",
+                    "updated_at": "now",
+                },
+            },
+        ),
+        cancellation_requested=lambda: True,
+    )
+    result = gateway[0].execute(request)
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.code == "claim_lost"
+    assert not target.exists()
+
+
+def test_stale_claim_prevents_append_write(
+    gateway: tuple[WorkspaceToolGateway, Path],
+) -> None:
+    vault = gateway[1]
+    target = vault / "Friday/Inbox/managed.md"
+    target.parent.mkdir(parents=True)
+    original_bytes = b"---\nfriday_managed: true\n---\noriginal\n"
+    target.write_bytes(original_bytes)
+    expected_hash = hashlib.sha256(original_bytes).hexdigest()
+    request = ToolExecutionRequest(
+        invocation_id=ToolInvocationId.new(),
+        run_id=RunId.new(),
+        step_id=None,
+        call=ToolCall(
+            "memory.append_managed_note",
+            {
+                "path": "Friday/Inbox/managed.md",
+                "payload": "should not append\n",
+                "expected_content_hash": expected_hash,
+                "memory_category": MemoryCategory.EXPLICIT_DECISION.value,
+            },
+        ),
+        cancellation_requested=lambda: True,
+    )
+    result = gateway[0].execute(request)
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.code == "claim_lost"
+    assert target.read_bytes() == original_bytes

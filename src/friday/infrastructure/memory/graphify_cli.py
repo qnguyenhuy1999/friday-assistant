@@ -37,11 +37,22 @@ class GraphifyCliSettings:
     def __post_init__(self) -> None:
         if not self.executable:
             raise ValueError("executable must not be empty")
-        if min(self.timeout_seconds, self.max_stdout_bytes, self.max_stderr_bytes, self.max_graph_bytes, self.lock_ttl_seconds) <= 0:
+        if (
+            min(
+                self.timeout_seconds,
+                self.max_stdout_bytes,
+                self.max_stderr_bytes,
+                self.max_graph_bytes,
+                self.lock_ttl_seconds,
+            )
+            <= 0
+        ):
             raise ValueError("Graphify CLI limits must be positive")
         if self.previous_retention < 0:
             raise ValueError("previous_retention must not be negative")
-        if self.index_root.resolve(strict=False).is_relative_to(self.vault_root.resolve(strict=False)):
+        if self.index_root.resolve(strict=False).is_relative_to(
+            self.vault_root.resolve(strict=False)
+        ):
             raise ValueError("index_root must be outside vault_root")
 
 
@@ -56,50 +67,106 @@ class GraphifyCliIndexBuilder:
         vault_dir.mkdir(parents=True, exist_ok=True)
         lock = FileLock(vault_dir / ".build.lock", self._settings.lock_ttl_seconds, "graphify")
         if not lock.acquire():
-            return self._snapshot(request, started, IndexState.DISABLED, None, None, 0, 0, "build_locked")
+            return self._snapshot(
+                request, started, IndexState.DISABLED, None, None, 0, 0, "build_locked"
+            )
         try:
             return self._build_locked(request, started, vault_dir)
         finally:
             lock.release()
 
-    def _build_locked(self, request: IndexBuildRequest, started: float, vault_dir: Path) -> IndexSnapshot:
+    def _build_locked(
+        self, request: IndexBuildRequest, started: float, vault_dir: Path
+    ) -> IndexSnapshot:
         executable = shutil.which(self._settings.executable)
         if executable is None and not Path(self._settings.executable).is_file():
-            return self._snapshot(request, started, IndexState.DISABLED, None, None, 0, 0, "executable_missing")
+            return self._snapshot(
+                request, started, IndexState.DISABLED, None, None, 0, 0, "executable_missing"
+            )
         staging = vault_dir / "staging"
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir()
         try:
             version = self._version(executable or self._settings.executable)
             result = _run_bounded(
-                [executable or self._settings.executable, "extract", str(self._settings.vault_root), "--out", str(staging)],
+                [
+                    executable or self._settings.executable,
+                    "extract",
+                    str(self._settings.vault_root),
+                    "--out",
+                    str(staging),
+                ],
                 self._settings.vault_root,
                 self._settings.timeout_seconds,
                 self._settings.max_stdout_bytes,
                 self._settings.max_stderr_bytes,
             )
             if result.reason is not None or result.returncode != 0:
-                return self._snapshot(request, started, IndexState.DISABLED, None, version, 0, 0, result.reason or "command_failed")
+                return self._snapshot(
+                    request,
+                    started,
+                    IndexState.DISABLED,
+                    None,
+                    version,
+                    0,
+                    0,
+                    result.reason or "command_failed",
+                )
             graph = staging / "graphify-out" / "graph.json"
-            if not graph.is_file() or graph.stat().st_size > min(request.max_graph_bytes, self._settings.max_graph_bytes):
-                return self._snapshot(request, started, IndexState.CORRUPT, None, version, 0, 0, "invalid_graph")
+            if not graph.is_file() or graph.stat().st_size > min(
+                request.max_graph_bytes, self._settings.max_graph_bytes
+            ):
+                return self._snapshot(
+                    request, started, IndexState.CORRUPT, None, version, 0, 0, "invalid_graph"
+                )
             node_count, edge_count = _validate_graph(graph)
             target = staging / "graph.json"
             os.replace(graph, target)
             shutil.rmtree(staging / "graphify-out", ignore_errors=True)
             checksum = _checksum(target)
             file_count, source_bytes = self._source_stats(request)
-            metadata = IndexMetadata(1, version, request.vault_identity_hash, request.source_snapshot_hash, file_count, source_bytes, datetime.now(UTC), time.monotonic() - started, checksum, node_count, edge_count)
+            metadata = IndexMetadata(
+                1,
+                version,
+                request.vault_identity_hash,
+                request.source_snapshot_hash,
+                file_count,
+                source_bytes,
+                datetime.now(UTC),
+                time.monotonic() - started,
+                checksum,
+                node_count,
+                edge_count,
+            )
             metadata.write(staging)
             self._promote(vault_dir, staging)
-            return self._snapshot(request, started, IndexState.FRESH, checksum, version, node_count, edge_count, None, file_count, source_bytes)
+            return self._snapshot(
+                request,
+                started,
+                IndexState.FRESH,
+                checksum,
+                version,
+                node_count,
+                edge_count,
+                None,
+                file_count,
+                source_bytes,
+            )
         except (OSError, ValueError, json.JSONDecodeError):
-            return self._snapshot(request, started, IndexState.CORRUPT, None, None, 0, 0, "build_failed")
+            return self._snapshot(
+                request, started, IndexState.CORRUPT, None, None, 0, 0, "build_failed"
+            )
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
     def _version(self, executable: str) -> str:
-        result = _run_bounded([executable, "--version"], self._settings.vault_root, self._settings.timeout_seconds, 4096, 4096)
+        result = _run_bounded(
+            [executable, "--version"],
+            self._settings.vault_root,
+            self._settings.timeout_seconds,
+            4096,
+            4096,
+        )
         if result.returncode != 0 or result.reason is not None:
             return "unknown"
         return result.stdout.strip()[:256] or "unknown"
@@ -109,7 +176,10 @@ class GraphifyCliIndexBuilder:
         total = 0
         for path in paths:
             candidate = (self._settings.vault_root / path).resolve(strict=False)
-            if candidate.is_relative_to(self._settings.vault_root.resolve(strict=False)) and candidate.is_file():
+            if (
+                candidate.is_relative_to(self._settings.vault_root.resolve(strict=False))
+                and candidate.is_file()
+            ):
                 total += candidate.stat().st_size
         return len(paths), total
 
@@ -121,9 +191,35 @@ class GraphifyCliIndexBuilder:
             os.replace(active, previous)
         os.replace(staging, active)
 
-    def _snapshot(self, request: IndexBuildRequest, started: float, state: IndexState, checksum: str | None, version: str | None, nodes: int, edges: int, failure: str | None, file_count: int = 0, source_bytes: int = 0) -> IndexSnapshot:
+    def _snapshot(
+        self,
+        request: IndexBuildRequest,
+        started: float,
+        state: IndexState,
+        checksum: str | None,
+        version: str | None,
+        nodes: int,
+        edges: int,
+        failure: str | None,
+        file_count: int = 0,
+        source_bytes: int = 0,
+    ) -> IndexSnapshot:
         return IndexSnapshot(
-            id=hashlib.sha256(f"{request.source_snapshot_hash}:{time.monotonic_ns()}".encode()).hexdigest(), vault_identity_hash=request.vault_identity_hash, source_snapshot_hash=request.source_snapshot_hash, graph_checksum=checksum, graphify_version=version, state=state, built_at=datetime.now(UTC), build_duration_seconds=time.monotonic() - started, file_count=file_count, source_total_bytes=source_bytes, node_count=nodes, edge_count=edges, failure_code=failure,
+            id=hashlib.sha256(
+                f"{request.source_snapshot_hash}:{time.monotonic_ns()}".encode()
+            ).hexdigest(),
+            vault_identity_hash=request.vault_identity_hash,
+            source_snapshot_hash=request.source_snapshot_hash,
+            graph_checksum=checksum,
+            graphify_version=version,
+            state=state,
+            built_at=datetime.now(UTC),
+            build_duration_seconds=time.monotonic() - started,
+            file_count=file_count,
+            source_total_bytes=source_bytes,
+            node_count=nodes,
+            edge_count=edges,
+            failure_code=failure,
         )
 
 
@@ -135,9 +231,22 @@ class _ProcessResult:
     reason: str | None
 
 
-def _run_bounded(argv: list[str], cwd: Path, timeout: float, stdout_cap: int, stderr_cap: int) -> _ProcessResult:
+def _run_bounded(
+    argv: list[str], cwd: Path, timeout: float, stdout_cap: int, stderr_cap: int
+) -> _ProcessResult:
     try:
-        process = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, env={key: value for key in _ENV_ALLOWLIST if (value := os.environ.get(key)) is not None}, start_new_session=True)
+        process = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+            env={
+                key: value for key in _ENV_ALLOWLIST if (value := os.environ.get(key)) is not None
+            },
+            start_new_session=True,
+        )
     except OSError:
         return _ProcessResult(None, "", "", "spawn_failed")
     selector = selectors.DefaultSelector()
@@ -171,8 +280,15 @@ def _run_bounded(argv: list[str], cwd: Path, timeout: float, stdout_cap: int, st
                 stream.close()
 
 
-def _result(process: subprocess.Popen[bytes], buffers: dict[str, bytearray], reason: str | None) -> _ProcessResult:
-    return _ProcessResult(process.returncode, bytes(buffers["stdout"]).decode(errors="replace")[:], bytes(buffers["stderr"]).decode(errors="replace")[:], reason)
+def _result(
+    process: subprocess.Popen[bytes], buffers: dict[str, bytearray], reason: str | None
+) -> _ProcessResult:
+    return _ProcessResult(
+        process.returncode,
+        bytes(buffers["stdout"]).decode(errors="replace")[:],
+        bytes(buffers["stderr"]).decode(errors="replace")[:],
+        reason,
+    )
 
 
 def _terminate(process: subprocess.Popen[bytes]) -> None:
@@ -185,8 +301,21 @@ def _terminate(process: subprocess.Popen[bytes]) -> None:
 
 def _validate_graph(path: Path) -> tuple[int, int]:
     value = json.loads(path.read_text(encoding="utf-8"))
-    required = {"directed", "multigraph", "graph", "nodes", "links", "hyperedges", "built_at_commit"}
-    if not isinstance(value, dict) or not required.issubset(value) or not isinstance(value["nodes"], list) or not isinstance(value["links"], list):
+    required = {
+        "directed",
+        "multigraph",
+        "graph",
+        "nodes",
+        "links",
+        "hyperedges",
+        "built_at_commit",
+    }
+    if (
+        not isinstance(value, dict)
+        or set(value) != required
+        or not isinstance(value["nodes"], list)
+        or not isinstance(value["links"], list)
+    ):
         raise ValueError("invalid Graphify graph schema")
     return len(value["nodes"]), len(value["links"])
 

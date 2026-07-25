@@ -6,6 +6,7 @@ not just the ORM metadata."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -42,12 +43,17 @@ def _alembic_config(db_path: Path) -> Config:
 
 
 @pytest.fixture
-def session(tmp_path: Path) -> Session:
+def session(tmp_path: Path) -> Iterator[Session]:
     db_path = tmp_path / "memory.db"
     command.upgrade(_alembic_config(db_path), "head")
     engine = create_engine(f"sqlite:///{db_path}")
     factory = create_session_factory(engine)
-    return factory()
+    db_session = factory()
+    try:
+        yield db_session
+    finally:
+        db_session.close()
+        engine.dispose()
 
 
 def _make_run(session: Session) -> RunId:

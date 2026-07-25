@@ -7,7 +7,6 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
-
 _SCHEMA_VERSION = 1
 
 
@@ -28,9 +27,19 @@ class IndexMetadata:
     def __post_init__(self) -> None:
         if self.schema_version != _SCHEMA_VERSION:
             raise ValueError("unsupported index metadata schema version")
-        if not all((self.graphify_version, self.vault_identity_hash, self.source_snapshot_hash, self.graph_checksum)):
+        if not all(
+            (
+                self.graphify_version,
+                self.vault_identity_hash,
+                self.source_snapshot_hash,
+                self.graph_checksum,
+            )
+        ):
             raise ValueError("index metadata identity fields must not be empty")
-        if min(self.included_file_count, self.source_total_bytes, self.node_count, self.edge_count) < 0:
+        if (
+            min(self.included_file_count, self.source_total_bytes, self.node_count, self.edge_count)
+            < 0
+        ):
             raise ValueError("index metadata counts must not be negative")
         if self.build_duration_seconds < 0:
             raise ValueError("build_duration_seconds must not be negative")

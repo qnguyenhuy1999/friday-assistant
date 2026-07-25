@@ -204,10 +204,31 @@ class ObsidianVaultStore:
         current = self._require_text(candidate.path)
         if _hash(current) != candidate.expected_content_hash:
             raise MemoryWriteConflict("managed note changed before append")
-        self._atomic_write(path, content)
+        self._append_if_unchanged(path, candidate.expected_content_hash, content[len(before) :])
         return MemoryWriteResult(
             candidate.path, candidate.operation, _hash(content), False, len(content.encode())
         )
+
+    def _append_if_unchanged(self, path: Path, expected_hash: str | None, suffix: str) -> None:
+        """Append through the opened inode, never replace the pathname.
+
+        Human editors commonly publish with atomic rename.  If that happens
+        after our final hash check, the old inode can receive this append but
+        the editor's new pathname remains authoritative; Friday never
+        clobbers it.  Friday writers are serialized by ``_note_lock``.
+        """
+        descriptor = os.open(path, os.O_RDWR | os.O_APPEND)
+        try:
+            with os.fdopen(descriptor, "r+b", closefd=False) as handle:
+                handle.seek(0)
+                current = handle.read().decode("utf-8")
+                if _hash(current) != expected_hash:
+                    raise MemoryWriteConflict("managed note changed before append")
+                handle.write(suffix.encode("utf-8"))
+                handle.flush()
+                os.fsync(handle.fileno())
+        finally:
+            os.close(descriptor)
 
     def _atomic_create(self, path: Path, content: str) -> None:
         """Publish via a hard link, which atomically fails if *path* already

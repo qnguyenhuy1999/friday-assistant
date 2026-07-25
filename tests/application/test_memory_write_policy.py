@@ -165,8 +165,8 @@ def test_policy_never_returns_an_authorized_write() -> None:
     assert not hasattr(result, "authorized")
 
 
-@pytest.mark.parametrize("managed_root", ("", "/Friday", "Elsewhere"))
-def test_policy_rejects_non_friday_managed_roots(managed_root: str) -> None:
+@pytest.mark.parametrize("managed_root", ("", "/Friday", "../Elsewhere"))
+def test_policy_rejects_invalid_managed_roots(managed_root: str) -> None:
     with pytest.raises(ValueError):
         MemoryWritePolicy(managed_root=managed_root)
 

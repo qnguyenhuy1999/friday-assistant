@@ -168,7 +168,7 @@ def _memory_stack(uow_factory: UnitOfWorkFactory) -> _MemoryStack:
         return _disabled_memory_stack()
 
     policy = MemoryVaultPolicy(
-        include_globs=settings.include_globs,
+        include_globs=settings.effective_include_globs,
         exclude_globs=settings.exclude_globs,
         max_files=settings.max_files,
         max_note_bytes=settings.max_note_bytes,
@@ -183,6 +183,7 @@ def _memory_stack(uow_factory: UnitOfWorkFactory) -> _MemoryStack:
         policy=policy,
         max_search_limit=settings.max_candidates,
         max_excerpt_chars=settings.max_excerpt_chars,
+        managed_root=settings.managed_root,
     )
     retrieval_settings = MemoryRetrievalSettings(
         max_candidates=settings.max_candidates,

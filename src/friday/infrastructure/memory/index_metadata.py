@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,9 +23,12 @@ class IndexMetadata:
     graph_checksum: str
     node_count: int
     edge_count: int
+    # Kept last with a default so active indexes produced before durable
+    # snapshot provenance can be read while the next rebuild upgrades them.
+    snapshot_id: str = ""
 
     def __post_init__(self) -> None:
-        if self.schema_version != _SCHEMA_VERSION:
+        if self.schema_version not in {1, _SCHEMA_VERSION}:
             raise ValueError("unsupported index metadata schema version")
         if not all(
             (
@@ -53,7 +56,16 @@ class IndexMetadata:
     def from_json(cls, raw: str) -> IndexMetadata:
         try:
             value = json.loads(raw)
-            if not isinstance(value, dict) or set(value) != set(cls.__dataclass_fields__):
+            if not isinstance(value, dict):
+                raise ValueError("invalid index metadata fields")
+            fields = set(cls.__dataclass_fields__)
+            legacy_fields = fields - {"snapshot_id"}
+            if set(value) == legacy_fields:
+                # A pre-v2 index has no row in memory_index_snapshots to
+                # satisfy the retrieval-record FK.  Preserve its search
+                # usability, but do not invent a durable provenance ID.
+                value["snapshot_id"] = ""
+            elif set(value) != fields:
                 raise ValueError("invalid index metadata fields")
             value["built_at"] = datetime.fromisoformat(value["built_at"])
             return cls(**value)

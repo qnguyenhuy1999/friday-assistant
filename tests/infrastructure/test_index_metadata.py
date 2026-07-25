@@ -55,7 +55,7 @@ def test_metadata_rejects_missing_file_and_invalid_values(tmp_path):
     with pytest.raises(ValueError, match="identity"):
         IndexMetadata(1, "", "vault", "snapshot", 0, 0, datetime.now(UTC), 0, "graph", 0, 0)
     with pytest.raises(ValueError, match="schema"):
-        IndexMetadata(2, "version", "vault", "snapshot", 0, 0, datetime.now(UTC), 0, "graph", 0, 0)
+        IndexMetadata(3, "version", "vault", "snapshot", 0, 0, datetime.now(UTC), 0, "graph", 0, 0)
     with pytest.raises(ValueError, match="counts"):
         IndexMetadata(1, "version", "vault", "snapshot", -1, 0, datetime.now(UTC), 0, "graph", 0, 0)
     with pytest.raises(ValueError, match="duration"):

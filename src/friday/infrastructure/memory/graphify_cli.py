@@ -129,8 +129,9 @@ class GraphifyCliIndexBuilder:
             shutil.rmtree(staging / "graphify-out", ignore_errors=True)
             checksum = _checksum(target)
             file_count, source_bytes = self._source_stats(request)
+            snapshot_id = self._snapshot_id(request)
             metadata = IndexMetadata(
-                1,
+                2,
                 version,
                 request.vault_identity_hash,
                 request.source_snapshot_hash,
@@ -141,6 +142,7 @@ class GraphifyCliIndexBuilder:
                 checksum,
                 node_count,
                 edge_count,
+                snapshot_id,
             )
             metadata.write(staging)
             self._promote(vault_dir, staging)
@@ -155,6 +157,7 @@ class GraphifyCliIndexBuilder:
                 None,
                 file_count,
                 source_bytes,
+                snapshot_id=snapshot_id,
             )
         except (OSError, ValueError, json.JSONDecodeError):
             return self._snapshot(
@@ -230,11 +233,10 @@ class GraphifyCliIndexBuilder:
         failure: str | None,
         file_count: int = 0,
         source_bytes: int = 0,
+        snapshot_id: str | None = None,
     ) -> IndexSnapshot:
         return IndexSnapshot(
-            id=hashlib.sha256(
-                f"{request.source_snapshot_hash}:{time.monotonic_ns()}".encode()
-            ).hexdigest(),
+            id=snapshot_id or self._snapshot_id(request),
             vault_identity_hash=request.vault_identity_hash,
             source_snapshot_hash=request.source_snapshot_hash,
             graph_checksum=checksum,
@@ -248,6 +250,12 @@ class GraphifyCliIndexBuilder:
             edge_count=edges,
             failure_code=failure,
         )
+
+    @staticmethod
+    def _snapshot_id(request: IndexBuildRequest) -> str:
+        return hashlib.sha256(
+            f"{request.source_snapshot_hash}:{time.monotonic_ns()}".encode()
+        ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)

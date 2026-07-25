@@ -550,6 +550,36 @@ def test_status_preserves_metadata_fields(tmp_path):
     assert st.edge_count == 0
 
 
+def test_structural_candidates_carry_durable_metadata_snapshot_id(tmp_path):
+    settings = _make_settings(tmp_path)
+    vault = settings.vault_root
+    _make_vault_md(vault, "00-Inbox/alpha.md")
+    source_hash = _store_for(vault).source_snapshot_hash()
+    active = _active_dir(settings)
+    _write_graph(active, nodes=[_A_NODE], links=[])
+    metadata = IndexMetadata(
+        2,
+        "version",
+        "vault",
+        source_hash,
+        1,
+        1,
+        datetime.now(UTC),
+        0.1,
+        "checksum",
+        1,
+        0,
+        "persisted-snapshot-id",
+    )
+    metadata.write(active)
+
+    candidate = GraphifyJsonIndex(settings, _store_for(vault)).search(
+        MemoryQuery(titles=("Alpha Note",)), limit=1
+    )[0]
+
+    assert candidate.index_snapshot_id == "persisted-snapshot-id"
+
+
 # ---------------------------------------------------------------------------
 # search()
 # ---------------------------------------------------------------------------

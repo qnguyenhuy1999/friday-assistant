@@ -158,6 +158,26 @@ def test_claim_loss_before_audit_commit_persists_nothing() -> None:
     assert harness.uow.memory_retrieval_repo.added == []
 
 
+def test_claim_loss_in_memory_audit_transaction_persists_nothing() -> None:
+    harness = Harness(FINISH)
+    retriever = RecordingRetriever(harness)
+    _with_memory(harness, retriever)
+    original = harness.uow.work_queue_repo.is_claim_active
+    checks = {"count": 0}
+
+    def lose_on_audit_check(*args: object, **kwargs: object) -> bool:
+        checks["count"] += 1
+        # First check is the pre-retrieval fence; second is the audit UoW.
+        return checks["count"] < 2 and original(*args, **kwargs)  # type: ignore[arg-type]
+
+    harness.uow.work_queue_repo.is_claim_active = lose_on_audit_check  # type: ignore[method-assign]
+    outcome = harness.processor.process(harness.context())
+
+    assert outcome.kind == "yielded"
+    assert harness.uow.event_store.appended == []
+    assert harness.uow.memory_retrieval_repo.added == []
+
+
 def test_retrieval_failure_uses_safe_marker_and_continues() -> None:
     harness = Harness(FinishAction(summary="done"))
     retriever = RecordingRetriever(harness, fail=True)

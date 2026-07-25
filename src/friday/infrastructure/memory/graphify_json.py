@@ -194,6 +194,12 @@ class GraphifyJsonIndex:
             result.append(node)
         return result, None
 
+    def _snapshot_id(self) -> str | None:
+        try:
+            return IndexMetadata.read(self._active_dir()).snapshot_id or None
+        except ValueError:
+            return None
+
     # ------------------------------------------------------------------
     # StructuralIndex protocol
     # ------------------------------------------------------------------
@@ -281,7 +287,7 @@ class GraphifyJsonIndex:
 
         return IndexStatus(
             state=state,
-            snapshot_id=metadata.graph_checksum,
+            snapshot_id=metadata.snapshot_id,
             source_snapshot_hash=metadata.source_snapshot_hash,
             graph_checksum=metadata.graph_checksum,
             node_count=metadata.node_count,
@@ -291,6 +297,7 @@ class GraphifyJsonIndex:
         )
 
     def search(self, query: MemoryQuery, *, limit: int) -> tuple[MemoryCandidate, ...]:
+        snapshot_id = self._snapshot_id()
         applicable, failure = self._get_applicable_nodes()
         if failure is not None or not applicable:
             return ()
@@ -318,6 +325,7 @@ class GraphifyJsonIndex:
                         title=str(label),
                         methods=(RetrievalMethod.STRUCTURAL_NODE,),
                         score=1.0,
+                        index_snapshot_id=snapshot_id,
                     )
                 )
                 if len(candidates) >= limit:
@@ -343,6 +351,7 @@ class GraphifyJsonIndex:
                             title=label,
                             methods=(RetrievalMethod.STRUCTURAL_NODE,),
                             score=0.9,
+                            index_snapshot_id=snapshot_id,
                         )
                     )
                     if len(candidates) >= limit:
@@ -368,6 +377,7 @@ class GraphifyJsonIndex:
                             title=label,
                             methods=(RetrievalMethod.STRUCTURAL_NODE,),
                             score=0.9,
+                            index_snapshot_id=snapshot_id,
                         )
                     )
                     if len(candidates) >= limit:
@@ -378,6 +388,7 @@ class GraphifyJsonIndex:
         return tuple(candidates[:limit])
 
     def neighbors(self, path: str, *, depth: int, max_nodes: int) -> tuple[MemoryCandidate, ...]:
+        snapshot_id = self._snapshot_id()
         data, failure = self._try_load_graph()
         if failure is not None or data is None:
             return ()
@@ -429,6 +440,7 @@ class GraphifyJsonIndex:
                             methods=(RetrievalMethod.STRUCTURAL_NEIGHBOR,),
                             score=1.0,
                             graph_distance=dist,
+                            index_snapshot_id=snapshot_id,
                         )
                     )
                 if len(result) >= max_nodes:

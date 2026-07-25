@@ -25,6 +25,7 @@ from friday.domain.json_value import JsonValue
 from friday.domain.tool import ToolInvocation, ToolInvocationStatus
 from friday.infrastructure.tools.gateway import WorkspaceToolGateway, WorkspaceToolGatewaySettings
 from friday.infrastructure.tools.memory_tools import (
+    MemoryTools,
     MemoryToolSettings,
     _bounded_integer,
     _frontmatter,
@@ -131,6 +132,35 @@ def test_create_is_managed_and_never_overwrites(gateway: tuple[WorkspaceToolGate
     duplicate = call(gateway[0], "memory.create_note", value)
     assert duplicate.status == "failed"
     assert created.read_bytes() == original
+
+
+def test_configured_managed_root_is_used_by_memory_write_tools(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    tools = MemoryTools(
+        MemoryToolSettings(
+            vault_root=vault,
+            policy=MemoryVaultPolicy(("AssistantMemory/**/*.md",), (), 100, 10_000),
+            managed_root="AssistantMemory",
+        )
+    )
+    result = tools.create_note(
+        {
+            "path": "AssistantMemory/Inbox/new.md",
+            "payload": "remember this",
+            "memory_category": MemoryCategory.EXPLICIT_USER_REQUEST_TO_REMEMBER.value,
+            "frontmatter": {
+                "friday_managed": "true",
+                "friday_memory_id": "m1",
+                "source_run_id": "r1",
+                "created_at": "now",
+                "updated_at": "now",
+            },
+        }
+    )
+
+    assert result.status == "succeeded"
+    assert (vault / "AssistantMemory/Inbox/new.md").is_file()
 
 
 def test_append_compares_hash_and_preserves_conflicting_file(

@@ -20,12 +20,7 @@ from friday.application.memory.models import MemoryWriteCandidate, MemoryWriteOp
 from friday.domain.identifiers import RunId, RunStepId
 
 _DEFAULT_MANAGED_ROOT = "Friday"
-_PERMITTED_TARGET_PREFIXES = (
-    "Friday/Inbox/",
-    "Friday/Preferences/",
-    "Friday/Projects/",
-    "Friday/Decisions/",
-)
+_PERMITTED_TARGET_SUFFIXES = ("Inbox", "Preferences", "Projects", "Decisions")
 _REQUIRED_FRONTMATTER_KEYS = frozenset(
     {"friday_managed", "friday_memory_id", "source_run_id", "created_at", "updated_at"}
 )
@@ -72,8 +67,8 @@ class MemoryWritePolicy:
     def __post_init__(self) -> None:
         if not self.managed_root or self.managed_root.startswith("/"):
             raise ValueError("MemoryWritePolicy.managed_root must be a relative path")
-        if self.managed_root.rstrip("/") != _DEFAULT_MANAGED_ROOT:
-            raise ValueError("MemoryWritePolicy.managed_root must be Friday")
+        if ".." in self.managed_root.split("/"):
+            raise ValueError("MemoryWritePolicy.managed_root must not escape the vault")
 
     def validate(self, candidate: MemoryWriteCandidate) -> ValidatedMemoryWrite:
         """Validate a proposal before calculating its approval fingerprint."""
@@ -118,9 +113,14 @@ class MemoryWritePolicy:
             or ".." in parts
             or any(part in {"", "."} for part in parts)
             or not path.endswith(".md")
-            or not path.startswith(_PERMITTED_TARGET_PREFIXES)
+            or not path.startswith(self._permitted_target_prefixes)
         ):
             raise MemoryWriteDenied("target must be a managed, vault-relative Markdown note")
+
+    @property
+    def _permitted_target_prefixes(self) -> tuple[str, ...]:
+        root = self.managed_root.rstrip("/")
+        return tuple(f"{root}/{suffix}/" for suffix in _PERMITTED_TARGET_SUFFIXES)
 
     def _validate_operation(self, candidate: MemoryWriteCandidate) -> None:
         if (

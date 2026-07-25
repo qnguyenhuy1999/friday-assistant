@@ -442,7 +442,13 @@ class AgentRunProcessor:
             )
         if not self._claim_holds(context):
             return None
-        self._record_memory_events(context, turn, query, memory)
+        try:
+            self._record_memory_events(context, turn, query, memory)
+        except ClaimLost:
+            # Retrieval itself is deliberately outside a transaction.  Its
+            # audit is not: a lost lease must discard both the context and
+            # every durable trace of this worker's retrieval.
+            return None
         return memory
 
     def _record_memory_events(
@@ -464,6 +470,14 @@ class AgentRunProcessor:
                 )
             )
         with self._uow_factory() as uow:
+            if not uow.work_queue.is_claim_active(
+                context.run_id,
+                context.worker_id,
+                context.claim_token,
+                context.claim_generation,
+                self._clock.now(),
+            ):
+                raise ClaimLost("claim is no longer active; refusing memory retrieval audit")
             run = uow.runs.get(context.run_id)
             if run is not None:
                 LifecycleEvents.append_run_events(uow, run, self._clock.now(), specs)

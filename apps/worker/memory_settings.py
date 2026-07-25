@@ -103,6 +103,14 @@ class MemorySettings:
     index_maintenance_seconds: float
     index_max_files_per_scan: int
 
+    @property
+    def effective_include_globs(self) -> tuple[str, ...]:
+        """The configured managed area is Friday-owned memory and must be
+        retrievable; keep it in the same curated source set as all reads."""
+        managed = f"{self.managed_root.rstrip('/')}/*.md"
+        recursive_managed = f"{self.managed_root.rstrip('/')}/**/*.md"
+        return tuple(dict.fromkeys((*self.include_globs, managed, recursive_managed)))
+
     def __post_init__(self) -> None:
         positives = {
             "max_files": self.max_files,

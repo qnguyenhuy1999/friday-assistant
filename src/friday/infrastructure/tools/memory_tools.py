@@ -33,6 +33,7 @@ _DEFAULT_MAX_EXCERPT_CHARS = 2_000
 class MemoryToolSettings:
     vault_root: Path
     policy: MemoryVaultPolicy
+    managed_root: str = "Friday"
     max_search_limit: int = _DEFAULT_SEARCH_LIMIT
     max_excerpt_chars: int = _DEFAULT_MAX_EXCERPT_CHARS
 
@@ -48,8 +49,10 @@ class MemoryTools:
 
     def __init__(self, settings: MemoryToolSettings) -> None:
         self._settings = settings
-        self._store = ObsidianVaultStore(settings.vault_root, settings.policy)
-        self._write_policy = MemoryWritePolicy()
+        self._store = ObsidianVaultStore(
+            settings.vault_root, settings.policy, managed_root=settings.managed_root
+        )
+        self._write_policy = MemoryWritePolicy(settings.managed_root)
 
     def search(self, tool_input: JsonValue) -> ToolExecutionResult:
         values = _object(tool_input)

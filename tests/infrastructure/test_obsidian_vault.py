@@ -418,6 +418,36 @@ def test_two_concurrent_appends_only_one_expected_hash_wins(tmp_path: Path) -> N
     assert content.count("from-writer") == 1
 
 
+def test_human_atomic_save_after_final_hash_check_is_never_overwritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An editor may rename a newly saved note after Friday opened its FD.
+    Friday appends only to that opened inode, never replaces the pathname."""
+    store = _store(tmp_path)
+    original = "---\nfriday_managed: true\n---\nold"
+    _write(tmp_path, "Friday/Inbox/a.md", original)
+    path = tmp_path / "Friday/Inbox/a.md"
+    expected = hashlib.sha256(original.encode()).hexdigest()
+    real_fsync = os.fsync
+
+    def save_human_version(fd: int) -> None:
+        path.write_text("---\nfriday_managed: true\n---\nhuman version", encoding="utf-8")
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", save_human_version)
+    store.write_candidate(
+        _candidate(
+            "Friday/Inbox/a.md",
+            operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
+            expected_content_hash=expected,
+            frontmatter=(),
+            payload="friday append",
+        )
+    )
+
+    assert path.read_text(encoding="utf-8").endswith("human version")
+
+
 def test_included_paths_honors_directory_entry_scan_ceiling(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

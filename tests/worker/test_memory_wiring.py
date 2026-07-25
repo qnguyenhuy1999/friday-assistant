@@ -13,6 +13,8 @@ from apps.worker.preflight import run_memory_preflight
 from friday.application.memory.models import IndexState, MemoryQuery, RetrievalMode
 from friday.application.ports import UnitOfWorkFactory
 from friday.application.run_processor import ProcessingOutcome
+from friday.infrastructure.memory.index_metadata import IndexMetadata
+from friday.infrastructure.tools.memory_tools import MemoryTools
 from tests.worker.fake_claude import make_fake_claude
 from tests.worker.test_worker_composition import runtime_settings, worker_settings
 from tests.worker.test_worker_loop import _run_and_loop
@@ -57,6 +59,38 @@ def test_enabled_memory_retrieves_a_fixture_note(
         assert "yellow canary" in memory.excerpts[0].text
     finally:
         worker.engine.dispose()
+
+
+def test_created_managed_note_is_retrievable_next_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    (vault / "notes").mkdir(parents=True)
+    (vault / "notes" / "existing.md").write_text("baseline", encoding="utf-8")
+    _configure_memory(monkeypatch, vault, tmp_path / "index")
+    monkeypatch.setenv("FRIDAY_OBSIDIAN_MANAGED_ROOT", "AssistantMemory")
+    factory = _uow_factory(tmp_path)
+    stack = app._memory_stack(factory)
+    assert stack.tool_settings is not None
+    assert stack.refresh_index is None  # Graphify is intentionally off in this focused flow.
+    result = MemoryTools(stack.tool_settings).create_note(
+        {
+            "path": "AssistantMemory/Inbox/note.md",
+            "payload": "managed retrieval canary",
+            "memory_category": "explicit_user_request_to_remember",
+            "frontmatter": {
+                "friday_managed": "true",
+                "friday_memory_id": "m1",
+                "source_run_id": "r1",
+                "created_at": "now",
+                "updated_at": "now",
+            },
+        }
+    )
+    assert result.status == "succeeded"
+
+    memory = stack.retriever.retrieve(query=MemoryQuery(terms=("canary",)))
+    assert [excerpt.path for excerpt in memory.excerpts] == ["AssistantMemory/Inbox/note.md"]
 
 
 def test_disabled_memory_does_not_construct_a_vault_store(
@@ -361,6 +395,8 @@ def test_index_build_persists_snapshot(tmp_path: Path, monkeypatch: pytest.Monke
     assert persisted is not None
     assert persisted.id == snapshot.id
     assert persisted.state is snapshot.state
+    active = index_root / snapshot.vault_identity_hash[:32] / "active"
+    assert IndexMetadata.read(active).snapshot_id == persisted.id
 
 
 def test_retrieval_audit_persists_from_real_worker(

@@ -70,6 +70,17 @@ def test_enabled_memory_requires_explicit_include_globs(
         MemorySettings.from_env()
 
 
+def test_effective_include_globs_adds_configured_managed_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _configure_valid_environment(monkeypatch, tmp_path)
+    monkeypatch.setenv("FRIDAY_OBSIDIAN_MANAGED_ROOT", "AssistantMemory")
+
+    settings = MemorySettings.from_env()
+
+    assert "AssistantMemory/**/*.md" in settings.effective_include_globs
+
+
 @pytest.mark.parametrize("managed_root", ("../outside", "/outside"))
 def test_managed_root_cannot_escape_vault(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, managed_root: str

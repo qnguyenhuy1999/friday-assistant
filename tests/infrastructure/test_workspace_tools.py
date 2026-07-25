@@ -122,6 +122,25 @@ def test_list_shallow_recursion_includes_one_level(workspace: Path) -> None:
     assert "docs/readme.md" in paths
 
 
+def test_recursive_listing_does_not_descend_into_a_symlinked_directory(
+    workspace: Path, tmp_path: Path
+) -> None:
+    """A symlinked directory must be reported as an entry but never
+    recursed into — checking is_dir() before is_symlink() would stat
+    through the link and wrongly treat it as a real subdirectory."""
+    outside = tmp_path / "outside-dir"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("leaked")
+    (workspace / "linked").symlink_to(outside)
+    result = files(workspace).list_entries({"recursive": True})
+    assert isinstance(result.output, dict)
+    entries = result.output["entries"]
+    assert isinstance(entries, list)
+    paths = [entry["path"] for entry in entries if isinstance(entry, dict)]
+    assert "linked" in paths
+    assert "linked/secret.txt" not in paths
+
+
 def test_list_caps_entry_count_with_truncated_flag(workspace: Path) -> None:
     for index in range(10):
         (workspace / f"file-{index:02}.txt").write_text("x")

@@ -143,7 +143,7 @@ def test_read_only_tool_executes_without_approval() -> None:
         RunEventType.TOOL_INVOCATION_STARTED,
         RunEventType.TOOL_INVOCATION_SUCCEEDED,
     ]
-    assert uow.commit_count == 2  # Txn A + Txn B
+    assert uow.commit_count == 3  # Txn A + mandatory mid-execution claim check + Txn B
 
 
 def test_no_transaction_is_open_while_the_tool_runs() -> None:
@@ -337,7 +337,10 @@ def test_claim_lost_before_txn_a_persists_nothing() -> None:
     assert uow.commit_count == 0
 
 
-def test_claim_lost_after_execution_leaves_invocation_running() -> None:
+def test_claim_lost_before_execution_prevents_side_effect() -> None:
+    """The mandatory mid-execution claim check (between Txn A and
+    gateway.execute) must fail closed: a claim lost right after
+    authorization stops the tool from ever running."""
     uow, factory, run, generation = _claimed_run()
     gateway = FakeGateway()
 
@@ -348,16 +351,38 @@ def test_claim_lost_after_execution_leaves_invocation_running() -> None:
         calls["n"] += 1
         if calls["n"] == 1:
             return original(*args, **kwargs)  # type: ignore[arg-type]
-        return False  # claim gone by Txn B
+        return False  # claim gone before the side effect starts
 
     uow.work_queue_repo.is_claim_active = lose_after_first  # type: ignore[method-assign]
+    with pytest.raises(ClaimLost):
+        _run_call(_executor(factory, gateway), run, generation)
+    assert gateway.executed == []  # never started
+    invocation = uow.tool_repo.list_for_run(run.id)[0]
+    assert invocation.status is ToolInvocationStatus.RUNNING
+    assert uow.commit_count == 1  # only Txn A
+
+
+def test_claim_lost_after_execution_leaves_invocation_running() -> None:
+    uow, factory, run, generation = _claimed_run()
+    gateway = FakeGateway()
+
+    original = uow.work_queue_repo.is_claim_active
+    calls = {"n": 0}
+
+    def lose_after_second(*args: object, **kwargs: object) -> bool:
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return original(*args, **kwargs)  # type: ignore[arg-type]
+        return False  # claim gone by Txn B
+
+    uow.work_queue_repo.is_claim_active = lose_after_second  # type: ignore[method-assign]
     with pytest.raises(ClaimLost):
         _run_call(_executor(factory, gateway), run, generation)
     # the tool DID run — but its result was never persisted
     assert len(gateway.executed) == 1
     invocation = uow.tool_repo.list_for_run(run.id)[0]
     assert invocation.status is ToolInvocationStatus.RUNNING
-    assert uow.commit_count == 1  # only Txn A
+    assert uow.commit_count == 2  # Txn A + mandatory mid-execution claim check
 
 
 def test_unknown_tool_raises_before_any_persistence() -> None:

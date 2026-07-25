@@ -80,18 +80,6 @@ _MAX_TURN_NOTE_CHARS = 500
 _MAX_RECENT_EVENTS = 50
 
 
-class _ContextClaimGuard:
-    def __init__(self, processor: AgentRunProcessor, context: ClaimContext) -> None:
-        self._processor = processor
-        self._context = context
-
-    def is_lease_lost(self) -> bool:
-        return self._context.is_lease_lost()
-
-    def verify_active(self) -> bool:
-        return self._processor._claim_holds(self._context)
-
-
 @dataclass(frozen=True, slots=True)
 class RuntimeLimits:
     max_turns_per_claim: int
@@ -268,7 +256,7 @@ class AgentRunProcessor:
                 worker_id=context.worker_id,
                 claim_token=context.claim_token,
                 claim_generation=context.claim_generation,
-                claim_guard=_ContextClaimGuard(self, context),
+                cancellation_requested=context.is_lease_lost,
                 timeout_seconds=remaining,
             )
         except ToolNotFound:

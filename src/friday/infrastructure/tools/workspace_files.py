@@ -210,7 +210,7 @@ def _iter_entries(directory: Path, recursive: bool, limit: int) -> list[Path]:
     result: list[Path] = []
     for child in children:
         result.append(child)
-        if child.is_dir() and not child.is_symlink():
+        if not child.is_symlink() and child.is_dir():
             nested = _bounded_lexicographic_entries(child, max(0, limit - len(result)))
             result.extend(nested)
             if len(result) >= limit:

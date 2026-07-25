@@ -108,16 +108,36 @@ class ClaudeCliBrainRuntime:
         self._settings = settings
 
     def next_action(self, request: BrainRequest) -> BrainResponse:
-        envelope = self._invoke(self._render_prompt(request), request)
+        # One deadline covers the original call AND a bounded repair retry —
+        # a repair never gets a fresh full budget, or two slow calls could
+        # together exceed both the configured and the caller's processing
+        # timeout.
+        deadline = time.monotonic() + self._effective_budget(request)
+        envelope = self._invoke(self._render_prompt(request), request, self._remaining(deadline))
         try:
             action = parse_brain_action(_decode_action_json(envelope.result_text))
         except BrainResponseInvalid as first_error:
-            envelope = self._invoke(_repair_prompt(first_error, envelope.result_text), request)
+            envelope = self._invoke(
+                _repair_prompt(first_error, envelope.result_text),
+                request,
+                self._remaining(deadline),
+            )
             action = parse_brain_action(_decode_action_json(envelope.result_text))
             return BrainResponse(
                 action=action, model=envelope.model, usage=envelope.usage, repaired=True
             )
         return BrainResponse(action=action, model=envelope.model, usage=envelope.usage)
+
+    def _effective_budget(self, request: BrainRequest) -> float:
+        if request.timeout_seconds is None:
+            return self._settings.timeout_seconds
+        return min(self._settings.timeout_seconds, request.timeout_seconds)
+
+    def _remaining(self, deadline: float) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise BrainTimeout("Claude CLI processing deadline exceeded before invocation")
+        return remaining
 
     def _render_prompt(self, request: BrainRequest) -> str:
         return (
@@ -151,7 +171,7 @@ class ClaudeCliBrainRuntime:
             if (value := os.environ.get(name)) is not None
         }
 
-    def _invoke(self, prompt: str, request: BrainRequest) -> CliEnvelope:
+    def _invoke(self, prompt: str, request: BrainRequest, timeout: float) -> CliEnvelope:
         try:
             process = subprocess.Popen(
                 self._argv(),
@@ -169,7 +189,7 @@ class ClaudeCliBrainRuntime:
         stdout, stderr_bytes = _communicate_bounded(
             process,
             prompt,
-            request.timeout_seconds or self._settings.timeout_seconds,
+            timeout,
             self._settings.max_output_bytes,
             self._settings.max_stderr_bytes,
         )
@@ -213,12 +233,20 @@ def _communicate_bounded(
     max_stdout_bytes: int,
     max_stderr_bytes: int,
 ) -> tuple[str, int]:
+    # stdin is written non-blocking and multiplexed alongside stdout/stderr
+    # reads so a full pipe buffer (child not yet reading, e.g. a hung or
+    # slow-starting process) cannot block this call past `timeout`.
     assert process.stdin is not None
-    process.stdin.write(prompt)
-    process.stdin.close()
+    stdin_fd = process.stdin.fileno()
+    pending = prompt.encode("utf-8")
     selector = selectors.DefaultSelector()
     buffers = {"stdout": bytearray()}
     stderr_bytes = 0
+    if pending:
+        os.set_blocking(stdin_fd, False)
+        selector.register(stdin_fd, selectors.EVENT_WRITE, "stdin")
+    else:
+        process.stdin.close()
     for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
         assert stream is not None
         selector.register(stream, selectors.EVENT_READ, name)
@@ -230,6 +258,18 @@ def _communicate_bounded(
             _terminate_process_group(process)
             raise BrainTimeout(f"Claude CLI exceeded {timeout}s")
         for key, _ in selector.select(min(remaining, 0.1)):
+            if key.data == "stdin":
+                try:
+                    written = os.write(stdin_fd, pending)
+                except BlockingIOError:
+                    continue
+                except BrokenPipeError:
+                    written = len(pending)
+                pending = pending[written:]
+                if not pending:
+                    selector.unregister(key.fileobj)
+                    process.stdin.close()
+                continue
             data = os.read(key.fd, 65536)
             if not data:
                 selector.unregister(key.fileobj)

@@ -23,13 +23,21 @@ fingerprint matches an already-consumed approval, the prior invocation's
 durable outcome is authoritative — succeeded output is reused, a terminal
 failure is surfaced, and a still-RUNNING invocation is ambiguous
 (ToolExecutionAmbiguous): Friday never blindly re-executes a non-idempotent
-action whose first execution may have completed."""
+action whose first execution may have completed.
+
+The claim is re-verified durably, unconditionally, right before the side
+effect — this is the only path from a proposed action to a side effect, so
+it must fail closed even if the caller forgets to check itself. A caller
+may additionally pass `cancellation_requested` for cheap in-flight heartbeat
+cancellation while a long-running tool executes; it is not a substitute for
+the durable check."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import Literal
 
 from friday.application.errors import (
     ClaimLost,
@@ -99,11 +107,6 @@ class ToolActionOutcome:
         )
 
 
-class ClaimGuard(Protocol):
-    def is_lease_lost(self) -> bool: ...
-    def verify_active(self) -> bool: ...
-
-
 class ExecuteToolAction(LifecycleEvents):
     """Authorize, durably record, execute, and persist one tool action under
     an exact worker claim."""
@@ -121,7 +124,7 @@ class ExecuteToolAction(LifecycleEvents):
         worker_id: str,
         claim_token: str,
         claim_generation: int,
-        claim_guard: ClaimGuard | None = None,
+        cancellation_requested: Callable[[], bool] | None = None,
         timeout_seconds: float | None = None,
     ) -> ToolActionOutcome:
         # risk assessment is pure gateway policy — may raise ToolNotFound
@@ -190,11 +193,13 @@ class ExecuteToolAction(LifecycleEvents):
             uow.commit()
             invocation_id = invocation.id
 
-        # ---- execute outside any transaction ------------------------------
-        if claim_guard is not None and (
-            claim_guard.is_lease_lost() or not claim_guard.verify_active()
-        ):
-            raise ClaimLost("claim was lost after authorization; refusing tool execution")
+        # ---- mandatory fresh durable claim check, then execute -----------
+        # outside any transaction. This check is not caller-optional: it is
+        # the only gate between an authorized action and its side effect.
+        with self._uow_factory() as uow:
+            now = self._clock.now()
+            self._require_claim(uow, run_id, worker_id, claim_token, claim_generation, now)
+            uow.commit()
 
         result = self._gateway.execute(
             ToolExecutionRequest(
@@ -202,7 +207,7 @@ class ExecuteToolAction(LifecycleEvents):
                 run_id=run_id,
                 step_id=step_id,
                 call=call,
-                cancellation_requested=(claim_guard.is_lease_lost if claim_guard else None),
+                cancellation_requested=cancellation_requested,
                 timeout_seconds=timeout_seconds,
             )
         )

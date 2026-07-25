@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import stat
+import time
 from pathlib import Path
 
 import pytest
@@ -214,6 +215,45 @@ def test_timeout_raises_brain_timeout(tmp_path: Path) -> None:
     runtime = ClaudeCliBrainRuntime(settings(executable, timeout_seconds=0.3))
     with pytest.raises(BrainTimeout):
         runtime.next_action(request())
+
+
+def test_configured_timeout_caps_a_larger_processing_budget(tmp_path: Path) -> None:
+    """A caller-supplied processing budget must never widen the configured
+    per-call timeout — min(configured, request) applies, not the request
+    value alone."""
+    executable, _ = make_fake(tmp_path, stdouts=[envelope(FINISH_ACTION)], sleep=0.4)
+    runtime = ClaudeCliBrainRuntime(settings(executable, timeout_seconds=0.2))
+    with pytest.raises(BrainTimeout):
+        runtime.next_action(request(timeout_seconds=10.0))
+
+
+def test_repair_attempt_shares_the_original_deadline(tmp_path: Path) -> None:
+    """The bounded repair retry must draw from the same overall deadline as
+    the original call, not get a fresh full budget of its own."""
+    executable, _ = make_fake(
+        tmp_path,
+        stdouts=[envelope("not json"), envelope(INVOKE_ACTION)],
+        sleep=0.35,
+    )
+    runtime = ClaudeCliBrainRuntime(settings(executable, timeout_seconds=0.5))
+    with pytest.raises(BrainTimeout):
+        runtime.next_action(request())
+
+
+def test_stdin_write_never_blocks_past_the_deadline_on_a_stalled_child(
+    tmp_path: Path,
+) -> None:
+    """A child that never reads stdin must not be able to hang the call
+    beyond its timeout via a blocking stdin.write of a large prompt."""
+    script = tmp_path / "stalled-claude"
+    script.write_text("#!/usr/bin/env python3\nimport sys, time\ntime.sleep(5)\nsys.stdin.read()\n")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    runtime = ClaudeCliBrainRuntime(settings(str(script), timeout_seconds=0.3))
+    big_context = "x" * (2 * 1024 * 1024)
+    start = time.monotonic()
+    with pytest.raises(BrainTimeout):
+        runtime.next_action(request(context=big_context))
+    assert time.monotonic() - start < 2.0
 
 
 def test_oversized_stdout_raises_protocol_error(tmp_path: Path) -> None:

@@ -51,6 +51,15 @@ from friday.application.errors import (
     ToolInputInvalid,
     ToolNotFound,
 )
+from friday.application.lifecycle_events import LifecycleEvents
+from friday.application.memory.models import IndexState, MemoryContext, RetrievalMode
+from friday.application.memory.ports import MemoryRetrieverPort
+from friday.application.memory.query_builder import (
+    MemoryQueryBuilder,
+)
+from friday.application.memory.query_builder import (
+    RunSnapshot as MemoryRunSnapshot,
+)
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.run_processor import ClaimContext, ProcessingOutcome
 from friday.application.runtime_actions import (
@@ -71,7 +80,10 @@ from friday.application.tool_authorization import (
 )
 from friday.application.tool_gateway import ToolCall, ToolGateway
 from friday.application.worker_coordination import VerifyRunClaim
+from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
+from friday.domain.identifiers import RunStepId
+from friday.domain.json_value import JsonValue
 from friday.domain.run import RunStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
 from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
@@ -118,6 +130,8 @@ class AgentRunProcessor:
         request_tool_approval: RequestToolApproval,
         execute_tool_action: ExecuteToolAction,
         limits: RuntimeLimits,
+        memory_retriever: MemoryRetrieverPort | None = None,
+        memory_query_builder: MemoryQueryBuilder | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._uow_factory = uow_factory
@@ -128,6 +142,8 @@ class AgentRunProcessor:
         self._request_tool_approval = request_tool_approval
         self._execute_tool_action = execute_tool_action
         self._limits = limits
+        self._memory_retriever = memory_retriever
+        self._memory_query_builder = memory_query_builder or MemoryQueryBuilder()
         self._monotonic = monotonic
 
     # ------------------------------------------------------------------ API
@@ -135,6 +151,10 @@ class AgentRunProcessor:
     def process(self, context: ClaimContext) -> ProcessingOutcome:
         turn_notes: list[str] = []
         tool_calls = 0
+        memory: MemoryContext | None = None
+        memory_refresh_available = True
+        memory_refresh_needed = self._memory_retriever is not None
+        previous_objective: tuple[str, str] | None = None
         deadline = self._monotonic() + self._limits.max_processing_seconds
 
         for turn in range(1, self._limits.max_turns_per_claim + 1):
@@ -147,12 +167,24 @@ class AgentRunProcessor:
             if snapshot is None:
                 return self._yield_now()
 
+            objective = (snapshot.task.title, snapshot.task.description)
+            if previous_objective is not None and objective != previous_objective:
+                memory_refresh_needed = memory_refresh_available
+            previous_objective = objective
+            if memory_refresh_needed:
+                memory = self._retrieve_memory(context, snapshot)
+                memory_refresh_needed = False
+                memory_refresh_available = False
+                if memory is None:
+                    return self._yield_now()
+
             document = build_runtime_context(
                 snapshot,
                 tool_manifest=self._gateway.list_tools(),
                 attempt_number=context.attempt_number,
                 turn_number=turn,
                 max_chars=self._limits.max_context_chars,
+                memory_context=memory,
             )
             remaining = deadline - self._monotonic()
             if remaining <= 0:
@@ -195,6 +227,8 @@ class AgentRunProcessor:
                 turn_notes.append(note[:_MAX_TURN_NOTE_CHARS])
             if tool_call_used:
                 tool_calls += 1
+                if self._is_successful_memory_write(response):
+                    memory_refresh_needed = memory_refresh_available
                 if tool_calls >= self._limits.max_tool_calls_per_claim:
                     return self._yield_now()  # tool budget: continue under a fresh claim
 
@@ -355,6 +389,69 @@ class AgentRunProcessor:
                 events=tuple(events),
                 previous_turns=turn_notes,
             )
+
+    def _retrieve_memory(
+        self, context: ClaimContext, snapshot: RunSnapshot
+    ) -> MemoryContext | None:
+        """Retrieve outside a transaction and discard results on claim loss."""
+        query = self._memory_query_builder.build(
+            MemoryRunSnapshot(
+                task_title=snapshot.task.title,
+                task_description=snapshot.task.description,
+                objective=snapshot.task.title,
+                step_names=tuple(step.name for step in snapshot.steps),
+                failure_codes=tuple(
+                    step.failure.code for step in snapshot.steps if step.failure is not None
+                ),
+                tool_names=tuple(invocation.tool_name for invocation in snapshot.invocations),
+            )
+        )
+        if query is None:
+            return MemoryContext(RetrievalMode.DISABLED, (), (), None, IndexState.DISABLED, 0)
+        try:
+            assert self._memory_retriever is not None
+            memory = self._memory_retriever.retrieve(
+                query=query, source_snapshot_hash=query.query_hash
+            )
+        except Exception:
+            memory = MemoryContext(
+                RetrievalMode.UNAVAILABLE,
+                (),
+                (),
+                "memory retrieval is unavailable",
+                IndexState.DISABLED,
+                0,
+            )
+        if not self._claim_holds(context):
+            return None
+        self._record_memory_events(context, memory)
+        return memory
+
+    def _record_memory_events(self, context: ClaimContext, memory: MemoryContext) -> None:
+        specs: list[tuple[RunEventType, JsonValue, RunStepId | None]] = [
+            (
+                RunEventType.MEMORY_CONTEXT_ATTACHED,
+                {"mode": memory.mode.value, "excerpt_count": len(memory.excerpts)},
+                None,
+            )
+        ]
+        if memory.degraded_reason is not None:
+            specs.append(
+                (
+                    RunEventType.MEMORY_RETRIEVAL_DEGRADED,
+                    {"mode": memory.mode.value, "reason": "memory retrieval unavailable"},
+                    None,
+                )
+            )
+        with self._uow_factory() as uow:
+            run = uow.runs.get(context.run_id)
+            if run is not None:
+                LifecycleEvents.append_run_events(uow, run, self._clock.now(), specs)
+
+    @staticmethod
+    def _is_successful_memory_write(response: BrainResponse) -> bool:
+        action = response.action
+        return isinstance(action, InvokeToolAction) and action.tool.startswith("memory.")
 
     def _finish_blocker(self, run_id: object, snapshot: RunSnapshot | None = None) -> str | None:
         with self._uow_factory() as uow:

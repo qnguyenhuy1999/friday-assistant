@@ -15,6 +15,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
+from friday.application.memory.models import MemoryContext, RetrievalMode
 from friday.application.tool_gateway import ToolDescriptor
 from friday.domain.approval import ApprovalRequest
 from friday.domain.artifact import Artifact
@@ -29,6 +30,7 @@ from friday.domain.tool import ToolInvocation
 MIN_CONTEXT_CHARS = 1000
 MAX_ITEM_CHARS = 2000
 _TRUNCATION_SUFFIX = "…[truncated]"
+_DEFAULT_MEMORY_CONTEXT_CHARS = 4_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +187,30 @@ def _event_lines(events: Sequence[RunEvent], omitted: int) -> list[str]:
     return lines
 
 
+def _memory_lines(memory: MemoryContext) -> list[str]:
+    """Render retrieved memory as untrusted reference material only."""
+    if memory.mode is RetrievalMode.UNAVAILABLE:
+        return ["# MEMORY", "memory unavailable"]
+    lines = ["# MEMORY"]
+    if not memory.excerpts:
+        lines.append("no relevant memory found")
+        return lines
+    for excerpt in memory.excerpts:
+        location = f"{excerpt.path}:{excerpt.start_line}-{excerpt.end_line}"
+        heading = f" — {excerpt.heading}" if excerpt.heading else ""
+        lines.append(f"- {excerpt.title}{heading} ({location})")
+        lines.append(_clip(excerpt.text))
+    return lines
+
+
+def _bounded_memory_section(memory: MemoryContext, *, max_chars: int) -> str:
+    section = "\n".join(_memory_lines(memory))
+    if len(section) <= max_chars:
+        return section
+    marker = "\n[memory truncated to budget]"
+    return section[: max_chars - len(marker)] + marker
+
+
 def _render(
     snapshot: RunSnapshot,
     manifest: tuple[ToolDescriptor, ...],
@@ -254,11 +280,15 @@ def build_runtime_context(
     attempt_number: int,
     turn_number: int,
     max_chars: int,
+    memory_context: MemoryContext | None = None,
+    memory_max_chars: int = _DEFAULT_MEMORY_CONTEXT_CHARS,
 ) -> str:
     """Render the bounded context document. Deterministic for a given
     snapshot and budget; never exceeds `max_chars`."""
     if max_chars < MIN_CONTEXT_CHARS:
         raise ValueError(f"max_chars must be >= {MIN_CONTEXT_CHARS}")
+    if memory_max_chars < 1:
+        raise ValueError("memory_max_chars must be positive")
 
     omitted = _Omitted()
     document = _render(snapshot, tool_manifest, attempt_number, turn_number, omitted)
@@ -269,4 +299,10 @@ def build_runtime_context(
             return document[: max_chars - len(marker)] + marker
         omitted = next_omitted
         document = _render(snapshot, tool_manifest, attempt_number, turn_number, omitted)
-    return document
+    if memory_context is None:
+        return document
+    available = max_chars - len(document) - 2
+    if available <= 0:
+        return document
+    memory = _bounded_memory_section(memory_context, max_chars=min(memory_max_chars, available))
+    return f"{document}\n\n{memory}"

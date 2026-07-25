@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from typing import Protocol
 
 from friday.application.errors import ClaimLost
 from friday.application.run_processor import ClaimContext, ProcessingOutcome, RunProcessor
@@ -22,6 +23,10 @@ from friday.domain.failure import Failure, FailureCause
 logger = logging.getLogger(__name__)
 
 
+class MemoryIndexRefresh(Protocol):
+    def execute(self) -> object: ...
+
+
 class WorkerLoop:
     def __init__(
         self,
@@ -37,6 +42,8 @@ class WorkerLoop:
         heartbeat_interval_seconds: float,
         maintenance_interval_seconds: float,
         poll_interval_seconds: float,
+        refresh_memory_index: MemoryIndexRefresh | None = None,
+        memory_index_maintenance_interval_seconds: float | None = None,
     ) -> None:
         self._claim_next_run = claim_next_run
         self._renew_lease = renew_lease
@@ -46,6 +53,9 @@ class WorkerLoop:
         self._apply_waiting = apply_waiting
         self._recover_expired_leases = recover_expired_leases
         self._expire_due_approvals = expire_due_approvals
+        self._refresh_memory_index = refresh_memory_index
+        self._memory_index_maintenance_interval_seconds = memory_index_maintenance_interval_seconds
+        self._last_memory_index_maintenance = time.monotonic()
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._maintenance_interval_seconds = maintenance_interval_seconds
         self._poll_interval_seconds = poll_interval_seconds
@@ -212,6 +222,21 @@ class WorkerLoop:
         approvals = self._expire_due_approvals.execute()
         logger.info("Recovered %d expired leases", recovered)
         logger.info("Expired %d due approvals", len(approvals))
+        self._refresh_memory_index_if_due()
+
+    def _refresh_memory_index_if_due(self) -> None:
+        refresh = self._refresh_memory_index
+        interval = self._memory_index_maintenance_interval_seconds
+        if refresh is None or interval is None:
+            return
+        now = time.monotonic()
+        if now - self._last_memory_index_maintenance < interval:
+            return
+        try:
+            refresh.execute()
+        except Exception as exc:  # noqa: BLE001 - maintenance must not stop the worker
+            logger.warning("Memory index refresh failed: %s", type(exc).__name__)
+        self._last_memory_index_maintenance = now
 
     def serve_forever(
         self, shutdown_event: threading.Event, processor: RunProcessor | None = None

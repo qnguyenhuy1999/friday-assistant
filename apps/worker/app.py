@@ -5,15 +5,38 @@ Worker exists — no claim can ever happen without a real processor."""
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 from sqlalchemy import Engine
 
+from apps.worker.memory_settings import MemorySettings
 from apps.worker.runtime_settings import RuntimeSettings
 from apps.worker.settings import WorkerSettings
 from apps.worker.worker_loop import WorkerLoop
 from friday.application.agent_run_processor import AgentRunProcessor, RuntimeLimits
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
+from friday.application.memory.index_coordination import (
+    BuildMemoryIndex,
+    InspectMemoryIndex,
+    RefreshMemoryIndexIfStale,
+)
+from friday.application.memory.models import (
+    IndexBuildRequest,
+    IndexSnapshot,
+    IndexState,
+    IndexStatus,
+    MemoryCandidate,
+    MemoryContext,
+    MemoryExcerpt,
+    MemoryQuery,
+    MemoryVaultPolicy,
+    MemoryWriteCandidate,
+    MemoryWriteResult,
+    RetrievalMode,
+)
+from friday.application.memory.retrieval import MemoryRetrievalSettings, MemoryRetriever
+from friday.application.ports import UnitOfWorkFactory
 from friday.application.retry_policy import RetryPolicy
 from friday.application.tool_authorization import RequestToolApproval
 from friday.application.worker_coordination import (
@@ -32,12 +55,17 @@ from friday.infrastructure.brain.claude_cli import (
     verify_brain_only_support,
 )
 from friday.infrastructure.clock import SystemClock
+from friday.infrastructure.memory.graphify_cli import GraphifyCliIndexBuilder, GraphifyCliSettings
+from friday.infrastructure.memory.graphify_json import GraphifyJsonIndex, GraphifyJsonIndexSettings
+from friday.infrastructure.memory.lexical_index import LexicalIndexStore
+from friday.infrastructure.memory.obsidian_vault import ObsidianVaultStore
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
 from friday.infrastructure.tools.gateway import (
     WorkspaceToolGateway,
     WorkspaceToolGatewaySettings,
 )
+from friday.infrastructure.tools.memory_tools import MemoryToolSettings
 
 
 @dataclass(slots=True)
@@ -46,6 +74,177 @@ class Worker:
     settings: WorkerSettings
     loop: WorkerLoop
     processor: AgentRunProcessor
+
+
+class _DisabledMemoryRetriever:
+    """Explicit no-I/O retriever used whenever memory is not safely configured."""
+
+    def retrieve(self, *, query: MemoryQuery) -> MemoryContext:
+        del query
+        return MemoryContext(RetrievalMode.DISABLED, (), (), None, IndexState.DISABLED, 0)
+
+
+class _DisabledStructuralIndex:
+    """Structural index used whenever Graphify is disabled: always reports
+    MISSING so a stale on-disk graph.json from a previous run can never
+    influence retrieval. The flag must guarantee zero structural influence,
+    not just zero rebuilds. MISSING (not DISABLED) keeps retrieval in its
+    normal lexical-only mode -- lexical search is unaffected by this flag,
+    only structural search is."""
+
+    def status(self) -> IndexStatus:
+        return IndexStatus(IndexState.MISSING, None, None, None, 0, 0, None, None)
+
+    def search(self, query: MemoryQuery, *, limit: int) -> tuple[MemoryCandidate, ...]:
+        del query, limit
+        return ()
+
+    def neighbors(self, path: str, *, depth: int, max_nodes: int) -> tuple[MemoryCandidate, ...]:
+        del path, depth, max_nodes
+        return ()
+
+
+class _LexicalMemoryStore:
+    """Use the efficient lexical index while retaining canonical vault reads."""
+
+    def __init__(self, vault: ObsidianVaultStore, lexical: LexicalIndexStore) -> None:
+        self._vault = vault
+        self._lexical = lexical
+
+    def search_lexical(self, query: MemoryQuery, *, limit: int) -> tuple[MemoryCandidate, ...]:
+        return self._lexical.search(query, limit=limit)
+
+    def read_excerpt(self, candidate: MemoryCandidate, *, max_chars: int) -> MemoryExcerpt:
+        return self._vault.read_excerpt(candidate, max_chars=max_chars)
+
+    def source_snapshot_hash(self) -> str:
+        return self._vault.source_snapshot_hash()
+
+    def write_candidate(self, candidate: MemoryWriteCandidate) -> MemoryWriteResult:
+        return self._vault.write_candidate(candidate)
+
+
+class _UowBackedIndexSnapshotRepository:
+    """Adapts the durable snapshot repository to BuildMemoryIndex's
+    UnitOfWork-free call site: index builds happen outside any Run's
+    transaction, so each call here opens its own short transaction and
+    commits immediately rather than relying on a caller to do so."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def add(self, snapshot: IndexSnapshot) -> None:
+        with self._uow_factory() as uow:
+            uow.memory_index_snapshots.add(snapshot)
+            uow.commit()
+
+    def latest(self) -> IndexSnapshot | None:
+        with self._uow_factory() as uow:
+            return uow.memory_index_snapshots.latest()
+
+    def mark_stale(self, snapshot_id: str) -> None:
+        with self._uow_factory() as uow:
+            uow.memory_index_snapshots.mark_stale(snapshot_id)
+            uow.commit()
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoryStack:
+    retriever: MemoryRetriever | _DisabledMemoryRetriever
+    refresh_index: RefreshMemoryIndexIfStale | None
+    maintenance_interval_seconds: float | None
+    tool_settings: MemoryToolSettings | None
+
+
+def _memory_stack(uow_factory: UnitOfWorkFactory) -> _MemoryStack:
+    """Construct opt-in memory dependencies without ever scanning an invalid vault."""
+    try:
+        settings = MemorySettings.from_env()
+    except ValueError:
+        return _disabled_memory_stack()
+    if not settings.memory_enabled or not settings.include_globs:
+        return _disabled_memory_stack()
+    if not settings.vault_root.is_dir():
+        return _disabled_memory_stack()
+
+    policy = MemoryVaultPolicy(
+        include_globs=settings.effective_include_globs,
+        exclude_globs=settings.exclude_globs,
+        max_files=settings.max_files,
+        max_note_bytes=settings.max_note_bytes,
+    )
+    vault = ObsidianVaultStore(settings.vault_root, policy, managed_root=settings.managed_root)
+    lexical = LexicalIndexStore(
+        settings.vault_root, policy, max_files_scanned=settings.index_max_files_per_scan
+    )
+    store = _LexicalMemoryStore(vault, lexical)
+    tool_settings = MemoryToolSettings(
+        vault_root=settings.vault_root,
+        policy=policy,
+        max_search_limit=settings.max_candidates,
+        max_excerpt_chars=settings.max_excerpt_chars,
+        managed_root=settings.managed_root,
+    )
+    retrieval_settings = MemoryRetrievalSettings(
+        max_candidates=settings.max_candidates,
+        max_excerpts=settings.max_excerpts,
+        max_excerpt_chars=settings.max_excerpt_chars,
+        max_total_context_chars=settings.max_total_context_chars,
+        max_graph_depth=settings.max_graph_depth,
+        max_graph_nodes_visited=settings.max_graph_nodes_visited,
+    )
+
+    if not settings.graphify_enabled:
+        # Fail-closed: no GraphifyJsonIndex is even constructed, so a stale
+        # active/graph.json left on disk from a previous run cannot leak
+        # structural results back into retrieval.
+        retriever = MemoryRetriever(store, _DisabledStructuralIndex(), settings=retrieval_settings)
+        return _MemoryStack(retriever, None, None, tool_settings)
+
+    vault_identity_hash = hashlib.sha256(str(vault.root).encode("utf-8")).hexdigest()
+    index = GraphifyJsonIndex(
+        GraphifyJsonIndexSettings(
+            vault_root=vault.root,
+            index_root=settings.graphify_index_root,
+            vault_identity_hash=vault_identity_hash,
+            max_graph_bytes=settings.graphify_max_graph_bytes,
+        ),
+        store,
+    )
+    retriever = MemoryRetriever(store, index, settings=retrieval_settings)
+
+    builder = GraphifyCliIndexBuilder(
+        GraphifyCliSettings(
+            vault_root=vault.root,
+            index_root=settings.graphify_index_root,
+            executable=settings.graphify_executable,
+            timeout_seconds=settings.graphify_build_timeout_seconds,
+            max_stdout_bytes=settings.graphify_max_stdout_bytes,
+            max_stderr_bytes=settings.graphify_max_stderr_bytes,
+            max_graph_bytes=settings.graphify_max_graph_bytes,
+        )
+    )
+
+    def request_factory(source_snapshot_hash: str) -> IndexBuildRequest:
+        paths = vault.included_paths()[: settings.index_max_files_per_scan]
+        return IndexBuildRequest(
+            vault_identity_hash,
+            source_snapshot_hash,
+            paths,
+            settings.graphify_build_timeout_seconds,
+            settings.graphify_max_graph_bytes,
+        )
+
+    snapshots = _UowBackedIndexSnapshotRepository(uow_factory)
+    refresh = RefreshMemoryIndexIfStale(
+        InspectMemoryIndex(index, store),
+        BuildMemoryIndex(builder, store, request_factory, snapshots),
+    )
+    return _MemoryStack(retriever, refresh, settings.index_maintenance_seconds, tool_settings)
+
+
+def _disabled_memory_stack() -> _MemoryStack:
+    return _MemoryStack(_DisabledMemoryRetriever(), None, None, None)
 
 
 def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
@@ -58,17 +257,6 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
         max_stderr_bytes=runtime.claude_max_stderr_bytes,
     )
     verify_brain_only_support(claude_settings)  # raises BrainUnavailable
-    gateway = WorkspaceToolGateway(  # raises WorkspaceAccessDenied
-        WorkspaceToolGatewaySettings(
-            workspace_root=runtime.workspace_root,
-            max_file_bytes=runtime.tool_max_file_bytes,
-            max_list_entries=runtime.tool_max_list_entries,
-            process_timeout_seconds=runtime.tool_timeout_seconds,
-            process_max_timeout_seconds=runtime.tool_max_timeout_seconds,
-            max_stdout_bytes=runtime.tool_max_stdout_bytes,
-            max_stderr_bytes=runtime.tool_max_stderr_bytes,
-        )
-    )
 
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
@@ -79,6 +267,19 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
         base_delay=settings.retry_base_delay,
         multiplier=settings.retry_multiplier,
         max_delay=settings.retry_max_delay,
+    )
+    memory = _memory_stack(uow_factory)
+    gateway = WorkspaceToolGateway(  # raises WorkspaceAccessDenied
+        WorkspaceToolGatewaySettings(
+            workspace_root=runtime.workspace_root,
+            max_file_bytes=runtime.tool_max_file_bytes,
+            max_list_entries=runtime.tool_max_list_entries,
+            process_timeout_seconds=runtime.tool_timeout_seconds,
+            process_max_timeout_seconds=runtime.tool_max_timeout_seconds,
+            max_stdout_bytes=runtime.tool_max_stdout_bytes,
+            max_stderr_bytes=runtime.tool_max_stderr_bytes,
+            memory=memory.tool_settings,
+        )
     )
 
     brain = ClaudeCliBrainRuntime(claude_settings)
@@ -98,6 +299,7 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
             max_yield_seconds=runtime.max_yield_seconds,
             max_processing_seconds=runtime.max_processing_seconds,
         ),
+        memory_retriever=memory.retriever,
     )
 
     loop = WorkerLoop(
@@ -119,6 +321,8 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
         expire_due_approvals=ExpireDueApprovals(
             uow_factory, clock, batch_size=settings.maintenance_batch_size
         ),
+        refresh_memory_index=memory.refresh_index,
+        memory_index_maintenance_interval_seconds=memory.maintenance_interval_seconds,
         heartbeat_interval_seconds=settings.heartbeat_interval_seconds,
         maintenance_interval_seconds=settings.maintenance_interval_seconds,
         poll_interval_seconds=settings.poll_interval_seconds,

@@ -221,7 +221,7 @@ def _terminate_process_group(process: subprocess.Popen[Any]) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
-    for stream in (process.stdout, process.stderr):
+    for stream in (process.stdin, process.stdout, process.stderr):
         if stream is not None:
             stream.close()
 

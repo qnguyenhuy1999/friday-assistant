@@ -30,6 +30,8 @@ from friday.application.ports import UnitOfWork, UnitOfWorkFactory
 from friday.infrastructure.persistence.repositories import (
     ApprovalRepository,
     ArtifactRepository,
+    MemoryIndexSnapshotRepository,
+    MemoryRetrievalRecordRepository,
     RunEventStore,
     RunRepository,
     RunStepRepository,
@@ -62,6 +64,8 @@ class SqlAlchemyUnitOfWork:
         self._events = RunEventStore(session)
         self._task_events = TaskEventStore(session)
         self._work_queue = SqlAlchemyRunWorkQueue(session)
+        self._memory_index_snapshots = MemoryIndexSnapshotRepository(session)
+        self._memory_retrieval_records = MemoryRetrievalRecordRepository(session)
 
     @property
     def tasks(self) -> TaskRepository:
@@ -98,6 +102,14 @@ class SqlAlchemyUnitOfWork:
     @property
     def work_queue(self) -> SqlAlchemyRunWorkQueue:
         return self._work_queue
+
+    @property
+    def memory_index_snapshots(self) -> MemoryIndexSnapshotRepository:
+        return self._memory_index_snapshots
+
+    @property
+    def memory_retrieval_records(self) -> MemoryRetrievalRecordRepository:
+        return self._memory_retrieval_records
 
     def __enter__(self) -> Self:
         return self

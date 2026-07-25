@@ -18,6 +18,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from friday.application.errors import ToolInputInvalid, ToolNotFound, WorkspaceAccessDenied
+from friday.application.memory.errors import (
+    MemoryAccessDenied,
+    MemoryWriteConflict,
+    MemoryWriteDenied,
+)
 from friday.application.tool_gateway import (
     ToolCall,
     ToolDescriptor,
@@ -28,6 +33,7 @@ from friday.application.tool_gateway import (
 from friday.domain.approval import ApprovalCategory
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.json_value import JsonValue
+from friday.infrastructure.tools.memory_tools import MemoryTools, MemoryToolSettings, memory_failure
 from friday.infrastructure.tools.process_runner import ProcessRunner, ProcessRunnerSettings
 from friday.infrastructure.tools.workspace_files import WorkspaceFiles, WorkspaceFileSettings
 from friday.infrastructure.tools.workspace_paths import resolve_workspace_root
@@ -42,6 +48,7 @@ class WorkspaceToolGatewaySettings:
     process_max_timeout_seconds: float
     max_stdout_bytes: int
     max_stderr_bytes: int
+    memory: MemoryToolSettings | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +133,57 @@ class WorkspaceToolGateway:
                 execute=processes.run,
             ),
         }
+        if settings.memory is not None:
+            memory = MemoryTools(settings.memory)
+            self._registry.update(
+                {
+                    "memory.search": _Registration(
+                        ToolDescriptor(
+                            "memory.search",
+                            "Search bounded curated memory. "
+                            "Input: {query: string, limit?: integer}.",
+                            True,
+                            False,
+                        ),
+                        ApprovalCategory.TOOL_EXECUTION,
+                        memory.search,
+                    ),
+                    "memory.read_note": _Registration(
+                        ToolDescriptor(
+                            "memory.read_note",
+                            "Read one bounded eligible memory note. "
+                            "Input: {path: string, heading?: string, max_chars?: integer}.",
+                            True,
+                            False,
+                        ),
+                        ApprovalCategory.TOOL_EXECUTION,
+                        memory.read_note,
+                    ),
+                    "memory.create_note": _Registration(
+                        ToolDescriptor(
+                            "memory.create_note",
+                            "Create one Friday-managed memory note. "
+                            "Input: {path, payload, frontmatter, memory_category}.",
+                            False,
+                            True,
+                        ),
+                        ApprovalCategory.FILESYSTEM_WRITE,
+                        memory.create_note,
+                    ),
+                    "memory.append_managed_note": _Registration(
+                        ToolDescriptor(
+                            "memory.append_managed_note",
+                            "Append to one Friday-managed memory note with a recently observed "
+                            "content hash for conflict detection. "
+                            "Input: {path, payload, observed_content_hash, memory_category}.",
+                            False,
+                            True,
+                        ),
+                        ApprovalCategory.FILESYSTEM_WRITE,
+                        memory.append_managed_note,
+                    ),
+                }
+            )
 
     def list_tools(self) -> tuple[ToolDescriptor, ...]:
         return tuple(self._registry[name].descriptor for name in sorted(self._registry))
@@ -185,6 +243,8 @@ class WorkspaceToolGateway:
                     cause=FailureCause.VALIDATION,
                 )
             )
+        except (MemoryAccessDenied, MemoryWriteConflict, MemoryWriteDenied) as exc:
+            return memory_failure(exc)
         except OSError:
             # deliberately content-free: OS error text may embed absolute
             # paths outside the workspace

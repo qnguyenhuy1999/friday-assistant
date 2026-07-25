@@ -47,3 +47,6 @@ graphify-out/
 # Claude
 .claude/settings.json
 .claude/settings.*.json
+
+# Herdr orchestration state (task specs, worker status, locks — not deliverable)
+.herdr/

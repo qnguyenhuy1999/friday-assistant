@@ -6,6 +6,7 @@ version + brain-only flag support, and workspace accessibility."""
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
+from apps.worker.memory_settings import MemorySettings
 from apps.worker.runtime_settings import RuntimeSettings
 from apps.worker.settings import WorkerSettings
 from friday.application.errors import BrainUnavailable, WorkspaceAccessDenied
@@ -46,6 +48,30 @@ def run_preflight(
     checks.append(_check_claude(runtime))
     checks.append(_check_workspace(runtime))
     return PreflightReport(checks=tuple(checks))
+
+
+def run_memory_preflight(settings: MemorySettings | None = None) -> PreflightReport:
+    """Report memory configuration without reading notes or changing the vault.
+
+    In particular, an omitted include allow-list is configuration missing, not
+    permission to scan an entire human-owned vault.
+    """
+    if settings is None and not os.environ.get("FRIDAY_MEMORY_INCLUDE_GLOBS", "").strip():
+        return PreflightReport((("memory_configuration", False, "configuration missing"),))
+    try:
+        configured = settings or MemorySettings.from_env()
+    except ValueError as exc:
+        return PreflightReport((("memory_configuration", False, str(exc)),))
+    if not configured.memory_enabled:
+        return PreflightReport((("memory", True, "disabled"),))
+    if not configured.include_globs:
+        return PreflightReport((("memory_configuration", False, "configuration missing"),))
+    root = configured.vault_root.resolve(strict=False)
+    if not root.is_dir():
+        return PreflightReport((("memory_vault", False, "vault root is unavailable"),))
+    if configured.graphify_index_root.resolve(strict=False).is_relative_to(root):
+        return PreflightReport((("memory_index", False, "index root must be outside vault"),))
+    return PreflightReport((("memory", True, "configuration valid"),))
 
 
 def _check_database(settings: WorkerSettings, alembic_ini: Path) -> tuple[str, bool, str]:
@@ -105,6 +131,11 @@ def _check_workspace(runtime: RuntimeSettings) -> tuple[str, bool, str]:
 
 
 def main() -> int:
+    if "--memory-only" in sys.argv or "--memory-index" in sys.argv:
+        report = run_memory_preflight()
+        for name, passed, detail in report.checks:
+            print(f"{'ok' if passed else 'FAIL':4} {name}: {detail}")
+        return 0 if report.ok else 1
     settings = WorkerSettings.from_env()
     runtime = RuntimeSettings.from_env()
     report = run_preflight(settings, runtime)

@@ -191,3 +191,50 @@ class RunEventSequenceCounterRow(Base):
 
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), primary_key=True)
     next_value: Mapped[int]
+
+
+class MemoryIndexSnapshotRow(Base):
+    __tablename__ = "memory_index_snapshots"
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    vault_identity_hash: Mapped[str]
+    source_snapshot_hash: Mapped[str]
+    graph_checksum: Mapped[str | None]
+    graphify_version: Mapped[str | None]
+    status: Mapped[str]
+    built_at: Mapped[datetime]
+    file_count: Mapped[int]
+    node_count: Mapped[int]
+    edge_count: Mapped[int]
+    failure_code: Mapped[str | None]
+
+
+class MemoryRetrievalRecordRow(Base):
+    __tablename__ = "memory_retrieval_records"
+    __table_args__ = (Index("ix_memory_retrieval_records_run_id", "run_id"),)
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    turn_number: Mapped[int]
+    query_hash: Mapped[str]
+    source_snapshot_id: Mapped[str | None]
+    index_snapshot_id: Mapped[str | None] = mapped_column(ForeignKey("memory_index_snapshots.id"))
+    created_at: Mapped[datetime]
+    candidate_count: Mapped[int]
+    selected_count: Mapped[int]
+
+
+class MemoryRetrievalItemRow(Base):
+    __tablename__ = "memory_retrieval_items"
+    __table_args__ = (Index("ix_memory_retrieval_items_record_id", "record_id"),)
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    record_id: Mapped[str] = mapped_column(ForeignKey("memory_retrieval_records.id"))
+    path: Mapped[str]
+    heading: Mapped[str | None]
+    start_line: Mapped[int]
+    end_line: Mapped[int]
+    content_hash: Mapped[str]
+    rank: Mapped[int]
+    methods: Mapped[object] = mapped_column(JSON)
+    truncated: Mapped[bool]

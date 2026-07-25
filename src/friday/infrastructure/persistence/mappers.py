@@ -11,6 +11,13 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from friday.application.memory.models import (
+    IndexSnapshot,
+    IndexState,
+    MemoryRetrievalItem,
+    MemoryRetrievalRecord,
+    RetrievalMethod,
+)
 from friday.application.ports import RunWorkItemView
 from friday.domain import (
     ApprovalCategory,
@@ -45,6 +52,9 @@ from friday.domain.json_value import JsonValue
 from friday.infrastructure.persistence.models import (
     ApprovalRequestRow,
     ArtifactRow,
+    MemoryIndexSnapshotRow,
+    MemoryRetrievalItemRow,
+    MemoryRetrievalRecordRow,
     RunEventRow,
     RunRow,
     RunStepRow,
@@ -341,4 +351,102 @@ def run_work_item_from_row(row: RunWorkItemRow) -> RunWorkItemView:
         lease_expires_at=_read_back_utc(row.lease_expires_at)
         if row.lease_expires_at is not None
         else None,
+    )
+
+
+def index_snapshot_to_row(snapshot: IndexSnapshot) -> MemoryIndexSnapshotRow:
+    return MemoryIndexSnapshotRow(
+        id=snapshot.id,
+        vault_identity_hash=snapshot.vault_identity_hash,
+        source_snapshot_hash=snapshot.source_snapshot_hash,
+        graph_checksum=snapshot.graph_checksum,
+        graphify_version=snapshot.graphify_version,
+        status=snapshot.state.value,
+        built_at=snapshot.built_at,
+        file_count=snapshot.file_count,
+        node_count=snapshot.node_count,
+        edge_count=snapshot.edge_count,
+        failure_code=snapshot.failure_code,
+    )
+
+
+def index_snapshot_from_row(row: MemoryIndexSnapshotRow) -> IndexSnapshot:
+    # ponytail: build_duration_seconds/source_total_bytes are outside the
+    # audited schema (.herdr/phase12-invariants.md smallest-schema-addition);
+    # zeroed on read-back. Add columns if a caller needs them.
+    return IndexSnapshot(
+        id=row.id,
+        vault_identity_hash=row.vault_identity_hash,
+        source_snapshot_hash=row.source_snapshot_hash,
+        graph_checksum=row.graph_checksum,
+        graphify_version=row.graphify_version,
+        state=IndexState(row.status),
+        built_at=_read_back_utc(row.built_at),
+        build_duration_seconds=0.0,
+        file_count=row.file_count,
+        source_total_bytes=0,
+        node_count=row.node_count,
+        edge_count=row.edge_count,
+        failure_code=row.failure_code,
+    )
+
+
+def memory_retrieval_record_to_row(record: MemoryRetrievalRecord) -> MemoryRetrievalRecordRow:
+    return MemoryRetrievalRecordRow(
+        id=record.id,
+        run_id=str(record.run_id),
+        turn_number=record.turn_number,
+        query_hash=record.query_hash,
+        source_snapshot_id=record.source_snapshot_id,
+        index_snapshot_id=record.index_snapshot_id,
+        created_at=record.created_at,
+        candidate_count=record.candidate_count,
+        selected_count=record.selected_count,
+    )
+
+
+def memory_retrieval_record_from_row(
+    row: MemoryRetrievalRecordRow, items: tuple[MemoryRetrievalItem, ...]
+) -> MemoryRetrievalRecord:
+    return MemoryRetrievalRecord(
+        id=row.id,
+        run_id=RunId.parse(row.run_id),
+        turn_number=row.turn_number,
+        query_hash=row.query_hash,
+        source_snapshot_id=row.source_snapshot_id,
+        index_snapshot_id=row.index_snapshot_id,
+        created_at=_read_back_utc(row.created_at),
+        candidate_count=row.candidate_count,
+        selected_count=row.selected_count,
+        items=items,
+    )
+
+
+def memory_retrieval_item_to_row(
+    item: MemoryRetrievalItem, *, record_id: str
+) -> MemoryRetrievalItemRow:
+    return MemoryRetrievalItemRow(
+        id=f"{record_id}:{item.rank}",
+        record_id=record_id,
+        path=item.path,
+        heading=item.heading,
+        start_line=item.start_line,
+        end_line=item.end_line,
+        content_hash=item.content_hash,
+        rank=item.rank,
+        methods=[method.value for method in item.methods],
+        truncated=item.truncated,
+    )
+
+
+def memory_retrieval_item_from_row(row: MemoryRetrievalItemRow) -> MemoryRetrievalItem:
+    return MemoryRetrievalItem(
+        path=row.path,
+        heading=row.heading,
+        start_line=row.start_line,
+        end_line=row.end_line,
+        content_hash=row.content_hash,
+        rank=row.rank,
+        methods=tuple(RetrievalMethod(value) for value in cast(list[str], row.methods)),
+        truncated=row.truncated,
     )

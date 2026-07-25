@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.friday-agent-os.dev/v1/event/run_event.json",
   "title": "RunEvent",
-  "description": "An append-only fact emitted during Run execution, ordered by sequence. Mirrors friday.domain.event.RunEvent.",
+  "description": "An append-only fact emitted during Run execution, ordered by sequence. Mirrors friday.domain.event.RunEvent. Memory event payloads are bounded metadata only and must not contain note bodies, query text, absolute paths, Graphify stderr, or model prompts.",
   "type": "object",
   "properties": {
     "id": { "$ref": "../definitions/identifier.json" },
@@ -30,7 +30,13 @@
         "tool_invocation_failed",
         "tool_invocation_cancelled",
         "artifact_created",
-        "agent_finished"
+        "agent_finished",
+        "memory_context_attached",
+        "memory_retrieval_degraded",
+        "memory_write_requested",
+        "memory_write_committed",
+        "memory_write_conflicted",
+        "memory_index_marked_stale"
       ]
     },
     "sequence": { "type": "integer", "minimum": 1 },
@@ -52,5 +58,56 @@
     "payload",
     "step_id"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": [
+              "memory_context_attached",
+              "memory_retrieval_degraded",
+              "memory_write_requested",
+              "memory_write_committed",
+              "memory_write_conflicted",
+              "memory_index_marked_stale"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "anyOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "properties": {
+                  "record_id": { "type": "string", "maxLength": 256 },
+                  "record_ids": {
+                    "type": "array",
+                    "items": { "type": "string", "maxLength": 256 },
+                    "maxItems": 5000
+                  },
+                  "candidate_count": { "type": "integer", "minimum": 0 },
+                  "excerpt_count": { "type": "integer", "minimum": 0 },
+                  "count": { "type": "integer", "minimum": 0 },
+                  "vault_relative_path": {
+                    "type": "string",
+                    "maxLength": 1024,
+                    "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).*$"
+                  },
+                  "source_snapshot_id": { "type": "string", "maxLength": 256 },
+                  "index_snapshot_id": { "type": "string", "maxLength": 256 },
+                  "failure_code": { "type": "string", "maxLength": 128 },
+                  "retrieval_mode": { "type": "string", "maxLength": 128 }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

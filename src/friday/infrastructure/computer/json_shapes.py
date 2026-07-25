@@ -10,7 +10,7 @@ paths, and window contents.
 from __future__ import annotations
 
 from friday.domain.json_value import JsonValue
-from friday.infrastructure.computer.models import ScreenBounds, WindowInfo
+from friday.infrastructure.computer.models import CapturedElement, ScreenBounds, WindowInfo
 
 
 def bounds_json(bounds: ScreenBounds) -> dict[str, JsonValue]:
@@ -31,4 +31,16 @@ def window_json(window: WindowInfo) -> dict[str, JsonValue]:
         "application": window.application,
         "is_active": window.is_active,
         "bounds": bounds_json(window.bounds),
+    }
+
+
+def element_json(element: CapturedElement) -> dict[str, JsonValue]:
+    """`element_id` is snapshot-scoped, and the wire shape says nothing to
+    suggest otherwise: there is no global handle here for Claude to cache and
+    reuse against a later capture."""
+    return {
+        "element_id": element.element_id,
+        "role": element.role,
+        "label": element.label,
+        "bounds": bounds_json(element.bounds),
     }

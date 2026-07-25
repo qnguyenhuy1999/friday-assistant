@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from friday.application.tool_gateway import ToolExecutionResult
 from friday.domain.json_value import JsonValue
+from friday.infrastructure.computer.context import ComputerToolContext
 from friday.infrastructure.computer.driver import ComputerDriver
 from friday.infrastructure.computer.json_shapes import window_json
 from friday.infrastructure.computer.tool_input import (
@@ -39,12 +40,18 @@ class ComputerObservation:
         self._driver = driver
         self._settings = settings
 
-    def pointer_position(self, tool_input: JsonValue) -> ToolExecutionResult:
+    def pointer_position(
+        self, tool_input: JsonValue, context: ComputerToolContext
+    ) -> ToolExecutionResult:
+        del context  # observation is neither run-scoped nor snapshot-fenced
         parse_object(tool_input, allowed=NO_FIELDS)
         point = self._driver.pointer_position()
         return ToolExecutionResult.succeeded({"x": point.x, "y": point.y})
 
-    def window_list(self, tool_input: JsonValue) -> ToolExecutionResult:
+    def window_list(
+        self, tool_input: JsonValue, context: ComputerToolContext
+    ) -> ToolExecutionResult:
+        del context
         values = parse_object(tool_input, allowed=frozenset({"limit"}))
         limit = optional_bounded_int(values, "limit", maximum=self._settings.max_windows)
         windows = self._driver.list_windows()
@@ -53,7 +60,10 @@ class ComputerObservation:
             {"windows": shown, "truncated": len(windows) > len(shown)}
         )
 
-    def active_window(self, tool_input: JsonValue) -> ToolExecutionResult:
+    def active_window(
+        self, tool_input: JsonValue, context: ComputerToolContext
+    ) -> ToolExecutionResult:
+        del context
         parse_object(tool_input, allowed=NO_FIELDS)
         window = self._driver.active_window()
         return ToolExecutionResult.succeeded(

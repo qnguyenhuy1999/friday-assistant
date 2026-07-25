@@ -29,3 +29,54 @@ class ComputerDriverTimeout(ComputerUseError):
 
 class ComputerDriverFailed(ComputerUseError):
     """The driver answered, but the requested operation did not succeed."""
+
+
+class ComputerActionRejected(ComputerUseError):
+    """Friday refused the action before any driver call happened.
+
+    Unlike a driver failure, the message here is Friday's own constant text
+    about its own policy, so it is safe to forward: it describes what was
+    requested and which fence refused it, never what was observed on screen.
+    Every subclass carries a stable `code` the gateway reports verbatim, so
+    "why was my click refused?" is answerable without parsing prose.
+
+    A rejection is proof of a *non*-event: raising this instead of returning a
+    failed result would be equivalent, but the exception form makes it
+    structurally impossible for a handler to reject and then keep going.
+    """
+
+    code = "computer_use_failed"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+class SnapshotNotFound(ComputerActionRejected):
+    code = "computer_snapshot_not_found"
+
+
+class SnapshotExpired(ComputerActionRejected):
+    code = "computer_snapshot_expired"
+
+
+class SnapshotMismatch(ComputerActionRejected):
+    """The cited snapshot exists, but does not describe what the action claims:
+    another window, another run, or an element it never captured."""
+
+    code = "computer_snapshot_mismatch"
+
+
+class TargetInvalid(ComputerActionRejected):
+    code = "computer_target_invalid"
+
+
+class TargetOutOfBounds(ComputerActionRejected):
+    code = "computer_target_out_of_bounds"
+
+
+class TextRejected(ComputerActionRejected):
+    code = "computer_text_rejected"
+
+
+class HotkeyRejected(ComputerActionRejected):
+    code = "computer_hotkey_rejected"

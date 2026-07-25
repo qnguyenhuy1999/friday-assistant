@@ -9,6 +9,8 @@ an expected-values dump would just be updated alongside the mistake.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from friday.application.errors import ToolNotFound
@@ -74,8 +76,8 @@ def driver() -> FakeComputerDriver:
 
 
 @pytest.fixture
-def gateway(driver: FakeComputerDriver) -> ComputerToolGateway:
-    return ComputerToolGateway(ComputerToolGatewaySettings(driver=driver))
+def gateway(driver: FakeComputerDriver, tmp_path: Path) -> ComputerToolGateway:
+    return ComputerToolGateway(ComputerToolGatewaySettings(driver=driver, workspace_root=tmp_path))
 
 
 def run(
@@ -261,11 +263,15 @@ def test_window_list_reports_bounded_window_metadata(
     ]
 
 
-def test_window_list_truncates_to_the_configured_ceiling(driver: FakeComputerDriver) -> None:
+def test_window_list_truncates_to_the_configured_ceiling(
+    driver: FakeComputerDriver, tmp_path: Path
+) -> None:
     driver.windows = tuple(
         default_window(f"win-{index}", is_active=index == 0) for index in range(5)
     )
-    gateway = ComputerToolGateway(ComputerToolGatewaySettings(driver=driver, max_windows=2))
+    gateway = ComputerToolGateway(
+        ComputerToolGatewaySettings(driver=driver, workspace_root=tmp_path, max_windows=2)
+    )
 
     output = output_of(run(gateway, "computer.window_list"))
 
@@ -484,16 +490,18 @@ def test_a_policy_row_must_document_itself() -> None:
         ComputerToolPolicy(description="   ", read_only=True, approval_required=False)
 
 
-def test_the_window_ceiling_must_be_positive(driver: FakeComputerDriver) -> None:
+def test_the_window_ceiling_must_be_positive(driver: FakeComputerDriver, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="max_windows must be positive"):
-        ComputerToolGateway(ComputerToolGatewaySettings(driver=driver, max_windows=0))
+        ComputerToolGateway(
+            ComputerToolGatewaySettings(driver=driver, workspace_root=tmp_path, max_windows=0)
+        )
 
 
 def test_a_handler_without_a_policy_row_cannot_be_registered(
-    driver: FakeComputerDriver, monkeypatch: pytest.MonkeyPatch
+    driver: FakeComputerDriver, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The registry refuses to expose a tool whose risk was never declared."""
     monkeypatch.delitem(COMPUTER_TOOL_POLICY, "computer.window_list")
 
     with pytest.raises(ValueError, match="missing a policy declaration"):
-        ComputerToolGateway(ComputerToolGatewaySettings(driver=driver))
+        ComputerToolGateway(ComputerToolGatewaySettings(driver=driver, workspace_root=tmp_path))

@@ -8,11 +8,8 @@ import pytest
 
 from friday.application.memory.errors import MemoryWriteDenied
 from friday.application.memory.models import MemoryWriteCandidate, MemoryWriteOperation
-from friday.application.memory.write_policy import (
-    MemoryCategory,
-    MemoryWritePolicy,
-    _has_high_entropy_token,
-)
+from friday.application.memory.write_policy import MemoryCategory, MemoryWritePolicy
+from friday.application.secret_shapes import _has_high_entropy_token
 from friday.domain.identifiers import RunId, RunStepId
 
 RUN_ID = RunId.parse("22222222-2222-2222-2222-222222222222")

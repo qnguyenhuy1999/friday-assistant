@@ -2,7 +2,9 @@
 any Run. Invoked via `just worker-check` (python -m apps.worker.preflight).
 
 Checks: database connectivity, Alembic migration head, Claude executable +
-version + brain-only flag support, and workspace accessibility."""
+version + brain-only flag support, workspace accessibility, and — when computer
+use is enabled — that the configured desktop driver actually starts and exposes
+every tool Friday will call."""
 
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
+from apps.worker.computer_settings import ComputerSettings
 from apps.worker.memory_settings import MemorySettings
 from apps.worker.runtime_settings import RuntimeSettings
 from apps.worker.settings import WorkerSettings
@@ -24,6 +27,10 @@ from friday.infrastructure.brain.claude_cli import (
     verify_brain_only_support,
 )
 from friday.infrastructure.persistence.database import create_engine
+from friday.infrastructure.tools.computer_composition import (
+    ComputerGatewayConfig,
+    check_computer_driver,
+)
 from friday.infrastructure.tools.workspace_paths import resolve_workspace_root
 
 
@@ -47,6 +54,7 @@ def run_preflight(
     checks.append(_check_migration_head(settings, alembic_ini))
     checks.append(_check_claude(runtime))
     checks.append(_check_workspace(runtime))
+    checks.append(_check_computer_use(runtime))
     return PreflightReport(checks=tuple(checks))
 
 
@@ -120,6 +128,41 @@ def _check_claude(runtime: RuntimeSettings) -> tuple[str, bool, str]:
     except BrainUnavailable as exc:
         return ("claude_brain_only", False, str(exc))
     return ("claude_brain_only", True, version)
+
+
+def _check_computer_use(runtime: RuntimeSettings) -> tuple[str, bool, str]:
+    """Report the desktop driver without leaving it running.
+
+    Disabled is a pass, not a warning: off is the default and the expected state
+    for almost every deployment. Enabled-but-unreachable is a failure here for
+    the same reason it stops worker startup — a worker that advertises
+    `computer.click` and cannot perform it is worse than one that never offered.
+    """
+    try:
+        settings = ComputerSettings.from_env()
+    except ValueError as exc:
+        return ("computer_use", False, str(exc))
+    if not settings.computer_use_enabled:
+        return ("computer_use", True, "disabled")
+    try:
+        health = check_computer_driver(
+            ComputerGatewayConfig(
+                enabled=True,
+                workspace_root=runtime.workspace_root,
+                driver_command=settings.driver_command,
+                timeout_seconds=settings.timeout_seconds,
+                max_capture_bytes=settings.max_capture_bytes,
+                max_type_chars=settings.max_type_chars,
+                max_scroll_delta=settings.max_scroll_delta,
+                capture_ttl_seconds=settings.capture_ttl_seconds,
+                max_snapshots=settings.max_snapshots,
+                max_elements=settings.max_elements,
+                telemetry_enabled=settings.telemetry_enabled,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - preflight reports, never crashes
+        return ("computer_use", False, type(exc).__name__)
+    return ("computer_use", health.available, health.detail)
 
 
 def _check_workspace(runtime: RuntimeSettings) -> tuple[str, bool, str]:

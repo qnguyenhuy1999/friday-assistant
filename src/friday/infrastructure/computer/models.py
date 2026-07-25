@@ -35,6 +35,22 @@ MAX_WINDOW_ID_CHARS = 256
 DEFAULT_MAX_ELEMENTS = 500
 MAX_ELEMENTS_CEILING = 5_000
 
+MIN_CLICK_COUNT = 1
+MAX_CLICK_COUNT = 2
+"""A click is a click or a double-click. Anything beyond that is a distinct
+interaction Claude should have to propose — and get approved — separately."""
+
+ALLOWED_SCREENSHOT_MEDIA_TYPES = frozenset({"image/png"})
+"""Closed set, not a hint from the driver. Phase 13 persists PNG only, so a
+driver claiming `image/svg+xml` (scriptable) or `text/html` cannot talk Friday
+into writing it into the artifact store under an image kind."""
+
+MAX_SCREENSHOT_DIMENSION = 20_000
+MAX_SCREENSHOT_BYTES_CEILING = 64_000_000
+"""Hard model-level ceilings. The configured FRIDAY_COMPUTER_MAX_CAPTURE_BYTES
+is expected to be far smaller; these only stop an absurd value from ever being
+represented, so nothing downstream has to defend against one."""
+
 _SNAPSHOT_ID_PATTERN = re.compile(r"^cs_[0-9a-f]{32}$")
 _NON_ALPHANUMERIC_RUN = re.compile(r"[^a-z0-9]+")
 
@@ -371,6 +387,10 @@ class Screenshot:
 
     Bytes stop at the gateway: it writes the file and hands the application
     layer an ArtifactCandidate location, never a base64 payload.
+
+    Bounded at construction on every axis a driver could inflate — byte count,
+    dimensions, and media type — because this type is the last place the bytes
+    are anonymous. Past here they are a file path and a checksum.
     """
 
     data: bytes
@@ -381,11 +401,22 @@ class Screenshot:
     def __post_init__(self) -> None:
         if not isinstance(self.data, bytes) or not self.data:
             raise ValueError("Screenshot.data must be non-empty bytes")
-        if not isinstance(self.media_type, str) or not self.media_type.strip():
-            raise ValueError("Screenshot.media_type must be a non-empty string")
+        if len(self.data) > MAX_SCREENSHOT_BYTES_CEILING:
+            raise ValueError(
+                f"Screenshot.data must not exceed {MAX_SCREENSHOT_BYTES_CEILING} bytes"
+            )
+        if self.media_type not in ALLOWED_SCREENSHOT_MEDIA_TYPES:
+            raise ValueError(
+                "Screenshot.media_type must be one of "
+                f"{sorted(ALLOWED_SCREENSHOT_MEDIA_TYPES)}, got {self.media_type!r}"
+            )
         for name, extent in (("width", self.width), ("height", self.height)):
             if _ensure_int(extent, field_name=f"Screenshot.{name}") <= 0:
                 raise ValueError(f"Screenshot.{name} must be positive")
+            if extent > MAX_SCREENSHOT_DIMENSION:
+                raise ValueError(
+                    f"Screenshot.{name} must not exceed {MAX_SCREENSHOT_DIMENSION} pixels"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,7 +429,21 @@ class CaptureResult:
 @dataclass(frozen=True, slots=True)
 class DriverResult:
     """What a mutating driver call observed afterwards. Drivers signal failure
-    by raising ComputerDriverError, so there is no ok/status flag here."""
+    by raising ComputerDriverError, so there is no ok/status flag here.
+
+    `window_id` is observed infrastructure output, not an echo of Friday's own
+    request: a driver may report that input landed in a window other than the
+    one asked for. It is bounded and stripped like any other observed
+    identifier rather than trusted because a driver produced it.
+    """
 
     pointer_position: ScreenPoint | None = field(default=None)
     window_id: str | None = field(default=None)
+
+    def __post_init__(self) -> None:
+        if self.window_id is not None:
+            object.__setattr__(
+                self,
+                "window_id",
+                _ensure_identifier(self.window_id, field_name="DriverResult.window_id"),
+            )

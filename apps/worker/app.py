@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import Engine
 
+from apps.worker.computer_settings import ComputerSettings
 from apps.worker.memory_settings import MemorySettings
 from apps.worker.runtime_settings import RuntimeSettings
 from apps.worker.settings import WorkerSettings
@@ -39,6 +40,7 @@ from friday.application.memory.retrieval import MemoryRetrievalSettings, MemoryR
 from friday.application.ports import UnitOfWorkFactory
 from friday.application.retry_policy import RetryPolicy
 from friday.application.tool_authorization import RequestToolApproval
+from friday.application.tool_gateway import ToolGateway
 from friday.application.worker_coordination import (
     ApplyFailedOutcome,
     ApplySucceededOutcome,
@@ -61,6 +63,11 @@ from friday.infrastructure.memory.lexical_index import LexicalIndexStore
 from friday.infrastructure.memory.obsidian_vault import ObsidianVaultStore
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
+from friday.infrastructure.tools.composite import CompositeToolGateway
+from friday.infrastructure.tools.computer_composition import (
+    ComputerGatewayConfig,
+    build_computer_gateway,
+)
 from friday.infrastructure.tools.gateway import (
     WorkspaceToolGateway,
     WorkspaceToolGatewaySettings,
@@ -247,6 +254,40 @@ def _disabled_memory_stack() -> _MemoryStack:
     return _MemoryStack(_DisabledMemoryRetriever(), None, None, None)
 
 
+def _computer_gateway(runtime: RuntimeSettings) -> ToolGateway | None:
+    """Build the opt-in computer-use gateway, or None when it is disabled.
+
+    This composition root deliberately knows only three things: that computer
+    use is another ToolGateway, that it is off by default, and that a broken
+    enabled configuration must stop startup. Drivers, MCP framing, snapshot
+    registries, and screenshot storage all stay behind build_computer_gateway —
+    see friday.infrastructure.tools.computer_composition.
+
+    Unlike memory, an invalid configuration is not silently downgraded: memory
+    degrades to "no relevant memory found", which is a truthful answer, whereas
+    a computer gateway that cannot reach a desktop has no truthful degraded
+    mode. Enabled-and-broken raises here, before any Run is claimed.
+    """
+    settings = ComputerSettings.from_env()
+    if not settings.computer_use_enabled:
+        return None
+    return build_computer_gateway(
+        ComputerGatewayConfig(
+            enabled=True,
+            workspace_root=runtime.workspace_root,
+            driver_command=settings.driver_command,
+            timeout_seconds=settings.timeout_seconds,
+            max_capture_bytes=settings.max_capture_bytes,
+            max_type_chars=settings.max_type_chars,
+            max_scroll_delta=settings.max_scroll_delta,
+            capture_ttl_seconds=settings.capture_ttl_seconds,
+            max_snapshots=settings.max_snapshots,
+            max_elements=settings.max_elements,
+            telemetry_enabled=settings.telemetry_enabled,
+        )
+    )
+
+
 def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
     # --- fail-closed environment verification (before anything else) ------
     claude_settings = ClaudeCliSettings(
@@ -269,7 +310,7 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
         max_delay=settings.retry_max_delay,
     )
     memory = _memory_stack(uow_factory)
-    gateway = WorkspaceToolGateway(  # raises WorkspaceAccessDenied
+    workspace_gateway = WorkspaceToolGateway(  # raises WorkspaceAccessDenied
         WorkspaceToolGatewaySettings(
             workspace_root=runtime.workspace_root,
             max_file_bytes=runtime.tool_max_file_bytes,
@@ -281,6 +322,13 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
             memory=memory.tool_settings,
         )
     )
+    gateways: list[ToolGateway] = [workspace_gateway]
+    computer_gateway = _computer_gateway(runtime)  # raises ComputerUseUnavailable
+    if computer_gateway is not None:
+        gateways.append(computer_gateway)
+    # ONE composite instance for both the brain manifest and execution: two
+    # registries could disagree about which tools exist or what they cost.
+    gateway = CompositeToolGateway(*gateways)
 
     brain = ClaudeCliBrainRuntime(claude_settings)
     processor = AgentRunProcessor(

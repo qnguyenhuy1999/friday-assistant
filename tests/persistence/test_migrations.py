@@ -32,6 +32,9 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "run_work_items",
             "run_event_sequence_counters",
             "task_event_sequence_counters",
+            "memory_index_snapshots",
+            "memory_retrieval_records",
+            "memory_retrieval_items",
             "alembic_version",
         }
     finally:

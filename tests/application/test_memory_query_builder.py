@@ -416,3 +416,73 @@ def test_builder_properties_match_config() -> None:
     assert builder.max_titles == 6
     assert builder.max_term_length == 50
     assert builder.min_token_length == 3
+
+
+# ---- Branch coverage: blank/whitespace entries are skipped -----------------
+
+
+def test_blank_step_name_is_skipped() -> None:
+    builder = MemoryQueryBuilder()
+    snapshot = RunSnapshot(
+        step_names=("Valid Step", "   ", ""),
+    )
+    query = builder.build(snapshot)
+    assert query is not None
+    assert "valid step" in query.titles
+    assert len(query.titles) == 1
+
+
+def test_blank_failure_code_is_skipped() -> None:
+    builder = MemoryQueryBuilder()
+    snapshot = RunSnapshot(
+        failure_codes=("real_error", "   ", ""),
+    )
+    query = builder.build(snapshot)
+    assert query is not None
+    assert "real_error" in query.tags
+    assert len(query.tags) == 1
+
+
+def test_blank_tool_name_is_skipped() -> None:
+    builder = MemoryQueryBuilder()
+    snapshot = RunSnapshot(
+        tool_names=("valid_tool", "   ", ""),
+    )
+    query = builder.build(snapshot)
+    assert query is not None
+    assert "valid_tool" in query.terms
+    assert len(query.terms) == 1
+
+
+def test_whitespace_memory_search_term_adds_no_phrase() -> None:
+    builder = MemoryQueryBuilder()
+    snapshot = RunSnapshot(
+        objective="real objective",
+        memory_search_term="   ",
+    )
+    query = builder.build(snapshot)
+    assert query is not None
+    assert "real objective" in query.phrases
+    assert len(query.phrases) == 1
+
+
+# ---- Structural regression guard (security) --------------------------------
+
+
+def test_runsnapshot_field_names_are_explicit_allowlist() -> None:
+    """RunSnapshot fields are the *only* data path from Run into memory
+    retrieval. Adding a field is a security decision requiring review —
+    a future `tool_stdout` field must fail this test loudly instead of
+    silently leaking."""
+    import dataclasses
+
+    names = {f.name for f in dataclasses.fields(RunSnapshot)}
+    assert names == {
+        "task_title",
+        "task_description",
+        "objective",
+        "step_names",
+        "failure_codes",
+        "tool_names",
+        "memory_search_term",
+    }

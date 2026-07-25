@@ -15,6 +15,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
+from friday.application.memory.context import build_memory_section
 from friday.application.memory.models import MemoryContext, RetrievalMode
 from friday.application.tool_gateway import ToolDescriptor
 from friday.domain.approval import ApprovalRequest
@@ -187,28 +188,15 @@ def _event_lines(events: Sequence[RunEvent], omitted: int) -> list[str]:
     return lines
 
 
-def _memory_lines(memory: MemoryContext) -> list[str]:
-    """Render retrieved memory as untrusted reference material only."""
-    if memory.mode is RetrievalMode.UNAVAILABLE:
-        return ["# MEMORY", "memory unavailable"]
-    lines = ["# MEMORY"]
-    if not memory.excerpts:
-        lines.append("no relevant memory found")
-        return lines
-    for excerpt in memory.excerpts:
-        location = f"{excerpt.path}:{excerpt.start_line}-{excerpt.end_line}"
-        heading = f" — {excerpt.heading}" if excerpt.heading else ""
-        lines.append(f"- {excerpt.title}{heading} ({location})")
-        lines.append(_clip(excerpt.text))
-    return lines
-
-
 def _bounded_memory_section(memory: MemoryContext, *, max_chars: int) -> str:
-    section = "\n".join(_memory_lines(memory))
-    if len(section) <= max_chars:
-        return section
-    marker = "\n[memory truncated to budget]"
-    return section[: max_chars - len(marker)] + marker
+    if memory.mode is RetrievalMode.UNAVAILABLE:
+        return "# MEMORY\nmemory unavailable"
+    if memory.mode is RetrievalMode.DISABLED:
+        return "# MEMORY\nno relevant memory found"
+    try:
+        return build_memory_section(memory, max_chars=max_chars)
+    except ValueError:
+        return ""
 
 
 def _render(
@@ -305,4 +293,6 @@ def build_runtime_context(
     if available <= 0:
         return document
     memory = _bounded_memory_section(memory_context, max_chars=min(memory_max_chars, available))
+    if not memory:
+        return document
     return f"{document}\n\n{memory}"

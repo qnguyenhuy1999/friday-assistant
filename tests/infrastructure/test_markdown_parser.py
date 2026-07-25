@@ -128,6 +128,94 @@ class TestParseFrontmatter:
         fm = parse_frontmatter(text)
         assert fm.title == "Hello"
 
+    def test_empty_value_for_boolean_key(self) -> None:
+        """Empty value after boolean key leaves default False."""
+        text = "---\nfriday_index: \n---"
+        fm = parse_frontmatter(text)
+        assert fm.friday_index is False
+
+    def test_empty_value_for_title(self) -> None:
+        """Empty value after title key leaves default empty."""
+        text = "---\ntitle: \n---"
+        fm = parse_frontmatter(text)
+        assert fm.title == ""
+
+    def test_aliases_quoted_scalar(self) -> None:
+        """Aliases as a single quoted string via _parse_scalar_or_list."""
+        text = "---\naliases: 'SingleAlias'\n---"
+        fm = parse_frontmatter(text)
+        assert fm.aliases == ("SingleAlias",)
+
+    def test_tags_quoted_scalar(self) -> None:
+        """Tags as a single quoted string."""
+        text = "---\ntags: 'project/active'\n---"
+        fm = parse_frontmatter(text)
+        assert fm.tags == ("project/active",)
+
+    def test_aliases_scalar_continuation(self) -> None:
+        """Multi-line scalar continuation for aliases (line 250)."""
+        text = "---\naliases: first\n  second\n---"
+        fm = parse_frontmatter(text)
+        assert any("first second" in a for a in fm.aliases)
+
+    def test_tags_scalar_continuation(self) -> None:
+        """Multi-line scalar continuation for tags."""
+        text = "---\ntags: project\n  active\n---"
+        fm = parse_frontmatter(text)
+        assert any("project active" in a for a in fm.tags)
+
+    def test_malformed_line_after_key(self) -> None:
+        """Non-key non-continuation line after a key flushes it (lines 255-259)."""
+        text = "---\ntitle: Hello\ngarbage\n---"
+        fm = parse_frontmatter(text)
+        assert fm.title == "Hello"
+
+    def test_non_boolean_value_for_boolean_key(self) -> None:
+        """Non-boolean value like 'maybe' should not set to True."""
+        text = "---\nfriday_index: maybe\n---"
+        fm = parse_frontmatter(text)
+        assert fm.friday_index is False
+
+    def test_aliases_empty_bracket_list(self) -> None:
+        """Empty bracket `[]` exercises _parse_bracket_list line 126 (return []).
+        NOTE: `_parse_scalar_or_list` treats the empty bracket return as 'no match'
+        and falls through to scalar `['[]']`. Recorded in notes_for_orchestrator."""
+        text = "---\naliases: []\n---"
+        fm = parse_frontmatter(text)
+        assert fm.aliases == ("[]",)
+
+    def test_tags_empty_bracket_list(self) -> None:
+        """Empty bracket `[]` for tags exercises line 126."""
+        text = "---\ntags: []\n---"
+        fm = parse_frontmatter(text)
+        assert fm.tags == ("[]",)
+
+    def test_aliases_comma_only(self) -> None:
+        """Comma-only value returns empty parse (covers 183->exit).
+        `,` -> `_parse_scalar_or_list(",")` splits on comma -> no items -> [] -> falsy -> skip."""
+        text = "---\naliases: ,\n---"
+        fm = parse_frontmatter(text)
+        assert fm.aliases == ()
+
+    def test_malformed_line_before_any_key(self) -> None:
+        """Non-key line before any frontmatter key (covers 255->257 false branch)."""
+        text = "---\ngarbage\ntitle: Hello\n---"
+        fm = parse_frontmatter(text)
+        assert fm.title == "Hello"
+
+    def test_bracket_list_with_quotes(self) -> None:
+        """Bracket list items with surrounding quotes are stripped (line 126)."""
+        text = "---\naliases: ['\"A\"', \"'B'\"]\n---"
+        fm = parse_frontmatter(text)
+        assert fm.aliases == ("A", "B")
+
+    def test_yaml_list_continuation(self) -> None:
+        """Continuation of a YAML list item under aliases (lines 246-247)."""
+        text = "---\naliases:\n  - First\n    continuation\n---"
+        fm = parse_frontmatter(text)
+        assert len(fm.aliases) == 1
+        assert "First continuation" in fm.aliases[0]
+
     def test_quoted_title(self) -> None:
         text = '---\ntitle: "My Title"\n---'
         fm = parse_frontmatter(text)
@@ -191,6 +279,13 @@ class TestParseHeadings:
         text = "# Heading With Space   "
         result = parse_headings(text)
         assert result[0].text == "Heading With Space"
+
+    def test_heading_at_last_line(self) -> None:
+        """Heading as the very last line of the document."""
+        text = "Some text.\n\n# Last Heading"
+        result = parse_headings(text)
+        assert len(result) == 1
+        assert result[0].line_number == 3
 
 
 class TestMapHeadingBodies:
@@ -262,6 +357,13 @@ class TestMapHeadingBodies:
         bodies = map_heading_bodies(text, headings)
         assert bodies[0].heading == Heading(level=1, text="H1", line_number=1)
 
+    def test_heading_at_end_empty_body(self) -> None:
+        """Heading at end of doc has body with start == end (empty body range)."""
+        text = "Prefix\n\n# Last"
+        bodies = map_heading_bodies(text, parse_headings(text))
+        assert bodies[0].start_line == 3
+        assert bodies[0].end_line == 3
+
 
 # ── Wikilinks ──────────────────────────────────────────────────────────
 
@@ -326,6 +428,26 @@ class TestParseWikilinks:
         text = "[[A Note With Spaces]]"
         result = parse_wikilinks(text)
         assert result[0].target == "A Note With Spaces"
+
+    def test_malformed_double_bracket(self) -> None:
+        """Lone [[ should not parse as a wikilink."""
+        assert parse_wikilinks("[[") == ()
+
+    def test_malformed_empty_brackets(self) -> None:
+        """[[]] has no target and should not parse."""
+        assert parse_wikilinks("[[]]") == ()
+
+    def test_malformed_pipe_only(self) -> None:
+        """[[|alias]] has no target."""
+        assert parse_wikilinks("[[|alias]]") == ()
+
+    def test_malformed_heading_only(self) -> None:
+        """[[#heading]] has no target."""
+        assert parse_wikilinks("[[#heading]]") == ()
+
+    def test_malformed_embed_no_target(self) -> None:
+        """![[ has no target."""
+        assert parse_wikilinks("![[") == ()
 
 
 # ── Markdown Links ─────────────────────────────────────────────────────
@@ -413,6 +535,11 @@ class TestParseTags:
         text = "this is # not a tag"
         result = parse_tags(text)
         assert result == ()
+
+    def test_tag_inside_url_ignored(self) -> None:
+        """# inside a URL should not be treated as a tag."""
+        text = "see https://example.com/#section"
+        assert parse_tags(text) == ()
 
 
 # ── Integration / parse_markdown ───────────────────────────────────────
@@ -538,3 +665,15 @@ class TestSecurityAndEdgeCases:
         result = parse_wikilinks(text)
         assert len(result) == 1
         assert result[0].target == "InsideCode"
+
+    def test_no_trailing_newline(self) -> None:
+        """File without trailing newline should parse correctly."""
+        text = "# Heading\n\nSome text without newline at end"
+        result = parse_markdown(text)
+        assert result.headings[0].text == "Heading"
+
+    def test_frontmatter_only_closing_fence_no_newline(self) -> None:
+        """Frontmatter with closing fence but no trailing newline."""
+        text = "---\ntitle: Test\n---"
+        result = parse_markdown(text)
+        assert result.frontmatter.title == "Test"

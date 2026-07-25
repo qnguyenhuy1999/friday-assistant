@@ -204,21 +204,34 @@ class ObsidianVaultStore:
         current = self._require_text(candidate.path)
         if _hash(current) != candidate.observed_content_hash:
             raise MemoryWriteConflict("managed note changed before append")
-        self._append_if_unchanged(path, candidate.observed_content_hash, content[len(before) :])
+        suffix = content[len(before) :]
+        actual = self._append_if_unchanged(path, candidate.observed_content_hash, suffix)
         return MemoryWriteResult(
-            candidate.path, candidate.operation, _hash(content), False, len(content.encode())
+            candidate.path,
+            candidate.operation,
+            _hash(actual),
+            False,
+            len(content.encode()),
         )
 
-    def _append_if_unchanged(self, path: Path, observed_hash: str | None, suffix: str) -> None:
+    def _append_if_unchanged(self, path: Path, observed_hash: str | None, suffix: str) -> str:
         """Append through the opened inode, never replace the pathname.
 
         Human editors commonly publish with atomic rename.  If that happens
         after our final hash check, the old inode can receive this append but
         the editor's new pathname remains authoritative; Friday never
         clobbers it.  Friday writers are serialized by ``_note_lock``.
+
+        Returns the actual post-write content read from the authoritative
+        path so the caller can report a truthful ``content_hash``.
+
+        Raises ``MemoryWriteConflict`` if the file was atomically replaced
+        between opening the FD and completing the append — the append went
+        to an orphaned inode and the caller must not report success.
         """
         descriptor = os.open(path, os.O_RDWR | os.O_APPEND)
         try:
+            opened = os.fstat(descriptor)
             with os.fdopen(descriptor, "r+b", closefd=False) as handle:
                 handle.seek(0)
                 current = handle.read().decode("utf-8")
@@ -227,8 +240,15 @@ class ObsidianVaultStore:
                 handle.write(suffix.encode("utf-8"))
                 handle.flush()
                 os.fsync(handle.fileno())
+                current_identity = os.stat(path)
+                if (
+                    opened.st_dev != current_identity.st_dev
+                    or opened.st_ino != current_identity.st_ino
+                ):
+                    raise MemoryWriteConflict("managed note was atomically replaced during append")
         finally:
             os.close(descriptor)
+        return path.read_text(encoding="utf-8")
 
     def _atomic_create(self, path: Path, content: str) -> None:
         """Publish via a hard link, which atomically fails if *path* already

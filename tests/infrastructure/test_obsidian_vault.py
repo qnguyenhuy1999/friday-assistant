@@ -448,6 +448,68 @@ def test_human_atomic_save_after_best_effort_final_hash_check_is_never_overwritt
     assert path.read_text(encoding="utf-8").endswith("human version")
 
 
+def test_atomic_replace_after_fd_open_never_reports_append_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An atomic replace (os.replace) after Friday opened the FD must
+    produce a MemoryWriteConflict — the append went to an orphaned inode
+    and the success/failure signal must be truthful."""
+    store = _store(tmp_path)
+    original = "---\nfriday_managed: true\n---\nold"
+    _write(tmp_path, "Friday/Inbox/a.md", original)
+    path = tmp_path / "Friday/Inbox/a.md"
+    expected = hashlib.sha256(original.encode()).hexdigest()
+    real_fsync = os.fsync
+
+    def replace_before_fsync(fd: int) -> None:
+        temp = tmp_path / ".friday-test-replace"
+        temp.write_text("---\nfriday_managed: true\n---\nhuman version", encoding="utf-8")
+        os.replace(temp, path)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", replace_before_fsync)
+
+    with pytest.raises(MemoryWriteConflict):
+        store.write_candidate(
+            _candidate(
+                "Friday/Inbox/a.md",
+                operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
+                observed_content_hash=expected,
+                frontmatter=(),
+                payload="friday append",
+            )
+        )
+
+    content = path.read_text(encoding="utf-8")
+    assert "human version" in content
+    assert "friday append" not in content
+
+
+def test_successful_append_content_hash_matches_authoritative_path(
+    tmp_path: Path,
+) -> None:
+    """After a successful append, the reported content_hash must match the
+    actual bytes on disk at the authoritative path — never a synthetic
+    before+payload value that could diverge under a race."""
+    store = _store(tmp_path)
+    original = "---\nfriday_managed: true\n---\nold"
+    _write(tmp_path, "Friday/Inbox/a.md", original)
+    expected = hashlib.sha256(original.encode()).hexdigest()
+
+    result = store.write_candidate(
+        _candidate(
+            "Friday/Inbox/a.md",
+            operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
+            observed_content_hash=expected,
+            frontmatter=(),
+            payload="friday append",
+        )
+    )
+
+    actual = (tmp_path / "Friday/Inbox/a.md").read_bytes()
+    assert result.content_hash == hashlib.sha256(actual).hexdigest()
+
+
 def test_included_paths_honors_directory_entry_scan_ceiling(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

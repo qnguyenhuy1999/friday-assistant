@@ -13,6 +13,7 @@ are not registered at all (fail closed, no no-op driver).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from friday.infrastructure.computer.driver import ComputerDriverHealth
@@ -98,6 +99,11 @@ class FakeComputerDriver:
     # provable against raw OSErrors escaping a real driver
     raises: Exception | None = None
     calls: list[DriverCall] = field(default_factory=list)
+    on_call: Callable[[str], None] | None = None
+    """Fires after a call is recorded, so a test can act at the exact moment a
+    side effect has landed but Friday has not yet persisted its outcome — the
+    claim-loss window that makes a desktop action ambiguous. A hook rather than
+    method patching because this dataclass uses slots."""
 
     # --- inspection helpers used by tests ---------------------------------
 
@@ -189,6 +195,8 @@ class FakeComputerDriver:
         if self.raises is not None:
             raise self.raises
         self.calls.append(DriverCall(name=name, payload=tuple(sorted(payload.items()))))
+        if self.on_call is not None:
+            self.on_call(name)
 
     def _resolve_window(self, window_id: str | None) -> WindowInfo:
         if window_id is None:

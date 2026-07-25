@@ -24,6 +24,12 @@ exists yet.
   claim/lease/retry coordination loop over the Phase 6–9 use cases (see
   [worker-coordination.md](worker-coordination.md)). No tool/model
   execution exists yet.
+- **`src/friday/infrastructure/computer`** — the opt-in desktop computer-use
+  substrate behind `ComputerToolGateway` (see
+  [computer-use.md](computer-use.md)). Reachable only from
+  `infrastructure/tools/computer_gateway.py` and
+  `infrastructure/tools/computer_composition.py`; the brain runtime,
+  application layer, domain layer, and worker loop must never import it.
 - **`apps/web`** — browser control-plane delivery. A thin TypeScript
   package shell (no React/Vite yet).
 - **`packages/contracts`** — language-neutral schemas and cross-process

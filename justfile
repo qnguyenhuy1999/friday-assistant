@@ -61,6 +61,12 @@ worker:
 worker-check:
     uv run python -m apps.worker.preflight
 
+memory-check:
+    uv run python -m apps.worker.preflight --memory-only
+
+memory-index:
+    uv run python -m apps.worker.preflight --memory-index
+
 pre-commit:
     uv run pre-commit run --all-files
     uv run pre-commit run --all-files --hook-stage pre-push

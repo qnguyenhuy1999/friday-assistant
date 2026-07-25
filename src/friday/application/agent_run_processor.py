@@ -1,0 +1,421 @@
+"""AgentRunProcessor — the vendor-neutral RunProcessor that drives a Run
+through bounded brain turns.
+
+Per claim, the loop is:
+
+    for turn in 1..max_turns_per_claim:
+        verify claim (cheap flag + durable check)
+        load a fresh durable snapshot (short read transaction)
+        build the deterministic bounded context
+        call the brain               # outside any transaction
+        verify claim again
+        dispatch the proposed action
+
+The brain only proposes; every durable effect goes through claim-fenced
+use cases (RequestToolApproval, ExecuteToolAction), and the final Run
+transition stays with Phase 10's Apply* outcome appliers — this processor
+never marks a Run succeeded/failed itself, it only returns an outcome.
+
+Claim loss at any checkpoint returns `yielded(now)`: the worker loop
+discards outcomes for lost leases, and RequeueClaimedRun is itself fenced,
+so a stale worker can never move durable state.
+
+Failure policy (stable codes, bounded messages):
+    agent_reported_failure    brain chose the fail action (not retryable)
+    brain_response_invalid    repair budget exhausted (retryable)
+    brain_timeout             CLI exceeded its deadline (retryable)
+    brain_unavailable         CLI missing/crashed (retryable)
+    brain_protocol_error      unparseable CLI envelope (retryable)
+    tool_not_found            brain invented an unregistered tool (retryable)
+    tool_execution_ambiguous  prior protected execution not terminal (not retryable)
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import Any
+
+from friday.application.brain_runtime import BrainRequest, BrainResponse, BrainRuntime
+from friday.application.claim_aware_tool_execution import ExecuteToolAction
+from friday.application.commands import RequestApprovalCommand
+from friday.application.errors import (
+    BrainProtocolError,
+    BrainResponseInvalid,
+    BrainTimeout,
+    BrainUnavailable,
+    ClaimLost,
+    ToolExecutionAmbiguous,
+    ToolInputInvalid,
+    ToolNotFound,
+)
+from friday.application.ports import Clock, UnitOfWorkFactory
+from friday.application.run_processor import ClaimContext, ProcessingOutcome
+from friday.application.runtime_actions import (
+    BrainAction,
+    FailAction,
+    FinishAction,
+    InvokeToolAction,
+    YieldAction,
+)
+from friday.application.runtime_context import (
+    MIN_CONTEXT_CHARS,
+    RunSnapshot,
+    build_runtime_context,
+)
+from friday.application.tool_authorization import (
+    RequestToolApproval,
+    compute_authorization_fingerprint,
+)
+from friday.application.tool_gateway import ToolCall, ToolGateway
+from friday.application.worker_coordination import VerifyRunClaim
+from friday.domain.failure import Failure, FailureCause
+from friday.domain.run import RunStatus
+from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
+from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
+
+_MAX_TURN_NOTE_CHARS = 500
+_MAX_RECENT_EVENTS = 50
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeLimits:
+    max_turns_per_claim: int
+    max_tool_calls_per_claim: int
+    max_context_chars: int
+    max_response_bytes: int
+    max_yield_seconds: int
+    max_processing_seconds: float = 600.0
+
+    def __post_init__(self) -> None:
+        if self.max_turns_per_claim < 1:
+            raise ValueError("max_turns_per_claim must be >= 1")
+        if self.max_tool_calls_per_claim < 1:
+            raise ValueError("max_tool_calls_per_claim must be >= 1")
+        if self.max_context_chars < MIN_CONTEXT_CHARS:
+            raise ValueError(f"max_context_chars must be >= {MIN_CONTEXT_CHARS}")
+        if self.max_response_bytes <= 0:
+            raise ValueError("max_response_bytes must be positive")
+        if self.max_yield_seconds < 0:
+            raise ValueError("max_yield_seconds must be >= 0")
+        if self.max_processing_seconds <= 0:
+            raise ValueError("max_processing_seconds must be positive")
+
+
+class AgentRunProcessor:
+    """Satisfies Phase 10's RunProcessor protocol with a real agent loop."""
+
+    def __init__(
+        self,
+        *,
+        uow_factory: UnitOfWorkFactory,
+        clock: Clock,
+        brain: BrainRuntime,
+        gateway: ToolGateway,
+        verify_claim: VerifyRunClaim,
+        request_tool_approval: RequestToolApproval,
+        execute_tool_action: ExecuteToolAction,
+        limits: RuntimeLimits,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._uow_factory = uow_factory
+        self._clock = clock
+        self._brain = brain
+        self._gateway = gateway
+        self._verify_claim = verify_claim
+        self._request_tool_approval = request_tool_approval
+        self._execute_tool_action = execute_tool_action
+        self._limits = limits
+        self._monotonic = monotonic
+
+    # ------------------------------------------------------------------ API
+
+    def process(self, context: ClaimContext) -> ProcessingOutcome:
+        turn_notes: list[str] = []
+        tool_calls = 0
+        deadline = self._monotonic() + self._limits.max_processing_seconds
+
+        for turn in range(1, self._limits.max_turns_per_claim + 1):
+            if self._monotonic() >= deadline:
+                return self._yield_now()
+            if not self._claim_holds(context):
+                return self._yield_now()
+
+            snapshot = self._load_snapshot(context, tuple(turn_notes))
+            if snapshot is None:
+                return self._yield_now()
+
+            document = build_runtime_context(
+                snapshot,
+                tool_manifest=self._gateway.list_tools(),
+                attempt_number=context.attempt_number,
+                turn_number=turn,
+                max_chars=self._limits.max_context_chars,
+            )
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                return self._yield_now()
+            request = BrainRequest(
+                run_id=context.run_id,
+                task_id=context.task_id,
+                turn_number=turn,
+                attempt_number=context.attempt_number,
+                context=document,
+                tool_manifest=self._gateway.list_tools(),
+                max_response_bytes=self._limits.max_response_bytes,
+                timeout_seconds=remaining,
+            )
+
+            try:
+                if self._monotonic() >= deadline:
+                    return self._yield_now()
+                response = self._brain.next_action(request)  # outside any txn
+            except BrainResponseInvalid as exc:
+                return self._failed("brain_response_invalid", str(exc), retryable=True)
+            except BrainTimeout as exc:
+                return self._failed(
+                    "brain_timeout", str(exc), retryable=True, cause=FailureCause.TIMEOUT
+                )
+            except BrainUnavailable as exc:
+                return self._failed("brain_unavailable", str(exc), retryable=True)
+            except BrainProtocolError as exc:
+                return self._failed("brain_protocol_error", str(exc), retryable=True)
+
+            if not self._claim_holds(context):
+                return self._yield_now()  # never act on a response for a lost claim
+
+            if self._monotonic() >= deadline:
+                return self._yield_now()
+            outcome, note, tool_call_used = self._dispatch(context, response, snapshot, deadline)
+            if outcome is not None:
+                return outcome
+            if note is not None:
+                turn_notes.append(note[:_MAX_TURN_NOTE_CHARS])
+            if tool_call_used:
+                tool_calls += 1
+                if tool_calls >= self._limits.max_tool_calls_per_claim:
+                    return self._yield_now()  # tool budget: continue under a fresh claim
+
+        return self._yield_now()  # turn budget: continue under a fresh claim
+
+    # ------------------------------------------------------------ dispatch
+
+    def _dispatch(
+        self,
+        context: ClaimContext,
+        response: BrainResponse,
+        snapshot: RunSnapshot,
+        deadline: float,
+    ) -> tuple[ProcessingOutcome | None, str | None, bool]:
+        """Returns (final outcome | None to continue, turn note, tool used)."""
+        action: BrainAction = response.action
+        if isinstance(action, FinishAction):
+            blocker = self._finish_blocker(context.run_id, snapshot)
+            if blocker is not None:
+                return None, f"finish rejected: {blocker}", False
+            if not self._claim_holds(context):
+                return self._yield_now(), None, False
+            return ProcessingOutcome.succeeded(action.summary, action.details), None, False
+
+        if isinstance(action, FailAction):
+            return (
+                self._failed(
+                    "agent_reported_failure",
+                    action.reason,
+                    retryable=False,
+                ),
+                None,
+                False,
+            )
+
+        if isinstance(action, YieldAction):
+            delay = min(action.delay_seconds or 0, self._limits.max_yield_seconds)
+            available_at = self._clock.now() + timedelta(seconds=delay)
+            return ProcessingOutcome.yielded(available_at), None, False
+
+        return self._dispatch_tool(context, action, deadline)
+
+    def _dispatch_tool(
+        self, context: ClaimContext, action: InvokeToolAction, deadline: float
+    ) -> tuple[ProcessingOutcome | None, str | None, bool]:
+        remaining = deadline - self._monotonic()
+        if remaining <= 0:
+            return self._yield_now(), None, False
+        try:
+            call = ToolCall(tool=action.tool, tool_input=action.tool_input)
+        except ToolInputInvalid as exc:
+            return None, f"invalid tool input for {action.tool}: {exc}", False
+
+        try:
+            result = self._execute_tool_action.execute(
+                run_id=context.run_id,
+                step_id=None,
+                call=call,
+                worker_id=context.worker_id,
+                claim_token=context.claim_token,
+                claim_generation=context.claim_generation,
+                cancellation_requested=context.is_lease_lost,
+                timeout_seconds=remaining,
+            )
+        except ToolNotFound:
+            return (
+                self._failed(
+                    "tool_not_found",
+                    f"brain proposed an unregistered tool: {action.tool}",
+                    retryable=True,
+                    cause=FailureCause.TOOL,
+                ),
+                None,
+                False,
+            )
+        except ToolExecutionAmbiguous as exc:
+            return (
+                self._failed(
+                    "tool_execution_ambiguous",
+                    str(exc),
+                    retryable=False,
+                    cause=FailureCause.TOOL,
+                ),
+                None,
+                False,
+            )
+        except ClaimLost:
+            return self._yield_now(), None, False
+
+        if result.kind == "approval_required":
+            return self._request_approval(context, action, call), None, False
+
+        status = result.result.status if result.result is not None else "unknown"
+        note = f"invoked {call.tool} -> {status}"
+        if result.replayed:
+            note += " (replayed durable result)"
+        return None, note, True
+
+    def _request_approval(
+        self, context: ClaimContext, action: InvokeToolAction, call: ToolCall
+    ) -> ProcessingOutcome:
+        risk = self._gateway.assess(call)
+        command = RequestApprovalCommand(
+            run_id=context.run_id,
+            category=risk.category,
+            summary=risk.summary,
+            reason=action.reason or "",
+            requested_action=call.tool,
+            requested_input=call.tool_input,
+            authorization_fingerprint=self._fingerprint(context, call),
+        )
+        try:
+            approval = self._request_tool_approval.execute(
+                command,
+                worker_id=context.worker_id,
+                claim_token=context.claim_token,
+                claim_generation=context.claim_generation,
+            )
+        except ClaimLost:
+            return self._yield_now()
+        return ProcessingOutcome.waiting_for_approval(approval.approval_id)
+
+    # ------------------------------------------------------------- helpers
+
+    def _fingerprint(self, context: ClaimContext, call: ToolCall) -> str:
+        return compute_authorization_fingerprint(run_id=context.run_id, step_id=None, call=call)
+
+    def _claim_holds(self, context: ClaimContext) -> bool:
+        if context.is_lease_lost():
+            return False
+        return self._verify_claim.execute(
+            context.run_id,
+            context.worker_id,
+            context.claim_token,
+            context.claim_generation,
+        )
+
+    def _load_snapshot(
+        self, context: ClaimContext, turn_notes: tuple[str, ...]
+    ) -> RunSnapshot | None:
+        """Short read-only transaction. Returns None when the run is not in
+        a processable state (the fenced requeue path resolves the rest)."""
+        with self._uow_factory() as uow:
+            task = uow.tasks.get(context.task_id)
+            run = uow.runs.get(context.run_id)
+            if task is None or run is None or run.status is not RunStatus.RUNNING:
+                return None
+            events = _bounded_read(uow.events, context.run_id, _MAX_RECENT_EVENTS)
+            return RunSnapshot(
+                task=task,
+                run=run,
+                steps=tuple(uow.steps.list_for_run(context.run_id)),
+                approvals=tuple(_bounded_read(uow.approvals, context.run_id, _MAX_RECENT_EVENTS)),
+                invocations=tuple(
+                    _bounded_read(uow.tool_invocations, context.run_id, _MAX_RECENT_EVENTS)
+                ),
+                artifacts=tuple(_bounded_read(uow.artifacts, context.run_id, _MAX_RECENT_EVENTS)),
+                events=tuple(events),
+                previous_turns=turn_notes,
+            )
+
+    def _finish_blocker(self, run_id: object, snapshot: RunSnapshot | None = None) -> str | None:
+        with self._uow_factory() as uow:
+            has_steps = getattr(uow.steps, "has_non_terminal_for_run", None)
+            if (has_steps is not None and has_steps(run_id)) or (
+                has_steps is None
+                and snapshot is not None
+                and any(step.status not in TERMINAL_RUN_STEP_STATUSES for step in snapshot.steps)
+            ):
+                if has_steps is None and snapshot is not None:
+                    count = sum(
+                        step.status not in TERMINAL_RUN_STEP_STATUSES for step in snapshot.steps
+                    )
+                    return f"{count} step(s) are not terminal"
+                return "one or more steps are not terminal"
+            has_tools = getattr(uow.tool_invocations, "has_non_terminal_for_run", None)
+            if (has_tools is not None and has_tools(run_id)) or (
+                has_tools is None
+                and snapshot is not None
+                and any(
+                    inv.status not in TERMINAL_TOOL_INVOCATION_STATUSES
+                    for inv in snapshot.invocations
+                )
+            ):
+                if has_tools is None and snapshot is not None:
+                    count = sum(
+                        inv.status not in TERMINAL_TOOL_INVOCATION_STATUSES
+                        for inv in snapshot.invocations
+                    )
+                    return f"{count} tool invocation(s) are not terminal"
+                return "one or more tool invocations are not terminal"
+            has_approvals = getattr(uow.approvals, "has_pending_for_run", None)
+            if (has_approvals is not None and has_approvals(run_id)) or (
+                has_approvals is None
+                and snapshot is not None
+                and any(approval.status.value == "pending" for approval in snapshot.approvals)
+            ):
+                return "one or more approvals are pending"
+        return None
+
+    def _yield_now(self) -> ProcessingOutcome:
+        return ProcessingOutcome.yielded(self._clock.now())
+
+    def _failed(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool,
+        cause: FailureCause = FailureCause.RUNTIME,
+    ) -> ProcessingOutcome:
+        bounded = message.strip()[:2000] or code
+        return ProcessingOutcome.failed(
+            Failure(code=code, message=bounded, retryable=retryable, cause=cause)
+        )
+
+
+def _bounded_read(repository: object, run_id: object, limit: int) -> Any:
+    recent = getattr(repository, "list_recent_for_run", None)
+    if recent is not None:
+        return recent(run_id, limit)
+    # Compatibility for in-memory ports used by older callers; production
+    # repositories implement the bounded query above.
+    return list(getattr(repository, "list_for_run")(run_id))[-limit:]  # noqa: B009

@@ -23,6 +23,7 @@ from friday.domain.approval import TERMINAL_APPROVAL_STATUSES, ApprovalStatus
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure
 from friday.domain.identifiers import ApprovalRequestId, RunId
+from friday.domain.json_value import JsonValue
 from friday.domain.run import TERMINAL_RUN_STATUSES, Run, RunStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
 from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
@@ -257,7 +258,12 @@ class ApplySucceededOutcome:
         self._clock = clock
 
     def execute(
-        self, run_id: RunId, worker_id: str, claim_token: str, claim_generation: int
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        final_response: tuple[str, JsonValue] | None = None,
     ) -> RunResult:
         with self._uow_factory() as uow:
             now = self._clock.now()
@@ -274,6 +280,15 @@ class ApplySucceededOutcome:
                 for tool in uow.tool_invocations.list_for_run(run.id)
             ):
                 raise EntityConflict("run has non-terminal tool invocations")
+            has_steps = getattr(uow.steps, "has_non_terminal_for_run", None)
+            has_tools = getattr(uow.tool_invocations, "has_non_terminal_for_run", None)
+            if (has_steps is not None and has_steps(run_id)) or (
+                has_tools is not None and has_tools(run_id)
+            ):
+                raise EntityConflict("run has non-terminal children")
+            has_approvals = getattr(uow.approvals, "has_pending_for_run", None)
+            if has_approvals is not None and has_approvals(run_id):
+                raise EntityConflict("run has pending approvals")
 
             removed = uow.work_queue.remove_if_claimed(
                 run_id, worker_id, claim_token, claim_generation, now
@@ -282,6 +297,16 @@ class ApplySucceededOutcome:
                 raise ClaimLost(f"successful outcome lost claim for run {run_id}")
 
             specs = _succeed_run_event_specs(uow, run, now)
+            if final_response is not None:
+                summary, details = final_response
+                specs.insert(
+                    0,
+                    (
+                        RunEventType.AGENT_FINISHED,
+                        {"summary": str(summary)[:4000], "details": details},
+                        None,
+                    ),
+                )
             LifecycleEvents.append_run_events(uow, run, now, specs)
             uow.commit()
             return run_result(run)

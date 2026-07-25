@@ -151,7 +151,11 @@ class WorkerLoop:
         try:
             if outcome.kind == "succeeded":
                 self._apply_succeeded.execute(
-                    claim.run_id, claim.worker_id, claim.claim_token, claim.claim_generation
+                    claim.run_id,
+                    claim.worker_id,
+                    claim.claim_token,
+                    claim.claim_generation,
+                    outcome.final_response,
                 )
             elif outcome.kind == "failed":
                 assert outcome.failure is not None

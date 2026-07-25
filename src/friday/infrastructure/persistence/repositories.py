@@ -25,6 +25,8 @@ from friday.domain import (
     ToolInvocation,
     ToolInvocationId,
 )
+from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
+from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
 from friday.infrastructure.persistence.mappers import (
     approval_from_row,
     approval_to_row,
@@ -157,6 +159,21 @@ class RunStepRepository:
         )
         return [run_step_from_row(row) for row in self._session.execute(stmt).scalars()]
 
+    def has_non_terminal_for_run(self, run_id: RunId) -> bool:
+        return (
+            self._session.execute(
+                select(RunStepRow.id)
+                .where(
+                    RunStepRow.run_id == str(run_id),
+                    RunStepRow.status.not_in(
+                        tuple(status.value for status in TERMINAL_RUN_STEP_STATUSES)
+                    ),
+                )
+                .limit(1)
+            ).first()
+            is not None
+        )
+
     def list_for_run_page(
         self, run_id: RunId, limit: int, after_position: int | None, after_id: str | None
     ) -> list[RunStep]:
@@ -201,6 +218,19 @@ class ApprovalRepository:
         )
         return [approval_from_row(row) for row in self._session.execute(stmt).scalars()]
 
+    def has_pending_for_run(self, run_id: RunId) -> bool:
+        return (
+            self._session.execute(
+                select(ApprovalRequestRow.id)
+                .where(
+                    ApprovalRequestRow.run_id == str(run_id),
+                    ApprovalRequestRow.status == ApprovalStatus.PENDING.value,
+                )
+                .limit(1)
+            ).first()
+            is not None
+        )
+
     def list_due_for_expiry(self, now: object, limit: int) -> list[ApprovalRequest]:
         stmt = (
             select(ApprovalRequestRow)
@@ -221,6 +251,16 @@ class ApprovalRepository:
             .order_by(ApprovalRequestRow.requested_at, ApprovalRequestRow.id)
         )
         return [approval_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+    def list_recent_for_run(self, run_id: RunId, limit: int) -> list[ApprovalRequest]:
+        stmt = (
+            select(ApprovalRequestRow)
+            .where(ApprovalRequestRow.run_id == str(run_id))
+            .order_by(ApprovalRequestRow.requested_at.desc(), ApprovalRequestRow.id.desc())
+            .limit(limit)
+        )
+        rows = list(self._session.execute(stmt).scalars())
+        return [approval_from_row(row) for row in reversed(rows)]
 
     def list_for_run_page(
         self, run_id: RunId, limit: int, after_requested_at: object | None, after_id: str | None
@@ -263,6 +303,16 @@ class ArtifactRepository:
         )
         return [artifact_from_row(row) for row in self._session.execute(stmt).scalars()]
 
+    def list_recent_for_run(self, run_id: RunId, limit: int) -> list[Artifact]:
+        stmt = (
+            select(ArtifactRow)
+            .where(ArtifactRow.run_id == str(run_id))
+            .order_by(ArtifactRow.created_at.desc(), ArtifactRow.id.desc())
+            .limit(limit)
+        )
+        rows = list(self._session.execute(stmt).scalars())
+        return [artifact_from_row(row) for row in reversed(rows)]
+
     def list_for_run_page(
         self, run_id: RunId, limit: int, after_created_at: object | None, after_id: str | None
     ) -> list[Artifact]:
@@ -303,6 +353,31 @@ class ToolInvocationRepository:
             .order_by(ToolInvocationRow.requested_at, ToolInvocationRow.id)
         )
         return [tool_invocation_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+    def has_non_terminal_for_run(self, run_id: RunId) -> bool:
+        return (
+            self._session.execute(
+                select(ToolInvocationRow.id)
+                .where(
+                    ToolInvocationRow.run_id == str(run_id),
+                    ToolInvocationRow.status.not_in(
+                        tuple(status.value for status in TERMINAL_TOOL_INVOCATION_STATUSES)
+                    ),
+                )
+                .limit(1)
+            ).first()
+            is not None
+        )
+
+    def list_recent_for_run(self, run_id: RunId, limit: int) -> list[ToolInvocation]:
+        stmt = (
+            select(ToolInvocationRow)
+            .where(ToolInvocationRow.run_id == str(run_id))
+            .order_by(ToolInvocationRow.requested_at.desc(), ToolInvocationRow.id.desc())
+            .limit(limit)
+        )
+        rows = list(self._session.execute(stmt).scalars())
+        return [tool_invocation_from_row(row) for row in reversed(rows)]
 
     def list_for_step(self, step_id: RunStepId) -> list[ToolInvocation]:
         stmt = (
@@ -375,6 +450,16 @@ class RunEventStore:
             .order_by(RunEventRow.sequence)
         )
         return [run_event_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+    def list_recent_for_run(self, run_id: RunId, limit: int) -> list[RunEvent]:
+        stmt = (
+            select(RunEventRow)
+            .where(RunEventRow.run_id == str(run_id))
+            .order_by(RunEventRow.sequence.desc())
+            .limit(limit)
+        )
+        rows = list(self._session.execute(stmt).scalars())
+        return [run_event_from_row(row) for row in reversed(rows)]
 
     def list_after_sequence(self, run_id: RunId, after_sequence: int, limit: int) -> list[RunEvent]:
         stmt = (

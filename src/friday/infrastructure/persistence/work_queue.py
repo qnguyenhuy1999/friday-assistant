@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import and_, delete, or_, select, update
@@ -254,11 +254,18 @@ class SqlAlchemyRunWorkQueue:
         now: datetime,
     ) -> bool:
         row = self._session.get(RunWorkItemRow, str(run_id))
-        return (
-            row is not None
-            and row.claimed_by == worker_id
-            and row.claim_token == claim_token
-            and row.claim_generation == claim_generation
-            and row.lease_expires_at is not None
-            and row.lease_expires_at > now
-        )
+        if (
+            row is None
+            or row.claimed_by != worker_id
+            or row.claim_token != claim_token
+            or row.claim_generation != claim_generation
+            or row.lease_expires_at is None
+        ):
+            return False
+        # SQLite drops tzinfo on read-back; reattach UTC before the only
+        # Python-side datetime comparison in this repository (every other
+        # method compares inside a SQL WHERE clause).
+        lease_expires_at = row.lease_expires_at
+        if lease_expires_at.tzinfo is None:
+            lease_expires_at = lease_expires_at.replace(tzinfo=UTC)
+        return lease_expires_at > now

@@ -34,10 +34,10 @@ from friday.domain.identifiers import (
     ToolInvocationId,
 )
 from friday.domain.run import Run
-from friday.domain.step import RunStep
+from friday.domain.step import TERMINAL_RUN_STEP_STATUSES, RunStep
 from friday.domain.task import Task
 from friday.domain.task_event import TaskEvent
-from friday.domain.tool import ToolInvocation
+from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES, ToolInvocation
 
 T0 = datetime(2026, 1, 2, 3, tzinfo=UTC)
 
@@ -178,6 +178,13 @@ class FakeRunStepRepository:
             key=lambda s: (s.position, str(s.id)),
         )
 
+    def has_non_terminal_for_run(self, run_id: RunId) -> bool:
+        return any(
+            step.status not in TERMINAL_RUN_STEP_STATUSES
+            for step in self.items.values()
+            if step.run_id == run_id
+        )
+
     def list_for_run_page(
         self, run_id: RunId, limit: int, after_position: int | None, after_id: str | None
     ) -> list[RunStep]:
@@ -206,6 +213,13 @@ class FakeToolInvocationRepository:
         return sorted(
             (i for i in self.items.values() if i.run_id == run_id),
             key=lambda i: (i.requested_at, str(i.id)),
+        )
+
+    def has_non_terminal_for_run(self, run_id: RunId) -> bool:
+        return any(
+            invocation.status not in TERMINAL_TOOL_INVOCATION_STATUSES
+            for invocation in self.items.values()
+            if invocation.run_id == run_id
         )
 
     def list_for_step(self, step_id: RunStepId) -> list[ToolInvocation]:
@@ -263,6 +277,12 @@ class FakeApprovalRepository:
             if a.run_id == run_id and a.status is ApprovalStatus.PENDING
         ]
         return sorted(matching, key=lambda a: (a.requested_at, str(a.id)))
+
+    def has_pending_for_run(self, run_id: RunId) -> bool:
+        return any(
+            approval.run_id == run_id and approval.status is ApprovalStatus.PENDING
+            for approval in self.items.values()
+        )
 
     def list_due_for_expiry(self, now: datetime, limit: int) -> list[ApprovalRequest]:
         matching = [

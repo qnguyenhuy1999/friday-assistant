@@ -29,7 +29,8 @@
         "tool_invocation_succeeded",
         "tool_invocation_failed",
         "tool_invocation_cancelled",
-        "artifact_created"
+        "artifact_created",
+        "agent_finished"
       ]
     },
     "sequence": { "type": "integer", "minimum": 1 },

@@ -7,6 +7,7 @@ from typing import Literal, Protocol
 
 from friday.domain.failure import Failure
 from friday.domain.identifiers import ApprovalRequestId, RunId, TaskId
+from friday.domain.json_value import JsonValue
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,7 @@ class ProcessingOutcome:
     failure: Failure | None = None
     available_at: datetime | None = None
     approval_request_id: ApprovalRequestId | None = None
+    final_response: tuple[str, JsonValue] | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in {"succeeded", "failed", "waiting_for_approval", "yielded"}:
@@ -38,14 +40,16 @@ class ProcessingOutcome:
             raise ValueError("a 'waiting_for_approval' outcome requires approval_request_id")
         if self.kind != "waiting_for_approval" and self.approval_request_id is not None:
             raise ValueError("only a 'waiting_for_approval' outcome may carry approval_request_id")
+        if self.kind != "succeeded" and self.final_response is not None:
+            raise ValueError("only a 'succeeded' outcome may carry final_response")
         if self.kind == "yielded" and self.available_at is None:
             raise ValueError("a 'yielded' outcome requires available_at")
         if self.kind != "yielded" and self.available_at is not None:
             raise ValueError("only a 'yielded' outcome may carry available_at")
 
     @classmethod
-    def succeeded(cls) -> ProcessingOutcome:
-        return cls(kind="succeeded")
+    def succeeded(cls, summary: str = "", details: JsonValue = None) -> ProcessingOutcome:
+        return cls(kind="succeeded", final_response=(summary, details))
 
     @classmethod
     def failed(cls, failure: Failure) -> ProcessingOutcome:

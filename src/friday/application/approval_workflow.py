@@ -57,6 +57,8 @@ def approval_result(approval: ApprovalRequest) -> ApprovalRequestResult:
         approval.resolved_at,
         approval.resolution_note,
         approval.resolver,
+        approval.authorization_fingerprint,
+        approval.consumed_at,
     )
 
 
@@ -129,6 +131,7 @@ class RequestApproval(LifecycleEvents):
                 requested_at=now,
                 step_id=command.step_id,
                 expires_at=command.expires_at,
+                authorization_fingerprint=command.authorization_fingerprint,
             )
             uow.approvals.add(approval)
             run.wait_for_approval(now, approval.id)

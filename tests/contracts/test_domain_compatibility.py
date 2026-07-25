@@ -186,6 +186,8 @@ def test_approval_request_projects_to_valid_wire_shape() -> None:
             "resolved_at": None,
             "resolution_note": None,
             "resolver": None,
+            "authorization_fingerprint": None,
+            "consumed_at": None,
         },
     )
 

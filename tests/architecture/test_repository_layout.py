@@ -65,7 +65,12 @@ def test_api_entry_point_exposes_asgi_app() -> None:
     assert app.title == "Friday Agent OS API"
 
 
-def test_worker_entry_point_constructs() -> None:
-    from apps.worker.main import worker
+def test_worker_entry_point_exposes_lazy_builder() -> None:
+    # Phase 11: construction is fail-closed (verified Claude CLI + workspace
+    # required), so the entry point builds lazily inside main() instead of
+    # at import time. Real construction is covered by
+    # tests/worker/test_worker_composition.py with a fake executable.
+    from apps.worker import main
 
-    assert worker.settings.worker_id
+    assert callable(main.build)
+    assert callable(main.main)

@@ -7,6 +7,8 @@ from pathlib import Path
 
 from apps.worker.app import create_worker
 from apps.worker.settings import WorkerSettings
+from tests.worker.fake_claude import make_fake_claude
+from tests.worker.test_worker_composition import runtime_settings
 
 
 def test_create_worker_wires_real_infrastructure(tmp_path: Path) -> None:
@@ -24,7 +26,10 @@ def test_create_worker_wires_real_infrastructure(tmp_path: Path) -> None:
         retry_multiplier=2.0,
         retry_max_delay=timedelta(seconds=300),
     )
-    worker = create_worker(settings)
+    executable, _ = make_fake_claude(
+        tmp_path, action_jsons=['{"version": 1, "action": "finish", "result": {"summary": "x"}}']
+    )
+    worker = create_worker(settings, runtime_settings(tmp_path, executable))
     try:
         with worker.engine.connect() as connection:
             connection.exec_driver_sql("SELECT 1")

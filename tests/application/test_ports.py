@@ -32,9 +32,9 @@ from friday.domain.identifiers import (
     ToolInvocationId,
 )
 from friday.domain.run import Run
-from friday.domain.step import RunStep
+from friday.domain.step import TERMINAL_RUN_STEP_STATUSES, RunStep
 from friday.domain.task import Task
-from friday.domain.tool import ToolInvocation
+from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES, ToolInvocation
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 T1 = datetime(2026, 1, 1, 1, tzinfo=UTC)
@@ -124,6 +124,13 @@ class _FakeRunStepRepository:
         matches = [step for step in self._steps.values() if step.run_id == run_id]
         return sorted(matches, key=lambda step: (step.position, step.id.value))
 
+    def has_non_terminal_for_run(self, run_id: RunId) -> bool:
+        return any(
+            step.status not in TERMINAL_RUN_STEP_STATUSES
+            for step in self._steps.values()
+            if step.run_id == run_id
+        )
+
     def list_for_run_page(
         self, run_id: RunId, limit: int, after_position: int | None, after_id: str | None
     ) -> list[RunStep]:
@@ -153,6 +160,12 @@ class _FakeApprovalRepository:
     def list_pending_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
         matches = [a for a in self._approvals.values() if a.run_id == run_id]
         return sorted(matches, key=lambda a: (a.requested_at, a.id.value))
+
+    def has_pending_for_run(self, run_id: RunId) -> bool:
+        return any(
+            approval.run_id == run_id and approval.status is ApprovalStatus.PENDING
+            for approval in self._approvals.values()
+        )
 
     def list_due_for_expiry(self, now: datetime, limit: int) -> list[ApprovalRequest]:
         matches = [
@@ -225,6 +238,13 @@ class _FakeToolInvocationRepository:
     def list_for_run(self, run_id: RunId) -> list[ToolInvocation]:
         matches = [i for i in self._invocations.values() if i.run_id == run_id]
         return sorted(matches, key=lambda i: (i.requested_at, i.id.value))
+
+    def has_non_terminal_for_run(self, run_id: RunId) -> bool:
+        return any(
+            invocation.status not in TERMINAL_TOOL_INVOCATION_STATUSES
+            for invocation in self._invocations.values()
+            if invocation.run_id == run_id
+        )
 
     def list_for_step(self, step_id: RunStepId) -> list[ToolInvocation]:
         matches = [i for i in self._invocations.values() if i.step_id == step_id]

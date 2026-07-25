@@ -73,3 +73,52 @@ class ClaimLost(ApplicationError):
     """A worker's claim no longer matches (expired, released, or fenced by
     a newer claim generation). The caller must stop treating the run as
     owned; it must not retry with the same token."""
+
+
+class BrainUnavailable(ApplicationError):
+    """The brain runtime could not be reached."""
+
+
+class BrainTimeout(ApplicationError):
+    """The brain runtime did not respond within the allotted time."""
+
+
+class BrainProtocolError(ApplicationError):
+    """The brain runtime's response violated the transport-level protocol."""
+
+
+class BrainResponseInvalid(ApplicationError):
+    """The brain proposed an action that does not match the brain-action
+    contract (see friday.application.runtime_actions)."""
+
+
+class ToolInputInvalid(ApplicationError):
+    """A tool's input failed validation against its declared contract."""
+
+
+class ToolNotFound(ApplicationError):
+    def __init__(self, tool: str) -> None:
+        self.tool = tool
+        super().__init__(f"Tool not found: {tool}")
+
+
+class ToolExecutionDenied(ApplicationError):
+    """A tool invocation was denied by policy."""
+
+
+class ToolApprovalRequired(ApplicationError):
+    """A tool invocation requires human approval before it can execute."""
+
+
+class ToolExecutionAmbiguous(ApplicationError):
+    """A tool invocation's outcome could not be determined."""
+
+
+class WorkspaceAccessDenied(ApplicationError):
+    """An operation attempted to access the workspace outside its granted
+    boundary."""
+
+
+class RuntimeBudgetExceeded(ApplicationError):
+    """A run exceeded its allotted runtime budget (steps, tokens, or wall
+    clock)."""

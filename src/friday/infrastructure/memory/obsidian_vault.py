@@ -27,6 +27,7 @@ from friday.application.memory.models import (
 )
 from friday.infrastructure.memory.markdown_parser import parse_markdown
 from friday.infrastructure.memory.vault_paths import (
+    is_confined_symlink,
     resolve_vault_path,
     resolve_vault_root,
     to_vault_relative,
@@ -56,6 +57,8 @@ class ObsidianVaultStore:
         included: list[str] = []
         for file_path in sorted(self.root.rglob("*.md")):
             try:
+                if not is_confined_symlink(self.root, file_path):
+                    continue
                 relative = to_vault_relative(
                     self.root,
                     resolve_vault_path(self.root, file_path.relative_to(self.root).as_posix()),
@@ -164,6 +167,8 @@ class ObsidianVaultStore:
 
     def _read_text(self, relative: str) -> str | None:
         try:
+            if not is_confined_symlink(self.root, self.root / relative):
+                return None
             path = resolve_vault_path(self.root, relative)
             data = path.read_bytes()
         except (MemoryAccessDenied, OSError):

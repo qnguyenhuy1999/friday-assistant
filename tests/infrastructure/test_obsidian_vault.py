@@ -20,6 +20,7 @@ from friday.application.memory.models import (
     MemoryWriteOperation,
     RetrievalMethod,
 )
+from friday.infrastructure.memory import obsidian_vault
 from friday.infrastructure.memory.obsidian_vault import ObsidianVaultStore
 
 
@@ -55,6 +56,79 @@ def test_included_paths_orders_and_applies_exclusions_and_frontmatter(tmp_path: 
     assert _store(tmp_path).included_paths() == ("a.md", "z.md")
 
 
+def test_included_paths_omits_symlink_to_outside_vault(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside.md"
+    outside.write_text("secret", encoding="utf-8")
+    _write(tmp_path, "real.md", "safe")
+    os.symlink(outside, tmp_path / "escape.md")
+
+    assert _store(tmp_path).included_paths() == ("real.md",)
+
+
+def test_included_paths_omits_escaping_symlinked_parent(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside"
+    outside.mkdir()
+    _write(outside, "secret.md", "secret")
+    _write(tmp_path, "real.md", "safe")
+    os.symlink(outside, tmp_path / "escape")
+
+    assert _store(tmp_path).included_paths() == ("real.md",)
+
+
+def test_included_paths_allows_symlink_to_note_inside_vault(tmp_path: Path) -> None:
+    _write(tmp_path, "real.md", "safe")
+    os.symlink(tmp_path / "real.md", tmp_path / "alias.md")
+
+    assert _store(tmp_path).included_paths() == ("real.md", "real.md")
+
+
+def test_read_excerpt_rejects_symlink_to_outside_vault(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside.md"
+    outside.write_text("secret", encoding="utf-8")
+    os.symlink(outside, tmp_path / "escape.md")
+    candidate = MemoryCandidate("escape.md", "escape", (RetrievalMethod.LEXICAL_BODY,), 1)
+
+    with pytest.raises(MemoryAccessDenied):
+        _store(tmp_path).read_excerpt(candidate, max_chars=20)
+
+
+def test_included_paths_skips_note_removed_before_stat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(tmp_path, "gone.md", "gone")
+    _write(tmp_path, "real.md", "safe")
+    original_stat = Path.stat
+
+    def remove_before_stat(path: Path, *args: Any, **kwargs: Any) -> os.stat_result:
+        if path == tmp_path / "gone.md":
+            path.unlink()
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", remove_before_stat)
+
+    assert _store(tmp_path).included_paths() == ("real.md",)
+
+
+def test_included_paths_skips_path_rejected_by_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(tmp_path, "note.md", "safe")
+
+    def deny_path(root: Path, requested: str) -> Path:
+        raise MemoryAccessDenied("path escapes the vault")
+
+    monkeypatch.setattr(obsidian_vault, "resolve_vault_path", deny_path)
+
+    assert _store(tmp_path).included_paths() == ()
+
+
+def test_included_paths_skips_oversize_note(tmp_path: Path) -> None:
+    _write(tmp_path, "large.md", "large")
+    _write(tmp_path, "small.md", "ok")
+
+    assert _store(tmp_path, bytes_=4).included_paths() == ("small.md",)
+
+
 def test_cap_and_oversize_and_binary_are_bounded(tmp_path: Path) -> None:
     _write(tmp_path, "a.md", "a")
     _write(tmp_path, "b.md", "b")
@@ -75,6 +149,15 @@ def test_excerpt_is_authoritative_heading_aware_and_truncated(tmp_path: Path) ->
     assert (excerpt.start_line, excerpt.end_line, excerpt.truncated) == (2, 3, True)
     assert excerpt.text == "# One"
     assert excerpt.content_hash == hashlib.sha256(excerpt.text.encode()).hexdigest()
+
+
+def test_excerpt_without_heading_uses_the_whole_note(tmp_path: Path) -> None:
+    _write(tmp_path, "a.md", "body")
+    candidate = MemoryCandidate("a.md", "a", (RetrievalMethod.LEXICAL_BODY,), 1)
+
+    excerpt = _store(tmp_path).read_excerpt(candidate, max_chars=20)
+
+    assert (excerpt.start_line, excerpt.end_line, excerpt.text) == (1, 1, "body")
 
 
 def test_snapshot_is_stable_and_changes_with_content(tmp_path: Path) -> None:
@@ -140,6 +223,24 @@ def test_lexical_search_limits_and_empty_query_paths(tmp_path: Path) -> None:
     assert store.search_lexical(MemoryQuery(terms=("absent",)), limit=2) == ()
     assert store.search_lexical(MemoryQuery(terms=("needle",)), limit=0) == ()
     assert store.iter_notes() == ("a.md", "b.md")
+
+
+def test_lexical_search_skips_note_that_becomes_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(tmp_path, "a.md", "needle")
+    store = _store(tmp_path)
+    original_read_text = ObsidianVaultStore._read_text
+    calls = 0
+
+    def disappear_after_enumeration(instance: ObsidianVaultStore, relative: str) -> str | None:
+        nonlocal calls
+        calls += 1
+        return original_read_text(instance, relative) if calls == 1 else None
+
+    monkeypatch.setattr(ObsidianVaultStore, "_read_text", disappear_after_enumeration)
+
+    assert store.search_lexical(MemoryQuery(terms=("needle",)), limit=1) == ()
 
 
 def test_direct_error_and_predicate_paths(tmp_path: Path) -> None:

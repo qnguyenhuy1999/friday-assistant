@@ -175,6 +175,10 @@ class MemoryContext:
     degraded_reason: str | None
     index_state: IndexState
     total_chars: int
+    # Snapshot that supplied the structural portion of this retrieval.  This
+    # is deliberately retrieval-level provenance: the highest-ranked excerpt
+    # can be lexical-only even when a structural index influenced ranking.
+    index_snapshot_id: str | None = None
 
     def __post_init__(self) -> None:
         if len(self.excerpts) != len(self.provenance):

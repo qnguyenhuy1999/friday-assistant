@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from friday.application.memory.models import (
     IndexState,
+    IndexStatus,
     MemoryCandidate,
     MemoryContext,
     MemoryExcerpt,
@@ -86,7 +87,8 @@ class MemoryRetriever(MemoryRetrieverPort):
         from the caller: the processor has no legitimate way to know the
         vault's true snapshot, and a caller-supplied value would let
         provenance report an arbitrary, unverifiable source."""
-        state, degraded_reason = self._index_state()
+        status, degraded_reason = self._index_status()
+        state = status.state
         try:
             source_snapshot_hash = self._store.source_snapshot_hash()
         except Exception:
@@ -105,35 +107,64 @@ class MemoryRetriever(MemoryRetrieverPort):
             )
 
         structural: tuple[MemoryCandidate, ...] = ()
+        index_snapshot_id: str | None = None
         mode = RetrievalMode.LEXICAL_ONLY
         if state is IndexState.FRESH:
-            found = self._structural_candidates(query)
+            found = self._structural_candidates(query, status.snapshot_id)
             if found is None:
                 degraded_reason = "structural search is unavailable"
             else:
-                structural = found
+                structural, index_snapshot_id = found
                 mode = RetrievalMode.HYBRID
         elif state is IndexState.DISABLED:
             mode = RetrievalMode.DISABLED
 
         candidates = self._rank((*lexical, *structural))
-        return self._build_context(candidates, mode, degraded_reason, state, source_snapshot_hash)
+        return self._build_context(
+            candidates, mode, degraded_reason, state, source_snapshot_hash, index_snapshot_id
+        )
 
-    def _index_state(self) -> tuple[IndexState, str | None]:
+    def _index_status(self) -> tuple[IndexStatus, str | None]:
         try:
-            state = self._structural_index.status().state
+            status = self._structural_index.status()
         except Exception:
-            return IndexState.MISSING, "structural index status is unavailable"
+            return (
+                IndexStatus(IndexState.MISSING, None, None, None, 0, 0, None, None),
+                "structural index status is unavailable",
+            )
         reasons = {
             IndexState.MISSING: "structural index is missing",
             IndexState.STALE: "structural index is stale",
             IndexState.CORRUPT: "structural index is corrupt; rebuild required",
             IndexState.DISABLED: "structural index is disabled",
         }
-        return state, reasons.get(state)
+        return status, reasons.get(status.state)
 
-    def _structural_candidates(self, query: MemoryQuery) -> tuple[MemoryCandidate, ...] | None:
+    def _structural_candidates(
+        self, query: MemoryQuery, expected_snapshot_id: str | None
+    ) -> tuple[tuple[MemoryCandidate, ...], str | None] | None:
         try:
+            # GraphifyJsonIndex implements this one-view operation.  Keep the
+            # legacy fallback for simple ports used by integrations, while
+            # fencing it with status before and after the multi-call lookup.
+            retrieve_snapshot = getattr(self._structural_index, "retrieve_snapshot", None)
+            if callable(retrieve_snapshot):
+                result = retrieve_snapshot(
+                    query,
+                    limit=self._settings.max_candidates,
+                    depth=self._settings.max_graph_depth,
+                    max_nodes=self._settings.max_graph_nodes_visited,
+                )
+                if result is None:
+                    return None
+                candidates, snapshot_id = result
+                # The status fence established freshness for one specific
+                # active snapshot.  A promotion in between makes structural
+                # results ineligible for this retrieval rather than mixing
+                # generations or claiming the wrong one in audit.
+                if snapshot_id != expected_snapshot_id:
+                    return None
+                return candidates, snapshot_id
             direct = self._structural_index.search(query, limit=self._settings.max_candidates)
             remaining = self._settings.max_graph_nodes_visited
             neighbors: list[MemoryCandidate] = []
@@ -147,7 +178,16 @@ class MemoryRetriever(MemoryRetrieverPort):
                 )
                 neighbors.extend(found[:remaining])
                 remaining -= len(found)
-            return (*direct, *neighbors)
+            after = self._structural_index.status()
+            if after.snapshot_id != expected_snapshot_id:
+                return None
+            candidates = (*direct, *neighbors)
+            if any(
+                candidate.index_snapshot_id not in (None, expected_snapshot_id)
+                for candidate in candidates
+            ):
+                return None
+            return candidates, expected_snapshot_id
         except Exception:
             return None
 
@@ -167,6 +207,7 @@ class MemoryRetriever(MemoryRetrieverPort):
         degraded_reason: str | None,
         state: IndexState,
         source_snapshot_hash: str,
+        index_snapshot_id: str | None,
     ) -> MemoryContext:
         excerpts: list[MemoryExcerpt] = []
         provenance: list[MemoryProvenance] = []
@@ -198,7 +239,13 @@ class MemoryRetriever(MemoryRetrieverPort):
             )
             total_chars += len(excerpt.text)
         return MemoryContext(
-            mode, tuple(excerpts), tuple(provenance), degraded_reason, state, total_chars
+            mode,
+            tuple(excerpts),
+            tuple(provenance),
+            degraded_reason,
+            state,
+            total_chars,
+            index_snapshot_id,
         )
 
     def _read_excerpt(self, candidate: _MergedCandidate) -> MemoryExcerpt | None:

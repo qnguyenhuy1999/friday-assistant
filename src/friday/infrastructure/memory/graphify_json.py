@@ -149,13 +149,15 @@ class GraphifyJsonIndex:
     def _graph_path(self) -> Path:
         return self._active_dir() / "graph.json"
 
-    def _try_load_graph(self) -> tuple[dict[str, Any] | None, str | None]:
+    def _try_load_graph(
+        self, graph_path: Path | None = None
+    ) -> tuple[dict[str, Any] | None, str | None]:
         """Read, size-check, parse JSON, and shape-check graph.json.
 
         Returns ``(parsed_dict, None)`` on success or ``(None, failure_code)``
         on any failure.
         """
-        graph_path = self._graph_path()
+        graph_path = graph_path or self._graph_path()
         if not graph_path.is_file():
             return None, "index_missing"
         try:
@@ -199,6 +201,37 @@ class GraphifyJsonIndex:
             return IndexMetadata.read(self._active_dir()).snapshot_id or None
         except ValueError:
             return None
+
+    def _load_snapshot_view(self) -> tuple[dict[str, Any], str | None] | None:
+        """Read graph and metadata from one active-directory generation.
+
+        Index promotion renames whole directories.  Checking the active
+        directory inode before and after both reads makes a mixed generation
+        detectable; a retry then returns one immutable generation or no
+        structural result at all.  The latter is preferable to misattributing
+        graph data in audit provenance.
+        """
+        for _ in range(2):
+            active = self._active_dir()
+            try:
+                before = active.stat()
+                try:
+                    metadata = IndexMetadata.read(active)
+                except ValueError:
+                    # Standalone search/neighbors retain support for the
+                    # historical graph-only test/index format.  The combined
+                    # retrieval API below rejects it for durable auditing.
+                    metadata = None
+                data, failure = self._try_load_graph(active / "graph.json")
+                after = active.stat()
+            except (OSError, ValueError):
+                return None
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                continue
+            if failure is not None or data is None:
+                return None
+            return data, metadata.snapshot_id or None if metadata is not None else None
+        return None
 
     # ------------------------------------------------------------------
     # StructuralIndex protocol
@@ -297,9 +330,44 @@ class GraphifyJsonIndex:
         )
 
     def search(self, query: MemoryQuery, *, limit: int) -> tuple[MemoryCandidate, ...]:
-        snapshot_id = self._snapshot_id()
-        applicable, failure = self._get_applicable_nodes()
-        if failure is not None or not applicable:
+        view = self._load_snapshot_view()
+        if view is None:
+            return ()
+        data, snapshot_id = view
+        return self._search_view(query, limit, data, snapshot_id)
+
+    def retrieve_snapshot(
+        self, query: MemoryQuery, *, limit: int, depth: int, max_nodes: int
+    ) -> tuple[tuple[MemoryCandidate, ...], str] | None:
+        """Perform a full structural retrieval from one immutable view."""
+        view = self._load_snapshot_view()
+        if view is None:
+            return None
+        data, snapshot_id = view
+        if snapshot_id is None:
+            return None
+        direct = self._search_view(query, limit, data, snapshot_id)
+        remaining = max_nodes
+        neighbors: list[MemoryCandidate] = []
+        for candidate in direct:
+            if remaining <= 0:
+                break
+            found = self._neighbors_view(candidate.path, depth, remaining, data, snapshot_id)
+            neighbors.extend(found[:remaining])
+            remaining -= len(found)
+        return (*direct, *neighbors), snapshot_id
+
+    def _search_view(
+        self, query: MemoryQuery, limit: int, data: dict[str, Any], snapshot_id: str | None
+    ) -> tuple[MemoryCandidate, ...]:
+        applicable = [
+            node
+            for node in data["nodes"]
+            if _is_document_node(node)
+            and (source_file := _node_source_file(node)) is not None
+            and _is_markdown(source_file)
+        ]
+        if not applicable:
             return ()
 
         seen: set[str] = set()
@@ -388,10 +456,20 @@ class GraphifyJsonIndex:
         return tuple(candidates[:limit])
 
     def neighbors(self, path: str, *, depth: int, max_nodes: int) -> tuple[MemoryCandidate, ...]:
-        snapshot_id = self._snapshot_id()
-        data, failure = self._try_load_graph()
-        if failure is not None or data is None:
+        view = self._load_snapshot_view()
+        if view is None:
             return ()
+        data, snapshot_id = view
+        return self._neighbors_view(path, depth, max_nodes, data, snapshot_id)
+
+    def _neighbors_view(
+        self,
+        path: str,
+        depth: int,
+        max_nodes: int,
+        data: dict[str, Any],
+        snapshot_id: str | None,
+    ) -> tuple[MemoryCandidate, ...]:
 
         nodes = data["nodes"]
         links = data["links"]

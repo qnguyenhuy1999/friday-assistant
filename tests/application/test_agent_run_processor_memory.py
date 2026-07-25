@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import cast
 
 import pytest
 
-from friday.application.agent_run_processor import RuntimeLimits, _bounded_read
-from friday.application.memory.models import IndexState, MemoryContext, MemoryQuery, RetrievalMode
+from friday.application.agent_run_processor import (
+    RuntimeLimits,
+    _bounded_read,
+    _build_memory_retrieval_record,
+)
+from friday.application.memory.models import (
+    IndexState,
+    MemoryContext,
+    MemoryExcerpt,
+    MemoryProvenance,
+    MemoryQuery,
+    RetrievalMethod,
+    RetrievalMode,
+)
 from friday.application.memory.query_builder import MemoryQueryBuilder
 from friday.application.ports import UnitOfWorkFactory
 from friday.application.runtime_actions import FinishAction, InvokeToolAction
@@ -259,6 +272,38 @@ def test_memory_event_recording_tolerates_a_missing_run() -> None:
     assert harness.uow.event_store.appended == []
     assert harness.uow.memory_retrieval_repo.added == []
     assert harness.uow.commit_count == 1
+
+
+def test_hybrid_audit_records_snapshot_when_top_excerpt_is_lexical() -> None:
+    harness = Harness(FINISH)
+    lexical = MemoryProvenance(
+        "lexical.md",
+        "Lexical",
+        None,
+        1,
+        1,
+        "hash",
+        (RetrievalMethod.LEXICAL_BODY,),
+        0,
+        None,
+        "source",
+        False,
+    )
+    memory = MemoryContext(
+        RetrievalMode.HYBRID,
+        (MemoryExcerpt("lexical.md", "Lexical", None, 1, 1, "text", "hash", False),),
+        (lexical,),
+        None,
+        IndexState.FRESH,
+        4,
+        "durable-snapshot",
+    )
+
+    record = _build_memory_retrieval_record(
+        harness.context(), 1, MemoryQuery(terms=("x",)), memory, datetime.now(UTC)
+    )
+
+    assert record.index_snapshot_id == "durable-snapshot"
 
 
 def test_bounded_read_prefers_the_repository_bounded_query() -> None:

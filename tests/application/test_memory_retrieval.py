@@ -95,6 +95,15 @@ class FakeIndex:
         return self.neighbor_results.get(path, ())[:max_nodes]
 
 
+class PromotingSnapshotIndex(FakeIndex):
+    """A structural view opened after status() observes a new generation."""
+
+    def retrieve_snapshot(
+        self, query: MemoryQuery, *, limit: int, depth: int, max_nodes: int
+    ) -> tuple[tuple[MemoryCandidate, ...], str]:
+        return self.structural[:limit], "index-2"
+
+
 def _retriever(store: FakeStore, index: FakeIndex, **settings: int) -> MemoryRetriever:
     return MemoryRetriever(store, index, settings=MemoryRetrievalSettings(**settings))
 
@@ -116,6 +125,38 @@ def test_uses_authoritative_store_text_for_structural_candidate() -> None:
 
     assert context.excerpts[0].text == "vault text"
     assert context.excerpts[0].title == "store graph.md"
+
+
+def test_hybrid_context_keeps_snapshot_when_top_excerpt_is_lexical() -> None:
+    """Audit provenance belongs to the retrieval, not to rank zero.
+
+    A lexical result can rank above a structural result while the structural
+    snapshot still influenced the candidate set and ranking.
+    """
+    lexical = MemoryCandidate("lexical.md", "lexical.md", (RetrievalMethod.LEXICAL_BODY,), 2.0)
+    structural = _candidate(
+        "structural.md", score=1.0, methods=(RetrievalMethod.STRUCTURAL_NODE,), distance=1
+    )
+    store = FakeStore((lexical,), {"lexical.md": "lexical", "structural.md": "structural"})
+
+    context = _retriever(store, FakeIndex(structural=(structural,))).retrieve(query=_query())
+
+    assert context.provenance[0].index_snapshot_id is None
+    assert context.index_snapshot_id == "index-1"
+
+
+def test_snapshot_change_during_structural_retrieval_discards_structural_results() -> None:
+    lexical = MemoryCandidate("lexical.md", "lexical.md", (RetrievalMethod.LEXICAL_BODY,), 1.0)
+    structural = _candidate("structural.md", methods=(RetrievalMethod.STRUCTURAL_NODE,))
+    store = FakeStore((lexical,), {"lexical.md": "lexical", "structural.md": "structural"})
+
+    context = _retriever(store, PromotingSnapshotIndex(structural=(structural,))).retrieve(
+        query=_query()
+    )
+
+    assert context.mode is RetrievalMode.LEXICAL_ONLY
+    assert [excerpt.path for excerpt in context.excerpts] == ["lexical.md"]
+    assert context.index_snapshot_id is None
 
 
 def test_merges_duplicate_aliases_methods_and_boosts_rank() -> None:

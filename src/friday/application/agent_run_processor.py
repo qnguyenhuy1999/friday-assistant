@@ -576,7 +576,7 @@ def _build_memory_retrieval_record(
         turn_number=turn,
         query_hash=query.query_hash,
         source_snapshot_id=first.source_snapshot_id if first is not None else None,
-        index_snapshot_id=first.index_snapshot_id if first is not None else None,
+        index_snapshot_id=memory.index_snapshot_id,
         created_at=now,
         candidate_count=len(memory.excerpts),
         selected_count=len(memory.excerpts),

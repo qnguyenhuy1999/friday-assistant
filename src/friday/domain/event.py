@@ -41,6 +41,12 @@ class RunEventType(StrEnum):
     TOOL_INVOCATION_CANCELLED = "tool_invocation_cancelled"
     ARTIFACT_CREATED = "artifact_created"
     AGENT_FINISHED = "agent_finished"
+    MEMORY_CONTEXT_ATTACHED = "memory_context_attached"
+    MEMORY_RETRIEVAL_DEGRADED = "memory_retrieval_degraded"
+    MEMORY_WRITE_REQUESTED = "memory_write_requested"
+    MEMORY_WRITE_COMMITTED = "memory_write_committed"
+    MEMORY_WRITE_CONFLICTED = "memory_write_conflicted"
+    MEMORY_INDEX_MARKED_STALE = "memory_index_marked_stale"
 
 
 @dataclass(frozen=True, slots=True)

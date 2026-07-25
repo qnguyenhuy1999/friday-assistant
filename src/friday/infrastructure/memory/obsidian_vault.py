@@ -222,8 +222,10 @@ class ObsidianVaultStore:
         the editor's new pathname remains authoritative; Friday never
         clobbers it.  Friday writers are serialized by ``_note_lock``.
 
-        Returns the actual post-write content read from the authoritative
-        path so the caller can report a truthful ``content_hash``.
+        Returns the actual post-write content read from the opened binary
+        handle after verifying that it is still the authoritative path, so
+        the caller can report a truthful ``content_hash`` without newline
+        normalization.
 
         Raises ``MemoryWriteConflict`` if the file was atomically replaced
         between opening the FD and completing the append — the append went
@@ -240,6 +242,8 @@ class ObsidianVaultStore:
                 handle.write(suffix.encode("utf-8"))
                 handle.flush()
                 os.fsync(handle.fileno())
+                handle.seek(0)
+                actual = handle.read().decode("utf-8")
                 current_identity = os.stat(path)
                 if (
                     opened.st_dev != current_identity.st_dev
@@ -248,7 +252,7 @@ class ObsidianVaultStore:
                     raise MemoryWriteConflict("managed note was atomically replaced during append")
         finally:
             os.close(descriptor)
-        return path.read_text(encoding="utf-8")
+        return actual
 
     def _atomic_create(self, path: Path, content: str) -> None:
         """Publish via a hard link, which atomically fails if *path* already

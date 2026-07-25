@@ -185,8 +185,10 @@ def test_write_create_and_append_are_atomic_and_preserve_crlf(tmp_path: Path) ->
         frontmatter=(),
         payload="new",
     )
-    store.write_candidate(appended)
-    assert b"\r\nnew" in (tmp_path / "Friday/Inbox/a.md").read_bytes()
+    result = store.write_candidate(appended)
+    actual = (tmp_path / "Friday/Inbox/a.md").read_bytes()
+    assert b"\r\nnew" in actual
+    assert result.content_hash == hashlib.sha256(actual).hexdigest()
     assert not tuple((tmp_path / "Friday/Inbox").glob(".friday-*"))
 
 

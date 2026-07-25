@@ -154,6 +154,7 @@ class AgentRunProcessor:
         memory: MemoryContext | None = None
         memory_refresh_available = True
         memory_refresh_needed = self._memory_retriever is not None
+        memory_retrieval_is_refresh = False
         previous_objective: tuple[str, str] | None = None
         deadline = self._monotonic() + self._limits.max_processing_seconds
 
@@ -170,11 +171,14 @@ class AgentRunProcessor:
             objective = (snapshot.task.title, snapshot.task.description)
             if previous_objective is not None and objective != previous_objective:
                 memory_refresh_needed = memory_refresh_available
+                memory_retrieval_is_refresh = memory_refresh_needed
             previous_objective = objective
             if memory_refresh_needed:
                 memory = self._retrieve_memory(context, snapshot)
                 memory_refresh_needed = False
-                memory_refresh_available = False
+                if memory_retrieval_is_refresh:
+                    memory_refresh_available = False
+                memory_retrieval_is_refresh = False
                 if memory is None:
                     return self._yield_now()
 
@@ -229,6 +233,7 @@ class AgentRunProcessor:
                 tool_calls += 1
                 if self._is_successful_memory_write(response):
                     memory_refresh_needed = memory_refresh_available
+                    memory_retrieval_is_refresh = memory_refresh_needed
                 if tool_calls >= self._limits.max_tool_calls_per_claim:
                     return self._yield_now()  # tool budget: continue under a fresh claim
 

@@ -8,6 +8,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
+from friday.application.memory.models import IndexSnapshot, IndexState, MemoryRetrievalRecord
 from friday.domain import (
     ApprovalRequest,
     ApprovalRequestId,
@@ -32,6 +33,12 @@ from friday.infrastructure.persistence.mappers import (
     approval_to_row,
     artifact_from_row,
     artifact_to_row,
+    index_snapshot_from_row,
+    index_snapshot_to_row,
+    memory_retrieval_item_from_row,
+    memory_retrieval_item_to_row,
+    memory_retrieval_record_from_row,
+    memory_retrieval_record_to_row,
     run_event_from_row,
     run_event_to_row,
     run_from_row,
@@ -48,6 +55,9 @@ from friday.infrastructure.persistence.mappers import (
 from friday.infrastructure.persistence.models import (
     ApprovalRequestRow,
     ArtifactRow,
+    MemoryIndexSnapshotRow,
+    MemoryRetrievalItemRow,
+    MemoryRetrievalRecordRow,
     RunEventRow,
     RunEventSequenceCounterRow,
     RunRow,
@@ -530,3 +540,60 @@ class TaskEventStore:
             .limit(limit)
         )
         return [task_event_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+
+_MAX_MEMORY_RETRIEVAL_ITEMS_PER_RECORD = 50
+
+
+class MemoryIndexSnapshotRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, snapshot: IndexSnapshot) -> None:
+        self._session.add(index_snapshot_to_row(snapshot))
+
+    def latest(self) -> IndexSnapshot | None:
+        stmt = (
+            select(MemoryIndexSnapshotRow)
+            .order_by(MemoryIndexSnapshotRow.built_at.desc(), MemoryIndexSnapshotRow.id.desc())
+            .limit(1)
+        )
+        row = self._session.execute(stmt).scalars().first()
+        return index_snapshot_from_row(row) if row is not None else None
+
+    def mark_stale(self, snapshot_id: str) -> None:
+        self._session.execute(
+            update(MemoryIndexSnapshotRow)
+            .where(MemoryIndexSnapshotRow.id == snapshot_id)
+            .values(status=IndexState.STALE.value)
+        )
+
+
+class MemoryRetrievalRecordRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, record: MemoryRetrievalRecord) -> None:
+        if len(record.items) > _MAX_MEMORY_RETRIEVAL_ITEMS_PER_RECORD:
+            raise ValueError(
+                f"MemoryRetrievalRecord.items exceeds the {_MAX_MEMORY_RETRIEVAL_ITEMS_PER_RECORD} "
+                "item cap per record"
+            )
+        self._session.add(memory_retrieval_record_to_row(record))
+        for item in record.items:
+            self._session.add(memory_retrieval_item_to_row(item, record_id=record.id))
+
+    def get(self, record_id: str) -> MemoryRetrievalRecord | None:
+        row = self._session.get(MemoryRetrievalRecordRow, record_id)
+        if row is None:
+            return None
+        item_stmt = (
+            select(MemoryRetrievalItemRow)
+            .where(MemoryRetrievalItemRow.record_id == record_id)
+            .order_by(MemoryRetrievalItemRow.rank)
+        )
+        items = tuple(
+            memory_retrieval_item_from_row(item_row)
+            for item_row in self._session.execute(item_stmt).scalars()
+        )
+        return memory_retrieval_record_from_row(row, items)

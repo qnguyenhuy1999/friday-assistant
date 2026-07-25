@@ -15,6 +15,7 @@ _DEFAULT_BRAIN_BACKEND = "claude_cli"
 _DEFAULT_CLAUDE_EXECUTABLE = "claude"
 _DEFAULT_CLAUDE_TIMEOUT_SECONDS = 180.0
 _DEFAULT_CLAUDE_MAX_OUTPUT_BYTES = 1_000_000
+_DEFAULT_CLAUDE_MAX_STDERR_BYTES = 200_000
 _DEFAULT_MAX_TURNS_PER_CLAIM = 8
 _DEFAULT_MAX_TOOL_CALLS_PER_CLAIM = 4
 _DEFAULT_MAX_CONTEXT_CHARS = 60_000
@@ -49,6 +50,7 @@ class RuntimeSettings:
     tool_max_file_bytes: int
     tool_max_list_entries: int
     max_processing_seconds: float = _DEFAULT_MAX_PROCESSING_SECONDS
+    claude_max_stderr_bytes: int = _DEFAULT_CLAUDE_MAX_STDERR_BYTES
 
     def __post_init__(self) -> None:
         if not str(self.workspace_root).strip():
@@ -62,6 +64,7 @@ class RuntimeSettings:
         positives = {
             "claude_timeout_seconds": self.claude_timeout_seconds,
             "claude_max_output_bytes": self.claude_max_output_bytes,
+            "claude_max_stderr_bytes": self.claude_max_stderr_bytes,
             "max_turns_per_claim": self.max_turns_per_claim,
             "max_tool_calls_per_claim": self.max_tool_calls_per_claim,
             "max_context_chars": self.max_context_chars,
@@ -101,6 +104,9 @@ class RuntimeSettings:
             ),
             claude_max_output_bytes=int(
                 os.environ.get("FRIDAY_CLAUDE_MAX_OUTPUT_BYTES", _DEFAULT_CLAUDE_MAX_OUTPUT_BYTES)
+            ),
+            claude_max_stderr_bytes=int(
+                os.environ.get("FRIDAY_CLAUDE_MAX_STDERR_BYTES", _DEFAULT_CLAUDE_MAX_STDERR_BYTES)
             ),
             max_turns_per_claim=int(
                 os.environ.get("FRIDAY_RUNTIME_MAX_TURNS_PER_CLAIM", _DEFAULT_MAX_TURNS_PER_CLAIM)

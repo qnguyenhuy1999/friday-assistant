@@ -17,10 +17,18 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("approval_requests", sa.Column("authorization_fingerprint", sa.String(64)))
-    op.add_column("approval_requests", sa.Column("consumed_at", sa.DateTime()))
+    with op.batch_alter_table("approval_requests") as batch:
+        batch.add_column(sa.Column("authorization_fingerprint", sa.String(64)))
+        batch.add_column(sa.Column("consumed_at", sa.DateTime()))
+        batch.create_check_constraint(
+            "ck_approval_authorization_fingerprint_hex",
+            "authorization_fingerprint IS NULL OR (length(authorization_fingerprint) = 64 "
+            "AND authorization_fingerprint NOT GLOB '*[^0-9a-f]*')",
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("approval_requests", "consumed_at")
-    op.drop_column("approval_requests", "authorization_fingerprint")
+    with op.batch_alter_table("approval_requests") as batch:
+        batch.drop_constraint("ck_approval_authorization_fingerprint_hex", type_="check")
+        batch.drop_column("consumed_at")
+        batch.drop_column("authorization_fingerprint")

@@ -55,9 +55,14 @@ class ProcessRunner:
         self._settings = settings
 
     def run(
-        self, tool_input: JsonValue, cancellation_requested: Callable[[], bool] | None = None
+        self,
+        tool_input: JsonValue,
+        cancellation_requested: Callable[[], bool] | None = None,
+        timeout_override: float | None = None,
     ) -> ToolExecutionResult:
         argv, cwd, timeout = self._parse_input(tool_input)
+        if timeout_override is not None:
+            timeout = min(timeout, timeout_override)
         try:
             process = subprocess.Popen(
                 argv,
@@ -97,7 +102,21 @@ class ProcessRunner:
         if reason is not None:
             _terminate_process_group(process)
             if reason[0] == "tool_output_limit":
-                reason = None
+                return ToolExecutionResult.failed(
+                    Failure(
+                        code="tool_output_too_large",
+                        message="tool output exceeded the configured limit",
+                        retryable=False,
+                        cause=FailureCause.TOOL,
+                    ),
+                    {
+                        "exit_code": process.returncode,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "stdout_truncated": stdout_truncated,
+                        "stderr_truncated": stderr_truncated,
+                    },
+                )
             else:
                 return ToolExecutionResult.failed(
                     Failure(

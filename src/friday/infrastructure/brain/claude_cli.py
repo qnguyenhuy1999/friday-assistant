@@ -86,6 +86,7 @@ class ClaudeCliSettings:
     model: str | None
     timeout_seconds: float
     max_output_bytes: int
+    max_stderr_bytes: int = 200_000
 
     def __post_init__(self) -> None:
         if not self.executable.strip():
@@ -96,6 +97,8 @@ class ClaudeCliSettings:
             raise ValueError("timeout_seconds must be positive")
         if self.max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be positive")
+        if self.max_stderr_bytes <= 0:
+            raise ValueError("max_stderr_bytes must be positive")
 
 
 class ClaudeCliBrainRuntime:
@@ -163,8 +166,12 @@ class ClaudeCliBrainRuntime:
         except OSError as exc:
             raise BrainUnavailable("Claude CLI could not be started") from exc
 
-        stdout, stderr = _communicate_bounded(
-            process, prompt, self._settings.timeout_seconds, self._settings.max_output_bytes
+        stdout, stderr_bytes = _communicate_bounded(
+            process,
+            prompt,
+            request.timeout_seconds or self._settings.timeout_seconds,
+            self._settings.max_output_bytes,
+            self._settings.max_stderr_bytes,
         )
 
         if len(stdout.encode("utf-8")) > self._settings.max_output_bytes:
@@ -173,8 +180,7 @@ class ClaudeCliBrainRuntime:
             # stderr content is untrusted and may contain diagnostics or
             # credential paths — only its size is reported.
             raise BrainUnavailable(
-                f"Claude CLI exited with code {process.returncode}"
-                f" (stderr: {len(stderr.encode('utf-8'))} bytes)"
+                f"Claude CLI exited with code {process.returncode} (stderr: {stderr_bytes} bytes)"
             )
         envelope = parse_cli_envelope(stdout)
         if len(envelope.result_text.encode("utf-8")) > request.max_response_bytes:
@@ -201,13 +207,18 @@ def _terminate_process_group(process: subprocess.Popen[Any]) -> None:
 
 
 def _communicate_bounded(
-    process: subprocess.Popen[str], prompt: str, timeout: float, max_stdout_bytes: int
-) -> tuple[str, str]:
+    process: subprocess.Popen[str],
+    prompt: str,
+    timeout: float,
+    max_stdout_bytes: int,
+    max_stderr_bytes: int,
+) -> tuple[str, int]:
     assert process.stdin is not None
     process.stdin.write(prompt)
     process.stdin.close()
     selector = selectors.DefaultSelector()
-    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    buffers = {"stdout": bytearray()}
+    stderr_bytes = 0
     for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
         assert stream is not None
         selector.register(stream, selectors.EVENT_READ, name)
@@ -224,16 +235,25 @@ def _communicate_bounded(
                 selector.unregister(key.fileobj)
                 continue
             name = key.data
-            buffers[name].extend(data)
-            if name == "stdout" and len(buffers[name]) > max_stdout_bytes:
+            if name == "stderr":
+                stderr_bytes += len(data)
+            else:
+                buffers[name].extend(data)
+            limit = max_stdout_bytes if name == "stdout" else max_stderr_bytes
+            observed = len(buffers["stdout"]) if name == "stdout" else stderr_bytes
+            if observed > limit:
                 selector.close()
                 _terminate_process_group(process)
-                raise BrainProtocolError("CLI stdout exceeded the configured limit")
+                raise BrainProtocolError(
+                    "CLI stdout exceeded the configured limit"
+                    if name == "stdout"
+                    else "CLI stderr exceeded the configured limit"
+                )
     selector.close()
     process.wait()
     result = (
         bytes(buffers["stdout"]).decode("utf-8", errors="replace"),
-        bytes(buffers["stderr"]).decode("utf-8", errors="replace"),
+        stderr_bytes,
     )
     for stream in (process.stdout, process.stderr):
         if stream is not None:
@@ -295,24 +315,35 @@ def _run_semantic_probe(settings: ClaudeCliSettings) -> None:
         name: value for name in ENVIRONMENT_ALLOWLIST if (value := os.environ.get(name)) is not None
     }
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             argv,
-            input='Return exactly {"version":1,"action":"finish","result":{"summary":"ok"}}',
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             env=environment,
-            timeout=_VERIFY_TIMEOUT_SECONDS,
-            check=False,
+            start_new_session=True,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        stdout, _ = _communicate_bounded(
+            process,
+            'Return exactly {"version":1,"action":"finish","result":{"summary":"ok"}}',
+            _VERIFY_TIMEOUT_SECONDS,
+            _VERIFY_MAX_OUTPUT_BYTES,
+            settings.max_stderr_bytes,
+        )
+    except (
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+        OSError,
+        BrainProtocolError,
+        BrainTimeout,
+    ) as exc:
         raise BrainUnavailable("Claude CLI semantic brain-only probe failed") from exc
-    if completed.returncode != 0:
-        raise BrainUnavailable(f"Claude CLI semantic probe exited with {completed.returncode}")
-    if len(completed.stdout.encode("utf-8")) > _VERIFY_MAX_OUTPUT_BYTES:
-        raise BrainUnavailable("Claude CLI semantic probe exceeded output limit")
+    if process.returncode != 0:
+        raise BrainUnavailable(f"Claude CLI semantic probe exited with {process.returncode}")
     try:
-        envelope = parse_cli_envelope(completed.stdout)
+        envelope = parse_cli_envelope(stdout)
         parse_brain_action(json.loads(envelope.result_text))
     except (BrainProtocolError, BrainResponseInvalid, json.JSONDecodeError) as exc:
         raise BrainUnavailable("Claude CLI semantic probe returned an invalid action") from exc
@@ -326,14 +357,15 @@ def _run_probe(executable: str, flag: str) -> str:
         name: value for name in ENVIRONMENT_ALLOWLIST if (value := os.environ.get(name)) is not None
     }
     try:
-        completed = subprocess.run(  # noqa: S603 - argv list, allowlisted env
+        process = subprocess.Popen(  # noqa: S603 - argv list, allowlisted env
             [executable, flag],
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             env=environment,
-            timeout=_VERIFY_TIMEOUT_SECONDS,
-            check=False,
+            start_new_session=True,
         )
     except FileNotFoundError as exc:
         raise BrainUnavailable(f"Claude CLI executable not found: {executable}") from exc
@@ -341,6 +373,12 @@ def _run_probe(executable: str, flag: str) -> str:
         raise BrainUnavailable(f"Claude CLI probe timed out: {flag}") from exc
     except OSError as exc:
         raise BrainUnavailable("Claude CLI could not be started") from exc
-    if completed.returncode != 0:
-        raise BrainUnavailable(f"Claude CLI probe {flag} exited with {completed.returncode}")
-    return completed.stdout[:_VERIFY_MAX_OUTPUT_BYTES]
+    try:
+        stdout, _ = _communicate_bounded(
+            process, "", _VERIFY_TIMEOUT_SECONDS, _VERIFY_MAX_OUTPUT_BYTES, _VERIFY_MAX_OUTPUT_BYTES
+        )
+    except (BrainProtocolError, BrainTimeout) as exc:
+        raise BrainUnavailable(f"Claude CLI probe failed: {flag}") from exc
+    if process.returncode != 0:
+        raise BrainUnavailable(f"Claude CLI probe {flag} exited with {process.returncode}")
+    return stdout[:_VERIFY_MAX_OUTPUT_BYTES]

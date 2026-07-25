@@ -204,20 +204,30 @@ class WorkspaceFiles:
 def _iter_entries(directory: Path, recursive: bool, limit: int) -> list[Path]:
     """Deterministic listing: lexicographic by workspace-relative path.
     Recursion is shallow — at most one directory level below `directory`."""
-    children = []
-    for path in directory.iterdir():
-        children.append(path)
-        if len(children) >= limit:
-            break
-    children.sort(key=lambda p: p.name)
+    children = _bounded_lexicographic_entries(directory, limit)
     if not recursive:
         return children
     result: list[Path] = []
     for child in children:
         result.append(child)
         if child.is_dir() and not child.is_symlink():
-            nested = list(child.iterdir())[: max(0, limit - len(result))]
-            result.extend(sorted(nested, key=lambda p: p.name))
+            nested = _bounded_lexicographic_entries(child, max(0, limit - len(result)))
+            result.extend(nested)
             if len(result) >= limit:
                 break
     return result
+
+
+def _bounded_lexicographic_entries(directory: Path, limit: int) -> list[Path]:
+    """Keep only the N lexicographically smallest names while enumerating."""
+    if limit <= 0:
+        return []
+    kept: list[Path] = []
+    for path in directory.iterdir():
+        if len(kept) < limit:
+            kept.append(path)
+            continue
+        largest = max(range(len(kept)), key=lambda index: kept[index].name)
+        if path.name < kept[largest].name:
+            kept[largest] = path
+    return sorted(kept, key=lambda path: path.name)

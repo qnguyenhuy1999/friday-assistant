@@ -88,6 +88,7 @@ def _check_claude(runtime: RuntimeSettings) -> tuple[str, bool, str]:
                 model=runtime.claude_model,
                 timeout_seconds=runtime.claude_timeout_seconds,
                 max_output_bytes=runtime.claude_max_output_bytes,
+                max_stderr_bytes=runtime.claude_max_stderr_bytes,
             )
         )
     except BrainUnavailable as exc:

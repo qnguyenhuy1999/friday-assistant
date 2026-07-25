@@ -162,7 +162,9 @@ class WorkspaceToolGateway:
                 # process.run is the only cancellable tool; the runner checks
                 # this callback while draining bounded output.
                 return self._process_runner.run(
-                    request.call.tool_input, request.cancellation_requested
+                    request.call.tool_input,
+                    request.cancellation_requested,
+                    request.timeout_seconds,
                 )
             return registration.execute(request.call.tool_input)
         except WorkspaceAccessDenied as exc:

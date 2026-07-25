@@ -122,6 +122,7 @@ class ExecuteToolAction(LifecycleEvents):
         claim_token: str,
         claim_generation: int,
         claim_guard: ClaimGuard | None = None,
+        timeout_seconds: float | None = None,
     ) -> ToolActionOutcome:
         # risk assessment is pure gateway policy — may raise ToolNotFound
         risk = self._gateway.assess(call)
@@ -202,6 +203,7 @@ class ExecuteToolAction(LifecycleEvents):
                 step_id=step_id,
                 call=call,
                 cancellation_requested=(claim_guard.is_lease_lost if claim_guard else None),
+                timeout_seconds=timeout_seconds,
             )
         )
 

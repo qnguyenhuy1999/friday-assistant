@@ -51,7 +51,6 @@ from friday.application.errors import (
     ToolInputInvalid,
     ToolNotFound,
 )
-from friday.application.lifecycle_events import LifecycleEvents
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.run_processor import ClaimContext, ProcessingOutcome
 from friday.application.runtime_actions import (
@@ -72,7 +71,6 @@ from friday.application.tool_authorization import (
 )
 from friday.application.tool_gateway import ToolCall, ToolGateway
 from friday.application.worker_coordination import VerifyRunClaim
-from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.run import RunStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
@@ -168,6 +166,9 @@ class AgentRunProcessor:
                 turn_number=turn,
                 max_chars=self._limits.max_context_chars,
             )
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                return self._yield_now()
             request = BrainRequest(
                 run_id=context.run_id,
                 task_id=context.task_id,
@@ -176,6 +177,7 @@ class AgentRunProcessor:
                 context=document,
                 tool_manifest=self._gateway.list_tools(),
                 max_response_bytes=self._limits.max_response_bytes,
+                timeout_seconds=remaining,
             )
 
             try:
@@ -198,7 +200,7 @@ class AgentRunProcessor:
 
             if self._monotonic() >= deadline:
                 return self._yield_now()
-            outcome, note, tool_call_used = self._dispatch(context, response, snapshot)
+            outcome, note, tool_call_used = self._dispatch(context, response, snapshot, deadline)
             if outcome is not None:
                 return outcome
             if note is not None:
@@ -217,16 +219,17 @@ class AgentRunProcessor:
         context: ClaimContext,
         response: BrainResponse,
         snapshot: RunSnapshot,
+        deadline: float,
     ) -> tuple[ProcessingOutcome | None, str | None, bool]:
         """Returns (final outcome | None to continue, turn note, tool used)."""
         action: BrainAction = response.action
         if isinstance(action, FinishAction):
-            blocker = self._finish_blocker(snapshot)
+            blocker = self._finish_blocker(context.run_id, snapshot)
             if blocker is not None:
                 return None, f"finish rejected: {blocker}", False
-            if not self._persist_final_response(context, action):
+            if not self._claim_holds(context):
                 return self._yield_now(), None, False
-            return ProcessingOutcome.succeeded(), None, False
+            return ProcessingOutcome.succeeded(action.summary, action.details), None, False
 
         if isinstance(action, FailAction):
             return (
@@ -244,11 +247,14 @@ class AgentRunProcessor:
             available_at = self._clock.now() + timedelta(seconds=delay)
             return ProcessingOutcome.yielded(available_at), None, False
 
-        return self._dispatch_tool(context, action)
+        return self._dispatch_tool(context, action, deadline)
 
     def _dispatch_tool(
-        self, context: ClaimContext, action: InvokeToolAction
+        self, context: ClaimContext, action: InvokeToolAction, deadline: float
     ) -> tuple[ProcessingOutcome | None, str | None, bool]:
+        remaining = deadline - self._monotonic()
+        if remaining <= 0:
+            return self._yield_now(), None, False
         try:
             call = ToolCall(tool=action.tool, tool_input=action.tool_input)
         except ToolInputInvalid as exc:
@@ -263,6 +269,7 @@ class AgentRunProcessor:
                 claim_token=context.claim_token,
                 claim_generation=context.claim_generation,
                 claim_guard=_ContextClaimGuard(self, context),
+                timeout_seconds=remaining,
             )
         except ToolNotFound:
             return (
@@ -361,51 +368,44 @@ class AgentRunProcessor:
                 previous_turns=turn_notes,
             )
 
-    def _finish_blocker(self, snapshot: RunSnapshot) -> str | None:
-        pending_steps = [
-            step for step in snapshot.steps if step.status not in TERMINAL_RUN_STEP_STATUSES
-        ]
-        if pending_steps:
-            return f"{len(pending_steps)} step(s) are not terminal"
-        open_invocations = [
-            invocation
-            for invocation in snapshot.invocations
-            if invocation.status not in TERMINAL_TOOL_INVOCATION_STATUSES
-        ]
-        if open_invocations:
-            return f"{len(open_invocations)} tool invocation(s) are not terminal"
-        return None
-
-    def _persist_final_response(self, context: ClaimContext, action: FinishAction) -> bool:
-        if not self._claim_holds(context):
-            return False
+    def _finish_blocker(self, run_id: object, snapshot: RunSnapshot | None = None) -> str | None:
         with self._uow_factory() as uow:
-            now = self._clock.now()
-            if not uow.work_queue.is_claim_active(
-                context.run_id,
-                context.worker_id,
-                context.claim_token,
-                context.claim_generation,
-                now,
+            has_steps = getattr(uow.steps, "has_non_terminal_for_run", None)
+            if (has_steps is not None and has_steps(run_id)) or (
+                has_steps is None
+                and snapshot is not None
+                and any(step.status not in TERMINAL_RUN_STEP_STATUSES for step in snapshot.steps)
             ):
-                return False
-            run = uow.runs.get(context.run_id)
-            if run is None:
-                return False
-            LifecycleEvents.append_run_events(
-                uow,
-                run,
-                now,
-                [
-                    (
-                        RunEventType.AGENT_FINISHED,
-                        {"summary": action.summary[:4000], "details": action.details},
-                        None,
+                if has_steps is None and snapshot is not None:
+                    count = sum(
+                        step.status not in TERMINAL_RUN_STEP_STATUSES for step in snapshot.steps
                     )
-                ],
-            )
-            uow.commit()
-        return True
+                    return f"{count} step(s) are not terminal"
+                return "one or more steps are not terminal"
+            has_tools = getattr(uow.tool_invocations, "has_non_terminal_for_run", None)
+            if (has_tools is not None and has_tools(run_id)) or (
+                has_tools is None
+                and snapshot is not None
+                and any(
+                    inv.status not in TERMINAL_TOOL_INVOCATION_STATUSES
+                    for inv in snapshot.invocations
+                )
+            ):
+                if has_tools is None and snapshot is not None:
+                    count = sum(
+                        inv.status not in TERMINAL_TOOL_INVOCATION_STATUSES
+                        for inv in snapshot.invocations
+                    )
+                    return f"{count} tool invocation(s) are not terminal"
+                return "one or more tool invocations are not terminal"
+            has_approvals = getattr(uow.approvals, "has_pending_for_run", None)
+            if (has_approvals is not None and has_approvals(run_id)) or (
+                has_approvals is None
+                and snapshot is not None
+                and any(approval.status.value == "pending" for approval in snapshot.approvals)
+            ):
+                return "one or more approvals are pending"
+        return None
 
     def _yield_now(self) -> ProcessingOutcome:
         return ProcessingOutcome.yielded(self._clock.now())

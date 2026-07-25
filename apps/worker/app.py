@@ -55,6 +55,7 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
         model=runtime.claude_model,
         timeout_seconds=runtime.claude_timeout_seconds,
         max_output_bytes=runtime.claude_max_output_bytes,
+        max_stderr_bytes=runtime.claude_max_stderr_bytes,
     )
     verify_brain_only_support(claude_settings)  # raises BrainUnavailable
     gateway = WorkspaceToolGateway(  # raises WorkspaceAccessDenied

@@ -102,6 +102,7 @@ class ToolExecutionRequest:
     step_id: RunStepId | None
     call: ToolCall
     cancellation_requested: Callable[[], bool] | None = None
+    timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,8 +130,8 @@ class ToolExecutionResult:
         return cls(status="succeeded", output=output, artifacts=artifacts)
 
     @classmethod
-    def failed(cls, failure: Failure) -> ToolExecutionResult:
-        return cls(status="failed", failure=failure)
+    def failed(cls, failure: Failure, output: JsonValue = None) -> ToolExecutionResult:
+        return cls(status="failed", failure=failure, output=output)
 
 
 class ToolGateway(Protocol):

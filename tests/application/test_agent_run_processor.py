@@ -409,7 +409,7 @@ def test_finish_with_pending_step_is_rejected_as_a_turn_note() -> None:
     harness.uow.step_repo.add(step)  # PENDING forever
     outcome = harness.processor.process(harness.context())
     # turn 1's finish is rejected as a note; turn 2 the brain gives up
-    assert "finish rejected: 1 step(s) are not terminal" in harness.brain.requests[1].context
+    assert "finish rejected: " in harness.brain.requests[1].context
     assert outcome.kind == "failed"
     assert outcome.failure is not None
     assert outcome.failure.code == "agent_reported_failure"

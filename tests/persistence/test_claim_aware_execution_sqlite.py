@@ -10,6 +10,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
 from friday.application.errors import ClaimLost
@@ -28,7 +30,6 @@ from friday.domain.run import Run
 from friday.domain.task import Task
 from friday.domain.tool import ToolInvocationStatus
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
-from friday.infrastructure.persistence.models import Base
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -71,8 +72,11 @@ class ScriptedGateway:
 
 @pytest.fixture
 def uow_factory(tmp_path: Path) -> Iterator[UnitOfWorkFactory]:
-    engine = create_engine(f"sqlite:///{tmp_path / 'exec.db'}")
-    Base.metadata.create_all(engine)
+    db_path = tmp_path / "exec.db"
+    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{db_path}")
     yield create_unit_of_work_factory(create_session_factory(engine))
     engine.dispose()
 

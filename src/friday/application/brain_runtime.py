@@ -27,6 +27,7 @@ class BrainRequest:
     context: str
     tool_manifest: tuple[ToolDescriptor, ...]
     max_response_bytes: int
+    timeout_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if self.turn_number < 1:
@@ -37,6 +38,8 @@ class BrainRequest:
             raise ValueError("context must not be empty")
         if self.max_response_bytes <= 0:
             raise ValueError("max_response_bytes must be positive")
+        if self.timeout_seconds is not None and self.timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive when set")
 
 
 @dataclass(frozen=True, slots=True)

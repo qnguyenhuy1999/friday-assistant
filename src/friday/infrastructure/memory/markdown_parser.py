@@ -133,9 +133,9 @@ def _parse_scalar_or_list(value: str) -> list[str]:
     stripped = value.strip()
     if not stripped:
         return []
-    items = _parse_bracket_list(value)
-    if items:
-        return items
+    is_bracket = stripped.startswith("[") and stripped.endswith("]")
+    if is_bracket:
+        return _parse_bracket_list(value)
     if "," in stripped:
         return [item.strip() for item in stripped.split(",") if item.strip()]
     q = stripped[0]

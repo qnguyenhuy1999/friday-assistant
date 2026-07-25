@@ -177,16 +177,38 @@ class TestParseFrontmatter:
         assert fm.friday_index is False
 
     def test_aliases_empty_bracket_list(self) -> None:
-        """Empty bracket `[]` exercises _parse_bracket_list line 126 (return []).
-        NOTE: `_parse_scalar_or_list` treats the empty bracket return as 'no match'
-        and falls through to scalar `['[]']`. Recorded in notes_for_orchestrator."""
+        """Empty bracket `[]` must yield empty tuple, not literal '[]'."""
         text = "---\naliases: []\n---"
+        fm = parse_frontmatter(text)
+        assert fm.aliases == ()
+
+    def test_tags_empty_bracket_list(self) -> None:
+        """Empty bracket `[]` for tags must yield empty tuple."""
+        text = "---\ntags: []\n---"
+        fm = parse_frontmatter(text)
+        assert fm.tags == ()
+
+    def test_aliases_empty_bracket_with_spaces(self) -> None:
+        """Bracket with only whitespace `[ ]` must yield empty tuple."""
+        text = "---\naliases: [ ]\n---"
+        fm = parse_frontmatter(text)
+        assert fm.aliases == ()
+
+    def test_tags_empty_bracket_with_spaces(self) -> None:
+        """Bracket with only whitespace `[   ]` must yield empty tuple."""
+        text = "---\ntags: [   ]\n---"
+        fm = parse_frontmatter(text)
+        assert fm.tags == ()
+
+    def test_aliases_quoted_bracket_literal(self) -> None:
+        """Quoted literal '[]' must still be treated as scalar string."""
+        text = '---\naliases: "[]"\n---'
         fm = parse_frontmatter(text)
         assert fm.aliases == ("[]",)
 
-    def test_tags_empty_bracket_list(self) -> None:
-        """Empty bracket `[]` for tags exercises line 126."""
-        text = "---\ntags: []\n---"
+    def test_tags_quoted_bracket_literal(self) -> None:
+        """Quoted literal '[]' for tags must still be treated as scalar."""
+        text = "---\ntags: '[]'\n---"
         fm = parse_frontmatter(text)
         assert fm.tags == ("[]",)
 
@@ -202,6 +224,18 @@ class TestParseFrontmatter:
         text = "---\ngarbage\ntitle: Hello\n---"
         fm = parse_frontmatter(text)
         assert fm.title == "Hello"
+
+    def test_aliases_bare_key_no_value(self) -> None:
+        """Bare `aliases:` with no value yields empty tuple."""
+        text = "---\naliases:\n---"
+        fm = parse_frontmatter(text)
+        assert fm.aliases == ()
+
+    def test_tags_bare_key_no_value(self) -> None:
+        """Bare `tags:` with no value yields empty tuple."""
+        text = "---\ntags:\n---"
+        fm = parse_frontmatter(text)
+        assert fm.tags == ()
 
     def test_bracket_list_with_quotes(self) -> None:
         """Bracket list items with surrounding quotes are stripped (line 126)."""

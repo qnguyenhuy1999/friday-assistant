@@ -38,7 +38,7 @@ def _candidate(path: str, **changes: Any) -> MemoryWriteCandidate:
     values: dict[str, Any] = dict(
         operation=MemoryWriteOperation.CREATE_NOTE,
         path=path,
-        expected_content_hash=None,
+        observed_content_hash=None,
         payload="hello",
         frontmatter=(("friday_managed", "true"),),
         memory_category="explicit_decision",
@@ -181,7 +181,7 @@ def test_write_create_and_append_are_atomic_and_preserve_crlf(tmp_path: Path) ->
     appended = _candidate(
         "Friday/Inbox/a.md",
         operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
-        expected_content_hash=hashlib.sha256(existing.encode()).hexdigest(),
+        observed_content_hash=hashlib.sha256(existing.encode()).hexdigest(),
         frontmatter=(),
         payload="new",
     )
@@ -199,7 +199,7 @@ def test_write_denials_and_conflict_leave_existing_bytes(tmp_path: Path) -> None
     append = _candidate(
         "Friday/Inbox/a.md",
         operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
-        expected_content_hash="0" * 64,
+        observed_content_hash="0" * 64,
         frontmatter=(),
     )
     with pytest.raises(MemoryWriteConflict):
@@ -208,7 +208,7 @@ def test_write_denials_and_conflict_leave_existing_bytes(tmp_path: Path) -> None
     append = _candidate(
         "Friday/Inbox/a.md",
         operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
-        expected_content_hash=hashlib.sha256(original.encode()).hexdigest(),
+        observed_content_hash=hashlib.sha256(original.encode()).hexdigest(),
         frontmatter=(),
     )
     with pytest.raises(MemoryWriteDenied):
@@ -263,7 +263,7 @@ def test_direct_error_and_predicate_paths(tmp_path: Path) -> None:
             _candidate(
                 "Friday/Inbox/missing.md",
                 operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
-                expected_content_hash="a" * 64,
+                observed_content_hash="a" * 64,
                 frontmatter=(),
             )
         )
@@ -384,7 +384,7 @@ def test_append_loses_race_to_human_edit_and_returns_conflict(
     append = _candidate(
         "Friday/Inbox/a.md",
         operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
-        expected_content_hash=expected_hash,
+        observed_content_hash=expected_hash,
         frontmatter=(),
     )
     with pytest.raises(MemoryWriteConflict):
@@ -393,7 +393,7 @@ def test_append_loses_race_to_human_edit_and_returns_conflict(
     assert "human-edit" in note_path.read_text()
 
 
-def test_two_concurrent_appends_only_one_expected_hash_wins(tmp_path: Path) -> None:
+def test_two_friday_appends_with_one_observed_hash_only_one_wins(tmp_path: Path) -> None:
     store = _store(tmp_path)
     original = "---\nfriday_managed: true\n---\nold"
     _write(tmp_path, "Friday/Inbox/a.md", original)
@@ -403,7 +403,7 @@ def test_two_concurrent_appends_only_one_expected_hash_wins(tmp_path: Path) -> N
         return _candidate(
             "Friday/Inbox/a.md",
             operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
-            expected_content_hash=expected_hash,
+            observed_content_hash=expected_hash,
             frontmatter=(),
             payload="from-writer",
         )
@@ -418,7 +418,7 @@ def test_two_concurrent_appends_only_one_expected_hash_wins(tmp_path: Path) -> N
     assert content.count("from-writer") == 1
 
 
-def test_human_atomic_save_after_final_hash_check_is_never_overwritten(
+def test_human_atomic_save_after_best_effort_final_hash_check_is_never_overwritten(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An editor may rename a newly saved note after Friday opened its FD.
@@ -439,7 +439,7 @@ def test_human_atomic_save_after_final_hash_check_is_never_overwritten(
         _candidate(
             "Friday/Inbox/a.md",
             operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
-            expected_content_hash=expected,
+            observed_content_hash=expected,
             frontmatter=(),
             payload="friday append",
         )

@@ -173,8 +173,9 @@ class WorkspaceToolGateway:
                     "memory.append_managed_note": _Registration(
                         ToolDescriptor(
                             "memory.append_managed_note",
-                            "Append to one Friday-managed memory note with a content hash. "
-                            "Input: {path, payload, expected_content_hash, memory_category}.",
+                            "Append to one Friday-managed memory note with a recently observed "
+                            "content hash for conflict detection. "
+                            "Input: {path, payload, observed_content_hash, memory_category}.",
                             False,
                             True,
                         ),

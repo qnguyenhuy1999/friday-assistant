@@ -89,7 +89,7 @@ class MemoryWritePolicy:
         """Canonical material for the exact-action authorization fingerprint."""
         validated = self.validate(candidate)
         material = {
-            "expected_prior_content_hash": candidate.expected_content_hash,
+            "observed_prior_content_hash": candidate.observed_content_hash,
             "frontmatter": list(candidate.frontmatter),
             "memory_operation": candidate.operation.value,
             "new_content": validated.canonical_new_content,
@@ -125,14 +125,14 @@ class MemoryWritePolicy:
     def _validate_operation(self, candidate: MemoryWriteCandidate) -> None:
         if (
             candidate.operation is MemoryWriteOperation.APPEND_MANAGED_NOTE
-            and not candidate.expected_content_hash
+            and not candidate.observed_content_hash
         ):
-            raise MemoryWriteDenied("append requires an expected content hash")
+            raise MemoryWriteDenied("append requires an observed content hash")
         if (
             candidate.operation is MemoryWriteOperation.CREATE_NOTE
-            and candidate.expected_content_hash is not None
+            and candidate.observed_content_hash is not None
         ):
-            raise MemoryWriteDenied("create must not specify an expected content hash")
+            raise MemoryWriteDenied("create must not specify an observed content hash")
 
     def _validate_frontmatter(self, candidate: MemoryWriteCandidate) -> None:
         metadata = dict(candidate.frontmatter)

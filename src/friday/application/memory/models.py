@@ -195,7 +195,7 @@ class MemoryContext:
 class MemoryWriteCandidate:
     operation: MemoryWriteOperation
     path: str
-    expected_content_hash: str | None
+    observed_content_hash: str | None
     payload: str
     frontmatter: tuple[tuple[str, str], ...]
     memory_category: str
@@ -204,17 +204,17 @@ class MemoryWriteCandidate:
         _ensure_relative_path(self.path, field_name="MemoryWriteCandidate.path")
         if (
             self.operation is MemoryWriteOperation.APPEND_MANAGED_NOTE
-            and self.expected_content_hash is None
+            and self.observed_content_hash is None
         ):
             raise ValueError(
-                "MemoryWriteCandidate.expected_content_hash is required for append_managed_note"
+                "MemoryWriteCandidate.observed_content_hash is required for append_managed_note"
             )
         if (
             self.operation is MemoryWriteOperation.CREATE_NOTE
-            and self.expected_content_hash is not None
+            and self.observed_content_hash is not None
         ):
             raise ValueError(
-                "MemoryWriteCandidate.expected_content_hash must be None for create_note"
+                "MemoryWriteCandidate.observed_content_hash must be None for create_note"
             )
 
 

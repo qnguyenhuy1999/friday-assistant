@@ -31,7 +31,7 @@ def _candidate(**changes: object) -> MemoryWriteCandidate:
     values: dict[str, object] = {
         "operation": MemoryWriteOperation.CREATE_NOTE,
         "path": "Friday/Inbox/example.md",
-        "expected_content_hash": None,
+        "observed_content_hash": None,
         "payload": "A durable decision.",
         "frontmatter": FRONTMATTER,
         "memory_category": MemoryCategory.EXPLICIT_DECISION,
@@ -88,12 +88,12 @@ def test_append_requires_hash_and_no_frontmatter() -> None:
     with pytest.raises(ValueError):
         _candidate(
             operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
-            expected_content_hash=None,
+            observed_content_hash=None,
             frontmatter=(),
         )
     candidate = _candidate(
         operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
-        expected_content_hash="a" * 64,
+        observed_content_hash="a" * 64,
         frontmatter=(),
     )
     assert POLICY.validate(candidate).approval_required
@@ -101,7 +101,7 @@ def test_append_requires_hash_and_no_frontmatter() -> None:
 
 def test_create_with_hash_is_rejected_by_model() -> None:
     with pytest.raises(ValueError):
-        _candidate(expected_content_hash="a" * 64)
+        _candidate(observed_content_hash="a" * 64)
 
 
 def test_canonical_input_is_stable_and_binds_every_field() -> None:
@@ -115,7 +115,7 @@ def test_canonical_input_is_stable_and_binds_every_field() -> None:
             "operation",
             _candidate(
                 operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
-                expected_content_hash="a" * 64,
+                observed_content_hash="a" * 64,
                 frontmatter=(),
             ),
             RUN_ID,
@@ -126,7 +126,7 @@ def test_canonical_input_is_stable_and_binds_every_field() -> None:
             "hash",
             _candidate(
                 operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
-                expected_content_hash="b" * 64,
+                observed_content_hash="b" * 64,
                 frontmatter=(),
             ),
             RUN_ID,
@@ -174,11 +174,11 @@ def test_policy_rejects_invalid_managed_roots(managed_root: str) -> None:
 def test_operation_guards_cover_invalid_model_bypass() -> None:
     append_without_hash = SimpleNamespace(
         operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
-        expected_content_hash=None,
+        observed_content_hash=None,
     )
     create_with_hash = SimpleNamespace(
         operation=MemoryWriteOperation.CREATE_NOTE,
-        expected_content_hash="a" * 64,
+        observed_content_hash="a" * 64,
     )
     with pytest.raises(MemoryWriteDenied):
         POLICY._validate_operation(append_without_hash)  # type: ignore[arg-type]

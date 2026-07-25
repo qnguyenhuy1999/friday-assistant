@@ -124,10 +124,10 @@ class MemoryTools:
         candidate = MemoryWriteCandidate(
             operation=operation,
             path=_string(values, "path"),
-            expected_content_hash=(
+            observed_content_hash=(
                 None
                 if operation is MemoryWriteOperation.CREATE_NOTE
-                else _string(values, "expected_content_hash")
+                else _string(values, "observed_content_hash")
             ),
             payload=_string(values, "payload"),
             frontmatter=frontmatter,

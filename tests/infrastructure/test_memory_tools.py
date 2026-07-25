@@ -178,7 +178,7 @@ def test_append_compares_hash_and_preserves_conflicting_file(
         {
             "path": "Friday/Inbox/managed.md",
             "payload": "append\n",
-            "expected_content_hash": hashlib.sha256(before.encode()).hexdigest(),
+            "observed_content_hash": hashlib.sha256(before.encode()).hexdigest(),
             "memory_category": MemoryCategory.EXPLICIT_DECISION.value,
         },
     )
@@ -467,7 +467,7 @@ def test_stale_claim_prevents_append_write(
             {
                 "path": "Friday/Inbox/managed.md",
                 "payload": "should not append\n",
-                "expected_content_hash": expected_hash,
+                "observed_content_hash": expected_hash,
                 "memory_category": MemoryCategory.EXPLICIT_DECISION.value,
             },
         ),

@@ -366,31 +366,31 @@ def test_memory_write_candidate_rejects_absolute_path() -> None:
         MemoryWriteCandidate(
             operation=MemoryWriteOperation.CREATE_NOTE,
             path="/etc/passwd",
-            expected_content_hash=None,
+            observed_content_hash=None,
             payload="body",
             frontmatter=(),
             memory_category="note",
         )
 
 
-def test_memory_write_candidate_append_requires_expected_content_hash() -> None:
+def test_memory_write_candidate_append_requires_observed_content_hash() -> None:
     with pytest.raises(ValueError):
         MemoryWriteCandidate(
             operation=MemoryWriteOperation.APPEND_MANAGED_NOTE,
             path="notes/a.md",
-            expected_content_hash=None,
+            observed_content_hash=None,
             payload="body",
             frontmatter=(),
             memory_category="note",
         )
 
 
-def test_memory_write_candidate_create_forbids_expected_content_hash() -> None:
+def test_memory_write_candidate_create_forbids_observed_content_hash() -> None:
     with pytest.raises(ValueError):
         MemoryWriteCandidate(
             operation=MemoryWriteOperation.CREATE_NOTE,
             path="notes/a.md",
-            expected_content_hash="deadbeef",
+            observed_content_hash="deadbeef",
             payload="body",
             frontmatter=(),
             memory_category="note",
@@ -401,7 +401,7 @@ def test_memory_write_candidate_accepts_valid_create() -> None:
     candidate = MemoryWriteCandidate(
         operation=MemoryWriteOperation.CREATE_NOTE,
         path="notes/a.md",
-        expected_content_hash=None,
+        observed_content_hash=None,
         payload="body",
         frontmatter=(("category", "note"),),
         memory_category="note",

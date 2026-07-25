@@ -188,7 +188,7 @@ class ObsidianVaultStore:
         if not path.exists():
             raise MemoryWriteDenied("managed note does not exist")
         before = self._require_text(candidate.path)
-        if _hash(before) != candidate.expected_content_hash:
+        if _hash(before) != candidate.observed_content_hash:
             raise MemoryWriteConflict("managed note changed before append")
         if not parse_markdown(before).frontmatter.friday_managed:
             raise MemoryWriteDenied("append target is not friday-managed")
@@ -198,18 +198,18 @@ class ObsidianVaultStore:
             + ("" if before.endswith(("\n", "\r")) else newline)
             + candidate.payload.replace("\n", newline)
         )
-        # Re-verify immediately before publication: the lock above only
-        # serializes Friday's own writers, so this closes as much of the
-        # remaining external-mutation window as possible.
+        # Re-verify immediately before publication. The lock serializes
+        # Friday writers; an external editor can still mutate the same inode
+        # after this best-effort conflict check.
         current = self._require_text(candidate.path)
-        if _hash(current) != candidate.expected_content_hash:
+        if _hash(current) != candidate.observed_content_hash:
             raise MemoryWriteConflict("managed note changed before append")
-        self._append_if_unchanged(path, candidate.expected_content_hash, content[len(before) :])
+        self._append_if_unchanged(path, candidate.observed_content_hash, content[len(before) :])
         return MemoryWriteResult(
             candidate.path, candidate.operation, _hash(content), False, len(content.encode())
         )
 
-    def _append_if_unchanged(self, path: Path, expected_hash: str | None, suffix: str) -> None:
+    def _append_if_unchanged(self, path: Path, observed_hash: str | None, suffix: str) -> None:
         """Append through the opened inode, never replace the pathname.
 
         Human editors commonly publish with atomic rename.  If that happens
@@ -222,7 +222,7 @@ class ObsidianVaultStore:
             with os.fdopen(descriptor, "r+b", closefd=False) as handle:
                 handle.seek(0)
                 current = handle.read().decode("utf-8")
-                if _hash(current) != expected_hash:
+                if _hash(current) != observed_hash:
                     raise MemoryWriteConflict("managed note changed before append")
                 handle.write(suffix.encode("utf-8"))
                 handle.flush()

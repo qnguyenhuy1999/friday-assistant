@@ -338,14 +338,18 @@ Writes are exposed only through two bounded tool handlers,
   before any write lands.
 - **Approval is mandatory:** `ValidatedMemoryWrite.approval_required` is
   always `True`. `MemoryWritePolicy.canonical_fingerprint_input` builds the
-  canonical JSON material (operation, target, expected prior hash, new
+  canonical JSON material (operation, target, observed prior hash, new
   content, run/step id) that backs the existing exact-action approval
   fingerprinting — a memory write is approved the same way any other
   tool-invoking action is, never on a separate weaker path.
-- **Conflict detection (compare-and-swap):** `append_managed_note`
-  requires `expected_content_hash`; `ObsidianVaultStore._append` recomputes
-  the current note's hash and raises `MemoryWriteConflict` if it no longer
-  matches before writing anything — a stale claim writes nothing.
+- **No-clobber append with best-effort conflict detection:**
+  `append_managed_note` requires `observed_content_hash`; the vault checks
+  the note's hash before and immediately before appending, and raises
+  `MemoryWriteConflict` when it observes a mismatch. Friday writers are
+  serialized, and atomic-save/rename by an editor is never overwritten.
+  An uncoordinated editor may still change the same inode after the final
+  check and before the append, so this is deliberately not a strict
+  compare-and-swap or an expected-state guarantee.
   `create_note` instead refuses outright if the target already exists
   (`MemoryWriteDenied`), so create is a compare-to-empty rather than a
   silent overwrite.

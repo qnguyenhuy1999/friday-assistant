@@ -30,8 +30,8 @@ class MemoryIndexCorrupt(MemoryError):
 
 
 class MemoryWriteConflict(MemoryError):
-    """A write's expected_content_hash no longer matches the current note
-    content."""
+    """A write's observed content hash did not match during its pre-write
+    conflict check."""
 
 
 class MemoryWriteDenied(MemoryError):

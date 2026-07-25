@@ -177,18 +177,6 @@ def _dedupe_preserve_order(items: Sequence[str]) -> tuple[str, ...]:
     return tuple(result)
 
 
-def _normalize_titles(items: Sequence[str]) -> tuple[str, ...]:
-    """Normalize titles: strip, casefold, dedupe, cap."""
-    seen: set[str] = set()
-    result: list[str] = []
-    for item in items:
-        normalized = item.strip().casefold()
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            result.append(normalized)
-    return tuple(result)
-
-
 def _cap(items: tuple[str, ...], limit: int) -> tuple[str, ...]:
     if len(items) <= limit:
         return items

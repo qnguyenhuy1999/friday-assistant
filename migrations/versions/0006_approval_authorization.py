@@ -17,7 +17,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("approval_requests", sa.Column("authorization_fingerprint", sa.String()))
+    op.add_column("approval_requests", sa.Column("authorization_fingerprint", sa.String(64)))
     op.add_column("approval_requests", sa.Column("consumed_at", sa.DateTime()))
 
 

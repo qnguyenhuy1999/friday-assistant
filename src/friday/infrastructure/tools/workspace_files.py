@@ -95,16 +95,20 @@ class WorkspaceFiles:
 
         entries: list[JsonValue] = []
         truncated = False
-        for path in _iter_entries(directory, recursive):
+        for path in _iter_entries(directory, recursive, self._settings.max_list_entries + 1):
             if len(entries) >= self._settings.max_list_entries:
                 truncated = True
                 break
+            info = path.lstat()
+            if path.is_symlink():
+                entry_type = "symlink"
+                size = None
+            elif path.is_dir():
+                entry_type, size = "dir", None
+            else:
+                entry_type, size = "file", info.st_size
             entries.append(
-                {
-                    "path": to_workspace_relative(root, path),
-                    "type": "dir" if path.is_dir() else "file",
-                    "size": path.stat().st_size if path.is_file() else None,
-                }
+                {"path": to_workspace_relative(root, path), "type": entry_type, "size": size}
             )
         return ToolExecutionResult.succeeded({"entries": entries, "truncated": truncated})
 
@@ -197,15 +201,23 @@ class WorkspaceFiles:
         )
 
 
-def _iter_entries(directory: Path, recursive: bool) -> list[Path]:
+def _iter_entries(directory: Path, recursive: bool, limit: int) -> list[Path]:
     """Deterministic listing: lexicographic by workspace-relative path.
     Recursion is shallow — at most one directory level below `directory`."""
-    children = sorted(directory.iterdir(), key=lambda p: p.name)
+    children = []
+    for path in directory.iterdir():
+        children.append(path)
+        if len(children) >= limit:
+            break
+    children.sort(key=lambda p: p.name)
     if not recursive:
         return children
     result: list[Path] = []
     for child in children:
         result.append(child)
         if child.is_dir() and not child.is_symlink():
-            result.extend(sorted(child.iterdir(), key=lambda p: p.name))
+            nested = list(child.iterdir())[: max(0, limit - len(result))]
+            result.extend(sorted(nested, key=lambda p: p.name))
+            if len(result) >= limit:
+                break
     return result

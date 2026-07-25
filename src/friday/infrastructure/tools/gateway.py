@@ -70,6 +70,7 @@ class WorkspaceToolGateway:
                 max_stderr_bytes=settings.max_stderr_bytes,
             )
         )
+        self._process_runner = processes
         self._registry: dict[str, _Registration] = {
             "workspace.list": _Registration(
                 descriptor=ToolDescriptor(
@@ -148,6 +149,21 @@ class WorkspaceToolGateway:
         if registration is None:
             raise ToolNotFound(request.call.tool)
         try:
+            if request.cancellation_requested is not None and request.cancellation_requested():
+                return ToolExecutionResult.failed(
+                    Failure(
+                        code="claim_lost",
+                        message="claim lost before tool execution",
+                        retryable=True,
+                        cause=FailureCause.CANCELLED,
+                    )
+                )
+            if request.call.tool == "process.run":
+                # process.run is the only cancellable tool; the runner checks
+                # this callback while draining bounded output.
+                return self._process_runner.run(
+                    request.call.tool_input, request.cancellation_requested
+                )
             return registration.execute(request.call.tool_input)
         except WorkspaceAccessDenied as exc:
             return ToolExecutionResult.failed(

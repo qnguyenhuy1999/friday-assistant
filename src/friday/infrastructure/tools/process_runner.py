@@ -10,10 +10,14 @@ the execution machinery itself (timeout, spawn failure) become Failures."""
 from __future__ import annotations
 
 import os
+import selectors
 import signal
 import subprocess
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from friday.application.errors import ToolInputInvalid
 from friday.application.tool_gateway import ToolExecutionResult
@@ -50,7 +54,9 @@ class ProcessRunner:
     def __init__(self, settings: ProcessRunnerSettings) -> None:
         self._settings = settings
 
-    def run(self, tool_input: JsonValue) -> ToolExecutionResult:
+    def run(
+        self, tool_input: JsonValue, cancellation_requested: Callable[[], bool] | None = None
+    ) -> ToolExecutionResult:
         argv, cwd, timeout = self._parse_input(tool_input)
         try:
             process = subprocess.Popen(
@@ -60,9 +66,6 @@ class ProcessRunner:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=self._environment(),
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 start_new_session=True,
             )
         except FileNotFoundError:
@@ -84,21 +87,33 @@ class ProcessRunner:
                 )
             )
 
-        try:
-            stdout, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
+        stdout, stderr, stdout_truncated, stderr_truncated, reason = _drain_bounded(
+            process,
+            timeout,
+            self._settings.max_stdout_bytes,
+            self._settings.max_stderr_bytes,
+            cancellation_requested,
+        )
+        if reason is not None:
             _terminate_process_group(process)
-            return ToolExecutionResult.failed(
-                Failure(
-                    code="tool_timeout",
-                    message=f"command exceeded {timeout}s",
-                    retryable=True,
-                    cause=FailureCause.TIMEOUT,
+            if reason[0] == "tool_output_limit":
+                reason = None
+            else:
+                return ToolExecutionResult.failed(
+                    Failure(
+                        code=reason[0],
+                        message=reason[1],
+                        retryable=True,
+                        cause=FailureCause.CANCELLED
+                        if reason[0] == "claim_lost"
+                        else FailureCause.TIMEOUT,
+                    )
                 )
-            )
-
-        stdout, stdout_truncated = _cap(stdout, self._settings.max_stdout_bytes)
-        stderr, stderr_truncated = _cap(stderr, self._settings.max_stderr_bytes)
+        if reason is None and process.returncode is None:
+            process.wait()
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
         return ToolExecutionResult.succeeded(
             {
                 "exit_code": process.returncode,
@@ -154,16 +169,64 @@ class ProcessRunner:
         }
 
 
-def _cap(text: str, max_bytes: int) -> tuple[str, bool]:
-    if len(text.encode("utf-8")) <= max_bytes:
-        return text, False
-    clipped = text.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
-    return clipped + _TRUNCATION_MARKER, True
+def _drain_bounded(
+    process: subprocess.Popen[bytes],
+    timeout: float,
+    max_stdout: int,
+    max_stderr: int,
+    cancelled: Callable[[], bool] | None,
+) -> tuple[str, str, bool, bool, tuple[str, str] | None]:
+    selector = selectors.DefaultSelector()
+    buffers: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
+    truncated = {"stdout": False, "stderr": False}
+    for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+        assert stream is not None
+        selector.register(stream, selectors.EVENT_READ, name)
+    deadline = time.monotonic() + timeout
+    reason: tuple[str, str] | None = None
+    while selector.get_map():
+        if cancelled is not None and cancelled():
+            reason = ("claim_lost", "claim lost while process was running")
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            reason = ("tool_timeout", f"command exceeded {timeout}s")
+            break
+        for key, _ in selector.select(min(remaining, 0.1)):
+            data = os.read(key.fd, 65536)
+            if not data:
+                selector.unregister(key.fileobj)
+                continue
+            name = key.data
+            limit = max_stdout if name == "stdout" else max_stderr
+            buffers[name].extend(data)
+            if len(buffers[name]) > limit:
+                buffers[name] = buffers[name][:limit]
+                truncated[name] = True
+                reason = ("tool_output_limit", f"{name} exceeded the configured limit")
+                break
+        if reason is not None:
+            break
+    selector.close()
+    if reason is None:
+        process.wait()
+    return tuple(
+        bytes(buffers[name]).decode("utf-8", errors="replace")
+        + (_TRUNCATION_MARKER if truncated[name] else "")
+        for name in ("stdout", "stderr")
+    ) + (truncated["stdout"], truncated["stderr"], reason)  # type: ignore[return-value]
 
 
-def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+def _terminate_process_group(process: subprocess.Popen[Any]) -> None:
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):  # pragma: no cover - race with exit
         process.kill()
-    process.communicate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+    for stream in (process.stdout, process.stderr):
+        if stream is not None:
+            stream.close()

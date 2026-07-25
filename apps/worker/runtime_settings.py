@@ -20,6 +20,7 @@ _DEFAULT_MAX_TOOL_CALLS_PER_CLAIM = 4
 _DEFAULT_MAX_CONTEXT_CHARS = 60_000
 _DEFAULT_MAX_RESPONSE_BYTES = 65_536
 _DEFAULT_MAX_YIELD_SECONDS = 3_600
+_DEFAULT_MAX_PROCESSING_SECONDS = 600.0
 _DEFAULT_TOOL_TIMEOUT_SECONDS = 30.0
 _DEFAULT_TOOL_MAX_TIMEOUT_SECONDS = 120.0
 _DEFAULT_TOOL_MAX_STDOUT_BYTES = 200_000
@@ -47,6 +48,7 @@ class RuntimeSettings:
     tool_max_stderr_bytes: int
     tool_max_file_bytes: int
     tool_max_list_entries: int
+    max_processing_seconds: float = _DEFAULT_MAX_PROCESSING_SECONDS
 
     def __post_init__(self) -> None:
         if not str(self.workspace_root).strip():
@@ -116,6 +118,11 @@ class RuntimeSettings:
             ),
             max_yield_seconds=int(
                 os.environ.get("FRIDAY_RUNTIME_MAX_YIELD_SECONDS", _DEFAULT_MAX_YIELD_SECONDS)
+            ),
+            max_processing_seconds=float(
+                os.environ.get(
+                    "FRIDAY_RUNTIME_MAX_PROCESSING_SECONDS", _DEFAULT_MAX_PROCESSING_SECONDS
+                )
             ),
             tool_timeout_seconds=float(
                 os.environ.get("FRIDAY_TOOL_TIMEOUT_SECONDS", _DEFAULT_TOOL_TIMEOUT_SECONDS)

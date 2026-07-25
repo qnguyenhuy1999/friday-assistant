@@ -118,13 +118,12 @@ def test_missing_executable_prevents_construction(tmp_path: Path) -> None:
         )
 
 
-def test_cli_without_brain_only_flags_prevents_construction(tmp_path: Path) -> None:
+def test_cli_semantic_probe_does_not_require_help_to_advertise_flags(tmp_path: Path) -> None:
     executable, _ = make_fake_claude(
         tmp_path, action_jsons=[FINISH], flags=("--print", "--output-format")
     )
-    with pytest.raises(BrainUnavailable) as excinfo:
-        create_worker(worker_settings(tmp_path), runtime_settings(tmp_path, executable))
-    assert "--tools" in str(excinfo.value)
+    worker = create_worker(worker_settings(tmp_path), runtime_settings(tmp_path, executable))
+    worker.engine.dispose()
 
 
 def test_invalid_workspace_prevents_construction(tmp_path: Path) -> None:

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Protocol
 
 from friday.application.errors import (
     ClaimLost,
@@ -99,6 +99,11 @@ class ToolActionOutcome:
         )
 
 
+class ClaimGuard(Protocol):
+    def is_lease_lost(self) -> bool: ...
+    def verify_active(self) -> bool: ...
+
+
 class ExecuteToolAction(LifecycleEvents):
     """Authorize, durably record, execute, and persist one tool action under
     an exact worker claim."""
@@ -116,6 +121,7 @@ class ExecuteToolAction(LifecycleEvents):
         worker_id: str,
         claim_token: str,
         claim_generation: int,
+        claim_guard: ClaimGuard | None = None,
     ) -> ToolActionOutcome:
         # risk assessment is pure gateway policy — may raise ToolNotFound
         risk = self._gateway.assess(call)
@@ -184,9 +190,18 @@ class ExecuteToolAction(LifecycleEvents):
             invocation_id = invocation.id
 
         # ---- execute outside any transaction ------------------------------
+        if claim_guard is not None and (
+            claim_guard.is_lease_lost() or not claim_guard.verify_active()
+        ):
+            raise ClaimLost("claim was lost after authorization; refusing tool execution")
+
         result = self._gateway.execute(
             ToolExecutionRequest(
-                invocation_id=invocation_id, run_id=run_id, step_id=step_id, call=call
+                invocation_id=invocation_id,
+                run_id=run_id,
+                step_id=step_id,
+                call=call,
+                cancellation_requested=(claim_guard.is_lease_lost if claim_guard else None),
             )
         )
 

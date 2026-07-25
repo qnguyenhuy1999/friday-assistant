@@ -5,6 +5,7 @@ subprocess results, file handles, or OS exception types."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -100,6 +101,7 @@ class ToolExecutionRequest:
     run_id: RunId
     step_id: RunStepId | None
     call: ToolCall
+    cancellation_requested: Callable[[], bool] | None = None
 
 
 @dataclass(frozen=True, slots=True)

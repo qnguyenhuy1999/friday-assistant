@@ -27,6 +27,9 @@ if "--help" in sys.argv:
     sys.exit(0)
 
 data = sys.stdin.read()
+if data.startswith("Return exactly"):
+    sys.stdout.write(STDOUTS[0])
+    sys.exit(0)
 count_path = os.path.join(RECORD, "count")
 count = int(open(count_path).read()) if os.path.exists(count_path) else 0
 open(count_path, "w").write(str(count + 1))

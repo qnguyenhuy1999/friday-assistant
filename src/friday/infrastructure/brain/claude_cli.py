@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import json
 import os
+import selectors
 import signal
 import subprocess
+import time
 from dataclasses import dataclass
+from typing import Any
 
 from friday.application.brain_runtime import BrainRequest, BrainResponse
 from friday.application.errors import (
@@ -160,13 +163,9 @@ class ClaudeCliBrainRuntime:
         except OSError as exc:
             raise BrainUnavailable("Claude CLI could not be started") from exc
 
-        try:
-            stdout, stderr = process.communicate(
-                input=prompt, timeout=self._settings.timeout_seconds
-            )
-        except subprocess.TimeoutExpired as exc:
-            _terminate_process_group(process)
-            raise BrainTimeout(f"Claude CLI exceeded {self._settings.timeout_seconds}s") from exc
+        stdout, stderr = _communicate_bounded(
+            process, prompt, self._settings.timeout_seconds, self._settings.max_output_bytes
+        )
 
         if len(stdout.encode("utf-8")) > self._settings.max_output_bytes:
             raise BrainProtocolError("CLI stdout exceeded the configured limit")
@@ -183,7 +182,7 @@ class ClaudeCliBrainRuntime:
         return envelope
 
 
-def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+def _terminate_process_group(process: subprocess.Popen[Any]) -> None:
     """Kill the CLI's whole process group so no orphan survives a timeout."""
     try:
         os.killpg(process.pid, signal.SIGKILL)
@@ -191,7 +190,55 @@ def _terminate_process_group(process: subprocess.Popen[str]) -> None:
         process.kill()
     # Drain the pipes and reap — communicate() after kill is the documented
     # non-deadlocking cleanup for a timed-out child.
-    process.communicate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+    for stream in (process.stdout, process.stderr):
+        if stream is not None:
+            stream.close()
+
+
+def _communicate_bounded(
+    process: subprocess.Popen[str], prompt: str, timeout: float, max_stdout_bytes: int
+) -> tuple[str, str]:
+    assert process.stdin is not None
+    process.stdin.write(prompt)
+    process.stdin.close()
+    selector = selectors.DefaultSelector()
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+        assert stream is not None
+        selector.register(stream, selectors.EVENT_READ, name)
+    deadline = time.monotonic() + timeout
+    while selector.get_map():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            selector.close()
+            _terminate_process_group(process)
+            raise BrainTimeout(f"Claude CLI exceeded {timeout}s")
+        for key, _ in selector.select(min(remaining, 0.1)):
+            data = os.read(key.fd, 65536)
+            if not data:
+                selector.unregister(key.fileobj)
+                continue
+            name = key.data
+            buffers[name].extend(data)
+            if name == "stdout" and len(buffers[name]) > max_stdout_bytes:
+                selector.close()
+                _terminate_process_group(process)
+                raise BrainProtocolError("CLI stdout exceeded the configured limit")
+    selector.close()
+    process.wait()
+    result = (
+        bytes(buffers["stdout"]).decode("utf-8", errors="replace"),
+        bytes(buffers["stderr"]).decode("utf-8", errors="replace"),
+    )
+    for stream in (process.stdout, process.stderr):
+        if stream is not None:
+            stream.close()
+    return result
 
 
 def _decode_action_json(result_text: str) -> object:
@@ -228,13 +275,50 @@ def verify_brain_only_support(settings: ClaudeCliSettings) -> str:
     string. Raises BrainUnavailable otherwise — a worker must never claim a
     Run with an unverified brain."""
     version = _run_probe(settings.executable, "--version")
-    help_text = _run_probe(settings.executable, "--help")
-    missing = [flag for flag in REQUIRED_CLI_FLAGS if flag not in help_text]
-    if missing:
-        raise BrainUnavailable(
-            f"Claude CLI does not advertise required brain-only flag(s): {missing}"
-        )
+    _run_semantic_probe(settings)
     return version.strip()[:200]
+
+
+def _run_semantic_probe(settings: ClaudeCliSettings) -> None:
+    argv = [
+        settings.executable,
+        "-p",
+        "--output-format",
+        "json",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--safe-mode",
+        "--no-session-persistence",
+    ]
+    environment = {
+        name: value for name in ENVIRONMENT_ALLOWLIST if (value := os.environ.get(name)) is not None
+    }
+    try:
+        completed = subprocess.run(
+            argv,
+            input='Return exactly {"version":1,"action":"finish","result":{"summary":"ok"}}',
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=environment,
+            timeout=_VERIFY_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        raise BrainUnavailable("Claude CLI semantic brain-only probe failed") from exc
+    if completed.returncode != 0:
+        raise BrainUnavailable(f"Claude CLI semantic probe exited with {completed.returncode}")
+    if len(completed.stdout.encode("utf-8")) > _VERIFY_MAX_OUTPUT_BYTES:
+        raise BrainUnavailable("Claude CLI semantic probe exceeded output limit")
+    try:
+        envelope = parse_cli_envelope(completed.stdout)
+        parse_brain_action(json.loads(envelope.result_text))
+    except (BrainProtocolError, BrainResponseInvalid, json.JSONDecodeError) as exc:
+        raise BrainUnavailable("Claude CLI semantic probe returned an invalid action") from exc
+    # The probe's contract is the valid action envelope, not a particular
+    # action kind. A deterministic fake/older CLI may return another valid
+    # non-executing proposal while still proving the process-level mode.
 
 
 def _run_probe(executable: str, flag: str) -> str:

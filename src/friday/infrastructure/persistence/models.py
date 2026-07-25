@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -107,7 +107,14 @@ class RunStepRow(Base):
 
 class ApprovalRequestRow(Base):
     __tablename__ = "approval_requests"
-    __table_args__ = (Index("ix_approval_requests_run_id", "run_id"),)
+    __table_args__ = (
+        Index("ix_approval_requests_run_id", "run_id"),
+        CheckConstraint(
+            "authorization_fingerprint IS NULL OR (length(authorization_fingerprint) = 64 "
+            "AND authorization_fingerprint NOT GLOB '*[^0-9a-f]*')",
+            name="ck_approval_authorization_fingerprint_hex",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))

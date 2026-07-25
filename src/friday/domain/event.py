@@ -40,6 +40,7 @@ class RunEventType(StrEnum):
     TOOL_INVOCATION_FAILED = "tool_invocation_failed"
     TOOL_INVOCATION_CANCELLED = "tool_invocation_cancelled"
     ARTIFACT_CREATED = "artifact_created"
+    AGENT_FINISHED = "agent_finished"
 
 
 @dataclass(frozen=True, slots=True)

@@ -32,8 +32,11 @@ Failure policy (stable codes, bounded messages):
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
 from friday.application.brain_runtime import BrainRequest, BrainResponse, BrainRuntime
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
@@ -48,6 +51,7 @@ from friday.application.errors import (
     ToolInputInvalid,
     ToolNotFound,
 )
+from friday.application.lifecycle_events import LifecycleEvents
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.run_processor import ClaimContext, ProcessingOutcome
 from friday.application.runtime_actions import (
@@ -68,6 +72,7 @@ from friday.application.tool_authorization import (
 )
 from friday.application.tool_gateway import ToolCall, ToolGateway
 from friday.application.worker_coordination import VerifyRunClaim
+from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.run import RunStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
@@ -77,6 +82,18 @@ _MAX_TURN_NOTE_CHARS = 500
 _MAX_RECENT_EVENTS = 50
 
 
+class _ContextClaimGuard:
+    def __init__(self, processor: AgentRunProcessor, context: ClaimContext) -> None:
+        self._processor = processor
+        self._context = context
+
+    def is_lease_lost(self) -> bool:
+        return self._context.is_lease_lost()
+
+    def verify_active(self) -> bool:
+        return self._processor._claim_holds(self._context)
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeLimits:
     max_turns_per_claim: int
@@ -84,6 +101,7 @@ class RuntimeLimits:
     max_context_chars: int
     max_response_bytes: int
     max_yield_seconds: int
+    max_processing_seconds: float = 600.0
 
     def __post_init__(self) -> None:
         if self.max_turns_per_claim < 1:
@@ -96,6 +114,8 @@ class RuntimeLimits:
             raise ValueError("max_response_bytes must be positive")
         if self.max_yield_seconds < 0:
             raise ValueError("max_yield_seconds must be >= 0")
+        if self.max_processing_seconds <= 0:
+            raise ValueError("max_processing_seconds must be positive")
 
 
 class AgentRunProcessor:
@@ -112,6 +132,7 @@ class AgentRunProcessor:
         request_tool_approval: RequestToolApproval,
         execute_tool_action: ExecuteToolAction,
         limits: RuntimeLimits,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._uow_factory = uow_factory
         self._clock = clock
@@ -121,14 +142,18 @@ class AgentRunProcessor:
         self._request_tool_approval = request_tool_approval
         self._execute_tool_action = execute_tool_action
         self._limits = limits
+        self._monotonic = monotonic
 
     # ------------------------------------------------------------------ API
 
     def process(self, context: ClaimContext) -> ProcessingOutcome:
         turn_notes: list[str] = []
         tool_calls = 0
+        deadline = self._monotonic() + self._limits.max_processing_seconds
 
         for turn in range(1, self._limits.max_turns_per_claim + 1):
+            if self._monotonic() >= deadline:
+                return self._yield_now()
             if not self._claim_holds(context):
                 return self._yield_now()
 
@@ -154,6 +179,8 @@ class AgentRunProcessor:
             )
 
             try:
+                if self._monotonic() >= deadline:
+                    return self._yield_now()
                 response = self._brain.next_action(request)  # outside any txn
             except BrainResponseInvalid as exc:
                 return self._failed("brain_response_invalid", str(exc), retryable=True)
@@ -169,6 +196,8 @@ class AgentRunProcessor:
             if not self._claim_holds(context):
                 return self._yield_now()  # never act on a response for a lost claim
 
+            if self._monotonic() >= deadline:
+                return self._yield_now()
             outcome, note, tool_call_used = self._dispatch(context, response, snapshot)
             if outcome is not None:
                 return outcome
@@ -195,6 +224,8 @@ class AgentRunProcessor:
             blocker = self._finish_blocker(snapshot)
             if blocker is not None:
                 return None, f"finish rejected: {blocker}", False
+            if not self._persist_final_response(context, action):
+                return self._yield_now(), None, False
             return ProcessingOutcome.succeeded(), None, False
 
         if isinstance(action, FailAction):
@@ -231,6 +262,7 @@ class AgentRunProcessor:
                 worker_id=context.worker_id,
                 claim_token=context.claim_token,
                 claim_generation=context.claim_generation,
+                claim_guard=_ContextClaimGuard(self, context),
             )
         except ToolNotFound:
             return (
@@ -315,15 +347,17 @@ class AgentRunProcessor:
             run = uow.runs.get(context.run_id)
             if task is None or run is None or run.status is not RunStatus.RUNNING:
                 return None
-            events = uow.events.list_for_run(context.run_id)
+            events = _bounded_read(uow.events, context.run_id, _MAX_RECENT_EVENTS)
             return RunSnapshot(
                 task=task,
                 run=run,
                 steps=tuple(uow.steps.list_for_run(context.run_id)),
-                approvals=tuple(uow.approvals.list_for_run(context.run_id)),
-                invocations=tuple(uow.tool_invocations.list_for_run(context.run_id)),
-                artifacts=tuple(uow.artifacts.list_for_run(context.run_id)),
-                events=tuple(events[-_MAX_RECENT_EVENTS:]),
+                approvals=tuple(_bounded_read(uow.approvals, context.run_id, _MAX_RECENT_EVENTS)),
+                invocations=tuple(
+                    _bounded_read(uow.tool_invocations, context.run_id, _MAX_RECENT_EVENTS)
+                ),
+                artifacts=tuple(_bounded_read(uow.artifacts, context.run_id, _MAX_RECENT_EVENTS)),
+                events=tuple(events),
                 previous_turns=turn_notes,
             )
 
@@ -342,6 +376,37 @@ class AgentRunProcessor:
             return f"{len(open_invocations)} tool invocation(s) are not terminal"
         return None
 
+    def _persist_final_response(self, context: ClaimContext, action: FinishAction) -> bool:
+        if not self._claim_holds(context):
+            return False
+        with self._uow_factory() as uow:
+            now = self._clock.now()
+            if not uow.work_queue.is_claim_active(
+                context.run_id,
+                context.worker_id,
+                context.claim_token,
+                context.claim_generation,
+                now,
+            ):
+                return False
+            run = uow.runs.get(context.run_id)
+            if run is None:
+                return False
+            LifecycleEvents.append_run_events(
+                uow,
+                run,
+                now,
+                [
+                    (
+                        RunEventType.AGENT_FINISHED,
+                        {"summary": action.summary[:4000], "details": action.details},
+                        None,
+                    )
+                ],
+            )
+            uow.commit()
+        return True
+
     def _yield_now(self) -> ProcessingOutcome:
         return ProcessingOutcome.yielded(self._clock.now())
 
@@ -357,3 +422,12 @@ class AgentRunProcessor:
         return ProcessingOutcome.failed(
             Failure(code=code, message=bounded, retryable=retryable, cause=cause)
         )
+
+
+def _bounded_read(repository: object, run_id: object, limit: int) -> Any:
+    recent = getattr(repository, "list_recent_for_run", None)
+    if recent is not None:
+        return recent(run_id, limit)
+    # Compatibility for in-memory ports used by older callers; production
+    # repositories implement the bounded query above.
+    return list(getattr(repository, "list_for_run")(run_id))[-limit:]  # noqa: B009

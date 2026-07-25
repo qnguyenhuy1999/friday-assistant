@@ -8,6 +8,7 @@ resolution with the waiting Run/RunStep is an application-service concern
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -85,6 +86,12 @@ class ApprovalRequest:
             raise DomainValidationError("ApprovalRequest.summary must not be empty")
         if not normalized_action:
             raise DomainValidationError("ApprovalRequest.requested_action must not be empty")
+        if authorization_fingerprint is not None and not re.fullmatch(
+            r"[0-9a-f]{64}", authorization_fingerprint
+        ):
+            raise DomainValidationError(
+                "ApprovalRequest.authorization_fingerprint must be 64 lowercase hex characters"
+            )
         normalized_expiry = ensure_utc(expires_at) if expires_at is not None else None
         if normalized_expiry is not None and normalized_expiry <= ensure_utc(requested_at):
             raise DomainValidationError("ApprovalRequest.expires_at must be after its requested_at")

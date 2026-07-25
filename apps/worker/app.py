@@ -95,6 +95,7 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
             max_context_chars=runtime.max_context_chars,
             max_response_bytes=runtime.max_response_bytes,
             max_yield_seconds=runtime.max_yield_seconds,
+            max_processing_seconds=runtime.max_processing_seconds,
         ),
     )
 

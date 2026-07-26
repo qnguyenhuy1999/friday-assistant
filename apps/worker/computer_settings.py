@@ -11,14 +11,19 @@ sets nothing else.
 
 The two ceilings worth understanding:
 
-* ``max_scroll_delta`` is the *operational* scroll bound. The value objects
-  allow ±100000 because that is the representable range for screen geometry;
-  a scroll of 100000 is a fling to the end of an infinite feed, so the policy
-  ceiling is three orders of magnitude smaller.
+* ``max_scroll_amount`` is the *operational* scroll bound, in wheel notches or
+  keystroke repetitions — the units the driver actually scrolls in. The driver's
+  own default is 3; the ceiling keeps a scroll a scroll rather than a fling to
+  the end of an unbounded feed.
 * ``max_capture_bytes`` bounds a screenshot before its bytes are decoded, let
   alone written. A 6K display screenshots to a few megabytes; the default
   leaves room for that and refuses anything that looks like a different
   problem.
+
+There is no capture TTL or snapshot budget any more. A capture is no longer a
+stored fence with a lifetime: every mutating tool re-captures its window
+immediately before acting and revalidates the approved target against what it
+just saw, so there is nothing retained whose staleness an operator could tune.
 
 The workspace root is deliberately absent: it belongs to RuntimeSettings, and
 reading it from the environment a second time here would let the directory
@@ -33,18 +38,15 @@ import shlex
 from dataclasses import dataclass
 
 _DEFAULT_COMPUTER_USE_ENABLED = False
-_DEFAULT_CUA_DRIVER_CMD = "cua-driver"
+_DEFAULT_CUA_DRIVER_CMD = "cua-driver mcp"
 _DEFAULT_COMPUTER_TIMEOUT_SECONDS = 15.0
 _DEFAULT_COMPUTER_MAX_CAPTURE_BYTES = 8_000_000
 _DEFAULT_COMPUTER_MAX_TYPE_CHARS = 4_096
-_DEFAULT_COMPUTER_MAX_SCROLL_DELTA = 5_000
-_DEFAULT_COMPUTER_CAPTURE_TTL_SECONDS = 10.0
-_DEFAULT_COMPUTER_MAX_SNAPSHOTS = 32
+_DEFAULT_COMPUTER_MAX_SCROLL_AMOUNT = 10
 _DEFAULT_COMPUTER_MAX_ELEMENTS = 500
 _DEFAULT_CUA_TELEMETRY_ENABLED = False
 
-_MAX_CAPTURE_TTL_SECONDS = 300.0
-_MAX_SCROLL_DELTA_CEILING = 100_000
+_MAX_SCROLL_AMOUNT_CEILING = 50
 
 
 def _parse_bool(name: str, default: bool) -> bool:
@@ -80,9 +82,7 @@ class ComputerSettings:
     timeout_seconds: float
     max_capture_bytes: int
     max_type_chars: int
-    max_scroll_delta: int
-    capture_ttl_seconds: float
-    max_snapshots: int
+    max_scroll_amount: int
     max_elements: int
     telemetry_enabled: bool
 
@@ -91,21 +91,16 @@ class ComputerSettings:
             "timeout_seconds": self.timeout_seconds,
             "max_capture_bytes": self.max_capture_bytes,
             "max_type_chars": self.max_type_chars,
-            "max_scroll_delta": self.max_scroll_delta,
-            "capture_ttl_seconds": self.capture_ttl_seconds,
-            "max_snapshots": self.max_snapshots,
+            "max_scroll_amount": self.max_scroll_amount,
             "max_elements": self.max_elements,
         }
         for name, value in positives.items():
             if value <= 0:
                 raise ValueError(f"{name} must be positive")
-        if self.capture_ttl_seconds > _MAX_CAPTURE_TTL_SECONDS:
+        if self.max_scroll_amount > _MAX_SCROLL_AMOUNT_CEILING:
             raise ValueError(
-                "capture_ttl_seconds must not exceed "
-                f"{_MAX_CAPTURE_TTL_SECONDS:.0f}s — a stale capture is not a fence"
+                f"max_scroll_amount must not exceed {_MAX_SCROLL_AMOUNT_CEILING} notches"
             )
-        if self.max_scroll_delta > _MAX_SCROLL_DELTA_CEILING:
-            raise ValueError("max_scroll_delta exceeds the representable scroll range")
         if not self.computer_use_enabled:
             return
         if not self.driver_command:
@@ -131,18 +126,10 @@ class ComputerSettings:
             max_type_chars=int(
                 os.environ.get("FRIDAY_COMPUTER_MAX_TYPE_CHARS", _DEFAULT_COMPUTER_MAX_TYPE_CHARS)
             ),
-            max_scroll_delta=int(
+            max_scroll_amount=int(
                 os.environ.get(
-                    "FRIDAY_COMPUTER_MAX_SCROLL_DELTA", _DEFAULT_COMPUTER_MAX_SCROLL_DELTA
+                    "FRIDAY_COMPUTER_MAX_SCROLL_AMOUNT", _DEFAULT_COMPUTER_MAX_SCROLL_AMOUNT
                 )
-            ),
-            capture_ttl_seconds=float(
-                os.environ.get(
-                    "FRIDAY_COMPUTER_CAPTURE_TTL_SECONDS", _DEFAULT_COMPUTER_CAPTURE_TTL_SECONDS
-                )
-            ),
-            max_snapshots=int(
-                os.environ.get("FRIDAY_COMPUTER_MAX_SNAPSHOTS", _DEFAULT_COMPUTER_MAX_SNAPSHOTS)
             ),
             max_elements=int(
                 os.environ.get("FRIDAY_COMPUTER_MAX_ELEMENTS", _DEFAULT_COMPUTER_MAX_ELEMENTS)

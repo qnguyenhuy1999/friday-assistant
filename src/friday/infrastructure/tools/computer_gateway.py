@@ -59,7 +59,7 @@ from friday.infrastructure.computer.observation import (
 )
 from friday.infrastructure.computer.pointer import ComputerPointer, ComputerPointerSettings
 from friday.infrastructure.computer.policy import COMPUTER_TOOL_POLICY, ComputerToolPolicy
-from friday.infrastructure.computer.snapshots import SnapshotRegistry, SnapshotRegistrySettings
+from friday.infrastructure.computer.targets import TargetResolver, TargetResolverSettings
 from friday.infrastructure.computer.windows import ComputerWindows
 
 DEFAULT_MAX_WINDOWS = 50
@@ -73,7 +73,6 @@ class ComputerToolGatewaySettings:
     capture: ComputerCaptureSettings = ComputerCaptureSettings()
     pointer: ComputerPointerSettings = ComputerPointerSettings()
     keyboard: ComputerKeyboardSettings = ComputerKeyboardSettings()
-    snapshots: SnapshotRegistrySettings = SnapshotRegistrySettings()
     screenshots: ScreenshotStoreSettings | None = None
     clock: Clock = field(default_factory=SystemClock)
 
@@ -89,36 +88,38 @@ class ComputerToolGatewaySettings:
 class ComputerToolGateway:
     def __init__(self, settings: ComputerToolGatewaySettings) -> None:
         driver = settings.driver
+        self._driver = driver
         self._clock = settings.clock
-        registry = SnapshotRegistry(settings.snapshots)
+        # One resolver, shared by every mutating handler: the capture-then-check
+        # sequence is the fence, and a second implementation of it is a second
+        # answer to "was this action still in bounds?"
+        resolver = TargetResolver(
+            driver, TargetResolverSettings(max_elements=settings.capture.max_elements)
+        )
         observation = ComputerObservation(
             driver, ComputerObservationSettings(max_windows=settings.max_windows)
         )
         capture = ComputerCapture(
             driver,
-            registry,
             ScreenshotStore(settings.screenshot_settings()),
             settings.capture,
         )
-        pointer = ComputerPointer(driver, registry, settings.pointer)
-        keyboard = ComputerKeyboard(driver, registry, settings.keyboard)
-        windows = ComputerWindows(driver, registry)
+        pointer = ComputerPointer(driver, resolver, settings.pointer)
+        keyboard = ComputerKeyboard(driver, resolver, settings.keyboard)
+        windows = ComputerWindows(driver, resolver)
 
-        self._registry = registry
         self._handlers: dict[str, ComputerToolHandler] = {
             # read-only observation
-            "computer.capture": capture.capture,
-            "computer.pointer_position": observation.pointer_position,
             "computer.window_list": observation.window_list,
-            "computer.active_window": observation.active_window,
+            "computer.capture": capture.capture,
+            "computer.cursor_position": observation.cursor_position,
             # mutating input — every one of these requires approval
-            "computer.pointer_move": pointer.pointer_move,
             "computer.click": pointer.click,
             "computer.scroll": pointer.scroll,
             "computer.type_text": keyboard.type_text,
             "computer.press_key": keyboard.press_key,
             "computer.hotkey": keyboard.hotkey,
-            "computer.focus_window": windows.focus_window,
+            "computer.bring_to_front": windows.bring_to_front,
         }
         undeclared = sorted(set(self._handlers) - set(COMPUTER_TOOL_POLICY))
         if undeclared:
@@ -208,6 +209,15 @@ class ComputerToolGateway:
             # deliberately content-free: OS error text can embed absolute
             # paths, usernames, and window contents
             return _failure("computer_use_failed", "computer use failed", FailureCause.TOOL)
+
+    def close(self) -> None:
+        """Shut the driver down.
+
+        The gateway constructed the driver's transport, so the gateway is what
+        can release it. Without this the worker exits leaving an orphaned
+        driver process holding a stdio pipe.
+        """
+        self._driver.close()
 
     def _policy_for(self, tool: str) -> ComputerToolPolicy:
         if tool not in self._handlers:

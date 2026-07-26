@@ -13,7 +13,7 @@ list stays at two files and the boundary keeps its meaning:
 
     apps.worker.app
         -> build_computer_gateway(config)          # this module
-            -> McpStdioTransport / CuaDriverComputerDriver / SnapshotRegistry
+            -> McpStdioTransport / CuaDriverComputerDriver / TargetResolver
             -> ComputerToolGateway
 
 Config is primitives, not settings objects, so the module never imports
@@ -45,7 +45,6 @@ from friday.infrastructure.computer.keyboard import ComputerKeyboardSettings
 from friday.infrastructure.computer.mcp_stdio import McpStdioSettings, McpStdioTransport
 from friday.infrastructure.computer.models import DEFAULT_MAX_ELEMENTS
 from friday.infrastructure.computer.pointer import ComputerPointerSettings
-from friday.infrastructure.computer.snapshots import SnapshotRegistrySettings
 from friday.infrastructure.tools.computer_gateway import (
     ComputerToolGateway,
     ComputerToolGatewaySettings,
@@ -68,9 +67,7 @@ class ComputerGatewayConfig:
     timeout_seconds: float
     max_capture_bytes: int
     max_type_chars: int
-    max_scroll_delta: int
-    capture_ttl_seconds: float
-    max_snapshots: int
+    max_scroll_amount: int
     max_elements: int = DEFAULT_MAX_ELEMENTS
     telemetry_enabled: bool = False
 
@@ -103,13 +100,8 @@ def build_computer_gateway(config: ComputerGatewayConfig) -> ComputerToolGateway
             driver=driver,
             workspace_root=config.workspace_root,
             capture=ComputerCaptureSettings(max_elements=config.max_elements),
-            pointer=ComputerPointerSettings(max_scroll_delta=config.max_scroll_delta),
+            pointer=ComputerPointerSettings(max_scroll_amount=config.max_scroll_amount),
             keyboard=ComputerKeyboardSettings(max_type_chars=config.max_type_chars),
-            snapshots=SnapshotRegistrySettings(
-                ttl_seconds=config.capture_ttl_seconds,
-                max_snapshots=config.max_snapshots,
-                max_snapshots_per_run=min(config.max_snapshots, 8),
-            ),
             screenshots=ScreenshotStoreSettings(
                 workspace_root=config.workspace_root,
                 max_capture_bytes=config.max_capture_bytes,
@@ -138,7 +130,10 @@ def _build_driver(config: ComputerGatewayConfig) -> CuaDriverComputerDriver:
                 extra_env=_driver_environment(config),
             )
         ),
-        CuaDriverSettings(max_capture_bytes=config.max_capture_bytes),
+        CuaDriverSettings(
+            max_capture_bytes=config.max_capture_bytes,
+            max_elements=config.max_elements,
+        ),
     )
 
 

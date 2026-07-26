@@ -51,19 +51,36 @@ class ComputerActionRejected(ComputerUseError):
         super().__init__(message)
 
 
-class SnapshotNotFound(ComputerActionRejected):
-    code = "computer_snapshot_not_found"
+class WindowGone(ComputerActionRejected):
+    """The window the approved action names no longer exists.
+
+    Distinct from a driver failure on purpose: this one is actionable by Claude
+    — list the windows again and propose against something that is still there —
+    whereas a driver failure is not.
+    """
+
+    code = "computer_window_gone"
 
 
-class SnapshotExpired(ComputerActionRejected):
-    code = "computer_snapshot_expired"
+class TargetNotFound(ComputerActionRejected):
+    """The window is still there, but nothing in it matches the approved target.
+
+    The expected outcome when the desktop moved on between approval and
+    execution. It fails closed and says so, rather than clicking the nearest
+    thing that looked similar.
+    """
+
+    code = "computer_target_not_found"
 
 
-class SnapshotMismatch(ComputerActionRejected):
-    """The cited snapshot exists, but does not describe what the action claims:
-    another window, another run, or an element it never captured."""
+class TargetAmbiguous(ComputerActionRejected):
+    """More than one control in the window matches the approved target.
 
-    code = "computer_snapshot_mismatch"
+    Refused rather than resolved by picking the first: an approval for "the
+    button labelled Send" does not authorize a guess about which Send.
+    """
+
+    code = "computer_target_ambiguous"
 
 
 class TargetInvalid(ComputerActionRejected):

@@ -30,7 +30,7 @@ def main() -> None:
     try:
         worker.loop.serve_forever(shutdown_event, worker.processor)
     finally:
-        worker.engine.dispose()
+        worker.close()
 
 
 if __name__ == "__main__":

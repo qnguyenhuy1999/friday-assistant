@@ -1,144 +1,145 @@
-"""Pointer primitives: `computer.pointer_move`, `computer.click`, `computer.scroll`.
+"""Pointer primitives: `computer.click` and `computer.scroll`.
 
-All three are mutating, all three require approval, and all three reach the
-driver only after `resolve_fence` and `resolve_pointer_target` have proven the
-target lies inside a window Friday observed within the TTL, under this Run.
+Both are mutating, both require approval, and both reach the driver only after
+TargetResolver has captured the named window and found the approved target in
+what it just saw.
+
+There is no `pointer_move`. Pointer motion without a click has no faithful
+backing — the driver's cursor move is an overlay in window scope, and the real
+OS pointer only moves in desktop scope, a coordinate space Friday never
+captures and therefore cannot fence — and nothing needs it: click and scroll
+address their target directly. A tool that appeared to move the pointer while
+moving only an overlay would be a capability in the manifest that does not
+exist on the desktop.
 
 Two bounds here are policy rather than representation:
 
-* **Click count is 1 or 2.** A triple-click selects a paragraph and a
-  ten-click is a stress test; both are distinct interactions that should be
-  proposed and approved on their own terms, not reached by incrementing a
-  number in an already-approved action.
-* **Scroll delta has an operational ceiling.** `ScrollDelta` alone would allow
-  ±100000, which is the representable limit, not a sane one. A runtime ceiling
-  in the low thousands keeps a scroll a scroll instead of a fling to the end of
-  an unbounded feed.
+* **Click count is 1 or 2.** A triple-click selects a paragraph and a ten-click
+  is a stress test; both are distinct interactions that should be proposed and
+  approved on their own terms, not reached by incrementing a number in an
+  already-approved action.
+* **Scroll amount has an operational ceiling.** The model allows up to
+  MAX_SCROLL_AMOUNT notches; the configured runtime ceiling is expected to be
+  lower still, keeping a scroll a scroll rather than a fling to the end of an
+  unbounded feed.
 
-Each result reports the resolved absolute point. That is what makes the durable
-ToolInvocation answer "where did Friday actually click?" long after the
-snapshot it was fenced against has expired.
+A scroll may omit its target. That is the driver's own distinction, not a
+loosened fence: with a target it synthesizes a wheel event at that point, which
+is the only way to reach a nested scrollable region; without one it drives the
+window's focused scroller by keystroke. Both are legitimate, and forcing a
+spurious element for the second would be a worse fence than naming it.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from friday.application.errors import ToolInputInvalid
 from friday.application.tool_gateway import ToolExecutionResult
 from friday.domain.json_value import JsonValue
 from friday.infrastructure.computer.context import ComputerToolContext
 from friday.infrastructure.computer.driver import ComputerDriver
+from friday.infrastructure.computer.json_shapes import action_json, driver_effect_json
 from friday.infrastructure.computer.models import (
+    DEFAULT_SCROLL_AMOUNT,
     MAX_CLICK_COUNT,
+    MAX_SCROLL_AMOUNT,
     MIN_CLICK_COUNT,
     PointerButton,
-    PointerTarget,
-    ScrollDelta,
+    ScrollCommand,
+    ScrollDirection,
+    ScrollGranularity,
 )
-from friday.infrastructure.computer.snapshots import SnapshotRegistry
 from friday.infrastructure.computer.targets import (
-    FENCE_FIELDS,
+    IDENTITY_FIELDS,
     TARGET_FIELDS,
-    resolve_fence,
-    resolve_pointer_target,
+    TargetResolver,
 )
 from friday.infrastructure.computer.tool_input import (
-    bounded_signed_int,
+    enum_value,
     optional_bounded_int,
     parse_object,
 )
 
-DEFAULT_MAX_SCROLL_DELTA = 5_000
+DEFAULT_MAX_SCROLL_AMOUNT = 10
+"""Runtime ceiling on notches per scroll. Below the model's MAX_SCROLL_AMOUNT
+on purpose: the model bound stops an absurd value being representable, this one
+is the operator's actual budget."""
 
-_POINTER_MOVE_FIELDS = FENCE_FIELDS | TARGET_FIELDS
-_CLICK_FIELDS = _POINTER_MOVE_FIELDS | {"button", "count"}
-_SCROLL_FIELDS = _POINTER_MOVE_FIELDS | {"dx", "dy"}
+_ADDRESSED_FIELDS = IDENTITY_FIELDS | TARGET_FIELDS
+_CLICK_FIELDS = _ADDRESSED_FIELDS | {"button", "count"}
+_SCROLL_FIELDS = _ADDRESSED_FIELDS | {"direction", "amount", "by"}
+
+_BUTTONS = tuple(button.value for button in PointerButton)
+_DIRECTIONS = tuple(direction.value for direction in ScrollDirection)
+_GRANULARITIES = tuple(granularity.value for granularity in ScrollGranularity)
 
 
 @dataclass(frozen=True, slots=True)
 class ComputerPointerSettings:
-    max_scroll_delta: int = DEFAULT_MAX_SCROLL_DELTA
+    max_scroll_amount: int = DEFAULT_MAX_SCROLL_AMOUNT
 
     def __post_init__(self) -> None:
-        if self.max_scroll_delta < 1:
-            raise ValueError("ComputerPointerSettings.max_scroll_delta must be positive")
+        if self.max_scroll_amount < 1 or self.max_scroll_amount > MAX_SCROLL_AMOUNT:
+            raise ValueError(
+                "ComputerPointerSettings.max_scroll_amount must be between 1 "
+                f"and {MAX_SCROLL_AMOUNT}"
+            )
 
 
 class ComputerPointer:
     def __init__(
         self,
         driver: ComputerDriver,
-        registry: SnapshotRegistry,
+        resolver: TargetResolver,
         settings: ComputerPointerSettings | None = None,
     ) -> None:
         self._driver = driver
-        self._registry = registry
+        self._resolver = resolver
         self._settings = settings or ComputerPointerSettings()
-
-    def pointer_move(
-        self, tool_input: JsonValue, context: ComputerToolContext
-    ) -> ToolExecutionResult:
-        target = self._fenced_target(tool_input, context, allowed=_POINTER_MOVE_FIELDS)
-        self._driver.move_pointer(target)
-        return _target_result(target)
 
     def click(self, tool_input: JsonValue, context: ComputerToolContext) -> ToolExecutionResult:
         values = parse_object(tool_input, allowed=_CLICK_FIELDS)
-        button = _button(values)
+        button = PointerButton(enum_value(values, "button", allowed=_BUTTONS, default="left"))
         count = optional_bounded_int(
             values, "count", maximum=MAX_CLICK_COUNT, default=MIN_CLICK_COUNT
         )
-        target = self._resolve(values, context)
-        self._driver.click(target, button=button, count=count)
-        return _target_result(target, button=button.value, count=count)
+        snapshot, target = self._resolver.resolve_addressed(values, now=context.now)
+        result = self._driver.click(target, button=button, count=count)
+        return ToolExecutionResult.succeeded(
+            action_json(
+                snapshot,
+                target,
+                button=button.value,
+                count=count,
+                **driver_effect_json(result.effect, result.verified),
+            )
+        )
 
     def scroll(self, tool_input: JsonValue, context: ComputerToolContext) -> ToolExecutionResult:
         values = parse_object(tool_input, allowed=_SCROLL_FIELDS)
-        ceiling = self._settings.max_scroll_delta
-        dx = bounded_signed_int(values, "dx", maximum=ceiling)
-        dy = bounded_signed_int(values, "dy", maximum=ceiling)
-        if dx == 0 and dy == 0:
-            raise ToolInputInvalid("at least one of 'dx' or 'dy' must be non-zero")
-        target = self._resolve(values, context)
-        self._driver.scroll(target, delta=ScrollDelta(dx=dx, dy=dy))
-        return _target_result(target, dx=dx, dy=dy)
-
-    def _fenced_target(
-        self,
-        tool_input: JsonValue,
-        context: ComputerToolContext,
-        *,
-        allowed: frozenset[str] | set[str],
-    ) -> PointerTarget:
-        values = parse_object(tool_input, allowed=frozenset(allowed))
-        return self._resolve(values, context)
-
-    def _resolve(self, values: dict[str, JsonValue], context: ComputerToolContext) -> PointerTarget:
-        snapshot = resolve_fence(
-            values, registry=self._registry, run_scope=context.run_scope, now=context.now
+        command = ScrollCommand(
+            direction=ScrollDirection(enum_value(values, "direction", allowed=_DIRECTIONS)),
+            amount=optional_bounded_int(
+                values,
+                "amount",
+                maximum=self._settings.max_scroll_amount,
+                # the driver's own default, clamped in case the operator
+                # configured a ceiling below it — never the ceiling itself,
+                # which would turn an omitted field into the largest scroll
+                # allowed
+                default=min(DEFAULT_SCROLL_AMOUNT, self._settings.max_scroll_amount),
+            ),
+            by=ScrollGranularity(enum_value(values, "by", allowed=_GRANULARITIES, default="line")),
         )
-        return resolve_pointer_target(snapshot, values)
-
-
-def _button(values: dict[str, JsonValue]) -> PointerButton:
-    """A closed enum, not a passthrough: an unrecognized button name must be a
-    refusal, never something the driver gets to interpret."""
-    raw = values.get("button", PointerButton.LEFT.value)
-    if not isinstance(raw, str):
-        raise ToolInputInvalid("'button' must be a string")
-    try:
-        return PointerButton(raw.strip().lower())
-    except ValueError:
-        allowed = sorted(button.value for button in PointerButton)
-        raise ToolInputInvalid(f"'button' must be one of {allowed}") from None
-
-
-def _target_result(target: PointerTarget, **extra: JsonValue) -> ToolExecutionResult:
-    output: dict[str, JsonValue] = {
-        "window_id": target.window_id,
-        "x": target.point.x,
-        "y": target.point.y,
-    }
-    output.update(extra)
-    return ToolExecutionResult.succeeded(output)
+        snapshot, target = self._resolver.resolve_any(values, now=context.now)
+        result = self._driver.scroll(target, command=command)
+        return ToolExecutionResult.succeeded(
+            action_json(
+                snapshot,
+                target,
+                direction=command.direction.value,
+                amount=command.amount,
+                by=command.by.value,
+                **driver_effect_json(result.effect, result.verified),
+            )
+        )

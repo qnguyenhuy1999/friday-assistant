@@ -20,7 +20,7 @@ from friday.application.tool_gateway import ArtifactCandidate, ToolExecutionResu
 from friday.domain.artifact import ArtifactKind
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.json_value import JsonValue
-from friday.infrastructure.tools.workspace_paths import (
+from friday.infrastructure.workspace_paths import (
     resolve_workspace_path,
     to_workspace_relative,
 )

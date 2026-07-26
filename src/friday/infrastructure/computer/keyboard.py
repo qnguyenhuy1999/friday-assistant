@@ -4,9 +4,9 @@ The keyboard is the widest computer-use surface, because a key sequence can
 reach things no click can: a shell, a login prompt, a system dialog. So the
 allowlists here are closed on every axis at once.
 
-* **Text** is bounded, control-free, and screened for credential shapes. The
-  screen is defence in depth — Friday's real position is that it never puts a
-  credential where Claude could propose typing it, and there is no
+* **Text** is literal, bounded, control-free, and screened for credential
+  shapes. The screen is defence in depth — Friday's real position is that it
+  never puts a credential where Claude could propose typing it, and there is no
   secret-retrieval path in the system to reach one.
 * **Keys** come from `ALLOWED_KEYS` — the named set plus single `[a-z0-9]`
   characters. No raw keycodes, ever: a keycode is an unreviewable integer that
@@ -16,6 +16,26 @@ allowlists here are closed on every axis at once.
   `["shift","meta"]` and `["meta","shift"]` are the same combination, and
   substring matching on a rendered string would miss one spelling or refuse an
   innocent superset.
+
+`type_text` inserts text and nothing else: no newline, no tab. Both were
+previously allowed as "legitimate in typed prose", and both are really key
+*events* wearing text's clothing. A newline in a chat composer sends the
+message; in a terminal it runs the line; in a form it may submit. That makes the
+character a submit action approved as if it were content — the approval said
+"type this", the effect was "type this and commit it". Enter and Tab are
+available as `press_key`, where they are proposed and approved as the actions
+they are. The driver draws the same line: its text insert is documented as
+carrying no special keys.
+
+`type_text` also requires a target. "Type 'hello' into the field labelled
+Search" is an approvable sentence; "type 'hello' somewhere in Mail" is not, and
+the driver's own guidance is to direct a write at a specific field rather than
+at whatever happens to hold focus.
+
+`press_key` and `hotkey` may address the window as a whole. `escape` and
+`cmd+c` are directed at a window, not at a control, and demanding a spurious
+element for them would push Claude into naming an arbitrary one to satisfy the
+schema.
 
 The deny-list covers session-level destruction: force quit, log out, lock,
 shut down, restart. It is not a claim of completeness — a platform can always
@@ -34,14 +54,18 @@ from friday.domain.json_value import JsonValue
 from friday.infrastructure.computer.context import ComputerToolContext
 from friday.infrastructure.computer.driver import ComputerDriver
 from friday.infrastructure.computer.errors import HotkeyRejected, TextRejected
+from friday.infrastructure.computer.json_shapes import action_json, driver_effect_json
 from friday.infrastructure.computer.models import (
     ALLOWED_KEYS,
     KeyModifier,
     KeyName,
     Keystroke,
 )
-from friday.infrastructure.computer.snapshots import SnapshotRegistry
-from friday.infrastructure.computer.targets import FENCE_FIELDS, resolve_fence
+from friday.infrastructure.computer.targets import (
+    IDENTITY_FIELDS,
+    TARGET_FIELDS,
+    TargetResolver,
+)
 from friday.infrastructure.computer.tool_input import (
     parse_object,
     required_field,
@@ -53,14 +77,9 @@ DEFAULT_MAX_TYPE_CHARS = 4_096
 MAX_MODIFIERS = len(KeyModifier)
 MAX_KEY_CHARS = 32
 
-_TYPE_TEXT_FIELDS = FENCE_FIELDS | {"text"}
-_PRESS_KEY_FIELDS = FENCE_FIELDS | {"key"}
-_HOTKEY_FIELDS = FENCE_FIELDS | {"key", "modifiers"}
-
-_ALLOWED_TEXT_CONTROLS = frozenset({"\t", "\n"})
-"""Tab and newline are legitimate in typed prose — a form field, a message
-body. Every other control character is either meaningless to type or a way to
-smuggle terminal behaviour into what looks like plain text."""
+_TYPE_TEXT_FIELDS = IDENTITY_FIELDS | TARGET_FIELDS | {"text"}
+_PRESS_KEY_FIELDS = IDENTITY_FIELDS | TARGET_FIELDS | {"key"}
+_HOTKEY_FIELDS = IDENTITY_FIELDS | TARGET_FIELDS | {"key", "modifiers"}
 
 DENIED_HOTKEYS: frozenset[Keystroke] = frozenset(
     {
@@ -104,51 +123,61 @@ class ComputerKeyboard:
     def __init__(
         self,
         driver: ComputerDriver,
-        registry: SnapshotRegistry,
+        resolver: TargetResolver,
         settings: ComputerKeyboardSettings | None = None,
     ) -> None:
         self._driver = driver
-        self._registry = registry
+        self._resolver = resolver
         self._settings = settings or ComputerKeyboardSettings()
 
     def type_text(self, tool_input: JsonValue, context: ComputerToolContext) -> ToolExecutionResult:
         values = parse_object(tool_input, allowed=_TYPE_TEXT_FIELDS)
         text = _validated_text(values, max_chars=self._settings.max_type_chars)
-        window_id = self._fenced_window(values, context)
-        self._driver.type_text(text, window_id=window_id)
+        snapshot, target = self._resolver.resolve_addressed(values, now=context.now)
+        result = self._driver.type_text(text, target=target)
         # the typed text is already in the approved ToolCall and the durable
         # ToolInvocation input; echoing it again in the output would duplicate
         # it into the brain's context for no benefit
-        return ToolExecutionResult.succeeded({"window_id": window_id, "chars": len(text)})
+        return ToolExecutionResult.succeeded(
+            action_json(
+                snapshot,
+                target,
+                chars=len(text),
+                **driver_effect_json(result.effect, result.verified),
+            )
+        )
 
     def press_key(self, tool_input: JsonValue, context: ComputerToolContext) -> ToolExecutionResult:
         values = parse_object(tool_input, allowed=_PRESS_KEY_FIELDS)
         keystroke = _keystroke(values, modifiers=())
-        window_id = self._fenced_window(values, context)
-        self._driver.press_keystroke(keystroke, window_id=window_id)
-        return ToolExecutionResult.succeeded({"window_id": window_id, "key": keystroke.key})
+        snapshot, target = self._resolver.resolve_any(values, now=context.now)
+        result = self._driver.press_key(keystroke, target=target)
+        return ToolExecutionResult.succeeded(
+            action_json(
+                snapshot,
+                target,
+                key=keystroke.key,
+                **driver_effect_json(result.effect, result.verified),
+            )
+        )
 
     def hotkey(self, tool_input: JsonValue, context: ComputerToolContext) -> ToolExecutionResult:
         values = parse_object(tool_input, allowed=_HOTKEY_FIELDS)
         keystroke = _keystroke(values, modifiers=_modifiers(values))
         if keystroke in DENIED_HOTKEYS:
             raise HotkeyRejected("this key combination is not permitted")
-        window_id = self._fenced_window(values, context)
-        self._driver.press_keystroke(keystroke, window_id=window_id)
+        snapshot, target = self._resolver.resolve_any(values, now=context.now)
+        result = self._driver.hotkey(keystroke, target=target)
         return ToolExecutionResult.succeeded(
-            {
-                "window_id": window_id,
-                "key": keystroke.key,
-                "modifiers": [modifier.value for modifier in keystroke.modifiers],
-                "combination": keystroke.combination,
-            }
+            action_json(
+                snapshot,
+                target,
+                key=keystroke.key,
+                modifiers=[modifier.value for modifier in keystroke.modifiers],
+                combination=keystroke.combination,
+                **driver_effect_json(result.effect, result.verified),
+            )
         )
-
-    def _fenced_window(self, values: dict[str, JsonValue], context: ComputerToolContext) -> str:
-        snapshot = resolve_fence(
-            values, registry=self._registry, run_scope=context.run_scope, now=context.now
-        )
-        return snapshot.window.window_id
 
 
 def _validated_text(values: dict[str, JsonValue], *, max_chars: int) -> str:
@@ -162,16 +191,19 @@ def _validated_text(values: dict[str, JsonValue], *, max_chars: int) -> str:
         raise TextRejected("the requested text exceeds the configured typing limit")
     if "\x00" in text:
         raise TextRejected("the requested text contains a NUL byte")
-    if any(_is_disallowed_control(char) for char in text):
-        raise TextRejected("the requested text contains disallowed control characters")
+    if any(_is_control(char) for char in text):
+        raise TextRejected(
+            "the requested text contains control characters; "
+            "use computer.press_key for 'enter' or 'tab'"
+        )
     if contains_secret_shape(text):
         raise TextRejected("the requested text looks like it contains a credential")
     return text
 
 
-def _is_disallowed_control(char: str) -> bool:
-    if char in _ALLOWED_TEXT_CONTROLS:
-        return False
+def _is_control(char: str) -> bool:
+    """No exceptions. A newline or tab inside typed text is a key event that an
+    approval for content would silently authorize as an action."""
     return char < " " or char == "\x7f"
 
 

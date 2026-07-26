@@ -31,7 +31,7 @@ from friday.infrastructure.tools.computer_composition import (
     ComputerGatewayConfig,
     check_computer_driver,
 )
-from friday.infrastructure.tools.workspace_paths import resolve_workspace_root
+from friday.infrastructure.workspace_paths import resolve_workspace_root
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,9 +153,7 @@ def _check_computer_use(runtime: RuntimeSettings) -> tuple[str, bool, str]:
                 timeout_seconds=settings.timeout_seconds,
                 max_capture_bytes=settings.max_capture_bytes,
                 max_type_chars=settings.max_type_chars,
-                max_scroll_delta=settings.max_scroll_delta,
-                capture_ttl_seconds=settings.capture_ttl_seconds,
-                max_snapshots=settings.max_snapshots,
+                max_scroll_amount=settings.max_scroll_amount,
                 max_elements=settings.max_elements,
                 telemetry_enabled=settings.telemetry_enabled,
             )

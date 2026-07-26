@@ -60,6 +60,51 @@ def required_str(values: dict[str, JsonValue], name: str, *, max_chars: int) -> 
     return value.strip()
 
 
+def required_bounded_int(
+    values: dict[str, JsonValue], name: str, *, maximum: int, minimum: int = 1
+) -> int:
+    """Read a required integer inside `minimum..maximum`.
+
+    Used for the identity fields (`pid`, `window_id`), which are integers in
+    the driver's own contract. Absent is an error rather than a default,
+    because there is no window Friday could sensibly assume.
+    """
+    value = required_field(values, name)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ToolInputInvalid(f"{name} must be an integer")
+    if value < minimum or value > maximum:
+        raise ToolInputInvalid(f"{name} must be an integer between {minimum} and {maximum}")
+    return value
+
+
+def required_nested_object(
+    values: dict[str, JsonValue], name: str, *, allowed: frozenset[str]
+) -> dict[str, JsonValue]:
+    """Read a nested object, rejecting unknown keys exactly as at the top level."""
+    value = required_field(values, name)
+    if not isinstance(value, dict):
+        raise ToolInputInvalid(f"{name} must be an object")
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ToolInputInvalid(f"unknown field(s) in {name}: {unknown}")
+    return value
+
+
+def enum_value(
+    values: dict[str, JsonValue], name: str, *, allowed: tuple[str, ...], default: str | None = None
+) -> str:
+    """Read a string from a closed set, never passing an unknown one through."""
+    raw = values.get(name, default)
+    if raw is None:
+        raise ToolInputInvalid(f"missing required input field: {name}")
+    if not isinstance(raw, str):
+        raise ToolInputInvalid(f"{name} must be a string")
+    normalized = raw.strip().lower()
+    if normalized not in allowed:
+        raise ToolInputInvalid(f"{name} must be one of {sorted(allowed)}")
+    return normalized
+
+
 def optional_bool(values: dict[str, JsonValue], name: str, *, default: bool) -> bool:
     value = values.get(name, default)
     if not isinstance(value, bool):

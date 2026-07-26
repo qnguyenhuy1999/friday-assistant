@@ -69,7 +69,13 @@ class McpTransport(Protocol):
 
     def list_tool_names(self) -> tuple[str, ...]: ...
 
-    def call_tool(self, name: str, arguments: Mapping[str, JsonValue]) -> JsonValue: ...
+    def call_tool(
+        self,
+        name: str,
+        arguments: Mapping[str, JsonValue],
+        *,
+        require_payload: bool = True,
+    ) -> JsonValue: ...
 
     def close(self) -> None: ...
 
@@ -183,12 +189,28 @@ class McpStdioTransport:
             names.append(name)
         return tuple(names)
 
-    def call_tool(self, name: str, arguments: Mapping[str, JsonValue]) -> JsonValue:
+    def call_tool(
+        self,
+        name: str,
+        arguments: Mapping[str, JsonValue],
+        *,
+        require_payload: bool = True,
+    ) -> JsonValue:
         """Invoke one MCP tool and return its decoded payload.
 
         Private by convention and by boundary: the driver adapter is the only
         caller, and it only ever passes names from its own fixed mapping. No
         layer above can reach a tool Friday did not declare.
+
+        `structuredContent` is the payload when present. The text fallback
+        exists for tools that answer in a JSON text block instead — but an MCP
+        result's text block is a *human* summary by convention, so failing to
+        parse it is not evidence that the call failed.
+
+        `require_payload=False` says exactly that, and is used for mutating
+        calls: `isError` still raises, but a reply carrying only a summary line
+        returns None rather than raising. A click that already moved the desktop
+        must not be reported as a driver failure because its receipt was prose.
         """
         result = self._request("tools/call", {"name": name, "arguments": dict(arguments)})
         if not isinstance(result, dict):
@@ -199,7 +221,9 @@ class McpStdioTransport:
         structured = result.get("structuredContent")
         if structured is not None:
             return structured
-        return _decode_text_content(result.get("content"))
+        if require_payload:
+            return _decode_text_content(result.get("content"))
+        return _decode_text_content_or_none(result.get("content"))
 
     # --- JSON-RPC ---------------------------------------------------------
 
@@ -326,3 +350,27 @@ def _decode_text_content(content: JsonValue) -> JsonValue:
             raise ComputerDriverFailed("the computer-use driver returned non-JSON content") from exc
         return decoded
     raise ComputerDriverFailed("the computer-use driver returned no usable content")
+
+
+def _decode_text_content_or_none(content: JsonValue) -> JsonValue:
+    """Decode a JSON text block if there is one, otherwise report nothing.
+
+    The lenient counterpart used for mutations. "No structured detail" and "the
+    action failed" are different outcomes, and only the transport can tell them
+    apart — by the time this returns, the side effect has either happened or
+    raised.
+    """
+    if not isinstance(content, list):
+        return None
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if not isinstance(text, str):
+            continue
+        try:
+            decoded: JsonValue = json.loads(text)
+        except ValueError:
+            continue
+        return decoded
+    return None

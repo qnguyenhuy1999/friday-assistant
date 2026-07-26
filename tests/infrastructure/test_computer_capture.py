@@ -282,6 +282,46 @@ def test_capture_without_a_screenshot_produces_no_artifact(harness: Harness) -> 
 
     assert result.artifacts == ()
     assert output_of(result)["screenshot"] is None
+
+
+# --- workspace confinement ------------------------------------------------
+#
+# `computer.capture` needs no approval, so its filesystem write is the one
+# desktop-triggered mutation Claude can reach unattended. It must obey the same
+# containment rule as every other workspace write: reject `..`, resolve
+# symlinks, and require the resolved target to stay inside the resolved root.
+# A reported location of `.friday/artifacts/computer/...` must mean the bytes
+# are actually there.
+
+
+def test_capture_rejects_artifact_root_symlink_escape(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (workspace / ".friday" / "artifacts").mkdir(parents=True)
+    (workspace / ".friday" / "artifacts" / "computer").symlink_to(outside, target_is_directory=True)
+    harness = build_harness(workspace)
+
+    result = harness.run("computer.capture")
+
+    assert failure_code(result) == "computer_use_failed"
+    assert list(outside.rglob("*")) == []
+
+
+def test_capture_rejects_an_intermediate_symlink_escape(tmp_path: Path) -> None:
+    """Containment cannot be judged one component at a time: the escape here is
+    two levels above the directory capture itself creates."""
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    workspace.mkdir()
+    (workspace / ".friday").symlink_to(outside, target_is_directory=True)
+    harness = build_harness(workspace)
+
+    result = harness.run("computer.capture")
+
+    assert failure_code(result) == "computer_use_failed"
+    assert list(outside.rglob("*")) == []
     assert list(harness.workspace.rglob("*.png")) == []
 
 

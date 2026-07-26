@@ -2,16 +2,32 @@
 over MCP stdio.
 
 This is a transport, not a policy layer. By the time a method here is called,
-the gateway has already resolved a snapshot, proven the target lies inside a
-captured window, screened the text, and checked the hotkey deny-list. The
-adapter's job is to translate typed values into one MCP tool call and translate
-the reply back into typed values — and to refuse anything that does not
-translate cleanly.
+the gateway has already captured the window, proven the approved target still
+resolves in what it just saw, screened the text, and checked the hotkey
+deny-list. The adapter's job is to translate typed values into one MCP tool call
+and translate the reply back into typed values — and to refuse anything that
+does not translate cleanly.
 
 **cua-driver is not a Claude tool.** Claude never sees this MCP server, cannot
 name it, and cannot reach it: the only caller is ComputerToolGateway, and the
-only tools invoked are the ten in `CuaToolNames`. There is deliberately no
+only tools invoked are the nine in `CuaToolNames`. There is deliberately no
 generic `call(action, payload)` here for a higher layer to discover.
+
+The mapping follows cua-driver's published MCP surface rather than a plausible
+guess at it, and the differences are load-bearing:
+
+* `pid` and `window_id` are **integers**, and both are required to address a
+  window. `window_id` alone is not addressable.
+* Elements are addressed by `element_index` (plus `element_token`, an opaque
+  per-snapshot handle the driver can recognize as stale), never by a name Friday
+  invented.
+* Action coordinates are **window-local screenshot pixels**, read straight off
+  the image `get_window_state` returned — not desktop coordinates. The driver
+  undoes Retina scaling internally, so the pixel read is the pixel clicked.
+* Window metadata comes from `list_windows`; `get_window_state` walks one
+  window's contents. Two calls, two questions.
+* `press_key` and `hotkey` are separate operations, so a keystroke with
+  modifiers routes to a different tool than one without.
 
 Driver replies are untrusted infrastructure input, exactly like the desktop text
 inside them. Every field is read with an explicit type check and handed to a
@@ -19,6 +35,12 @@ value object that bounds it; a reply that does not fit raises
 ComputerDriverFailed with a constant message rather than being coerced into
 something plausible. Image bytes are bounded *before* base64 decoding, so an
 oversized capture cannot be materialized in memory just to be rejected after.
+
+Action replies are read leniently on purpose. cua wraps every result in a text
+summary and only some tools add structured content, so a click that landed must
+not be reported as a driver failure merely because its reply carried no JSON
+body. Reads stay strict: an observation Friday cannot parse is an observation it
+does not have.
 
 Tool names are a fixed, reviewable default table rather than free-form
 configuration, and `health()` verifies every one of them against `tools/list`
@@ -44,43 +66,82 @@ from friday.infrastructure.computer.errors import (
 )
 from friday.infrastructure.computer.mcp_stdio import McpTransport
 from friday.infrastructure.computer.models import (
+    ActionTarget,
+    AddressedTarget,
     CapturedElement,
     CaptureRequest,
     CaptureResult,
     DriverResult,
+    ElementTarget,
     Keystroke,
+    PixelFrame,
+    PixelTarget,
     PointerButton,
-    PointerTarget,
     ScreenBounds,
     ScreenPoint,
     Screenshot,
-    ScrollDelta,
+    ScrollCommand,
     WindowInfo,
+    WindowRef,
+    WindowTarget,
 )
 
 DEFAULT_MAX_CAPTURE_BYTES = 8_000_000
 _BASE64_EXPANSION = 4 / 3
 
+_MODIFIER_NAMES: Final = {
+    "meta": "cmd",
+    "ctrl": "ctrl",
+    "alt": "option",
+    "shift": "shift",
+}
+"""Friday's modifier vocabulary onto cua's. `meta` is `cmd` and `alt` is
+`option`: a closed mapping, so an unmapped modifier is a KeyError here rather
+than a string the driver silently ignores."""
+
+_KEY_NAMES: Final = {
+    "enter": "return",
+    "escape": "escape",
+    "tab": "tab",
+    "space": "space",
+    "backspace": "delete",
+    "delete": "forwarddelete",
+    "arrow_up": "up",
+    "arrow_down": "down",
+    "arrow_left": "left",
+    "arrow_right": "right",
+    "home": "home",
+    "end": "end",
+    "page_up": "pageup",
+    "page_down": "pagedown",
+}
+"""Friday's named keys onto cua's. Single `[a-z0-9]` characters pass through
+unchanged; anything else must appear here or the call is refused rather than
+sent as a name the driver may not recognize.
+
+`backspace` maps to `delete` and `delete` to `forwarddelete`, following the
+macOS convention the driver uses: the key labelled Delete on an Apple keyboard
+deletes backwards."""
+
 
 @dataclass(frozen=True, slots=True)
 class CuaToolNames:
-    """The assumed cua-driver MCP surface, one slot per ComputerDriver method.
+    """The cua-driver MCP surface Friday uses, one slot per driver operation.
 
     Overridable so a differently-named build can be adapted without a code
-    change — but only these ten slots exist, so no override can widen what
+    change — but only these nine slots exist, so no override can widen what
     Friday is able to invoke.
     """
 
-    capture: str = "capture_window"
-    pointer_position: str = "pointer_position"
     list_windows: str = "list_windows"
-    active_window: str = "active_window"
-    move_pointer: str = "move_pointer"
+    window_state: str = "get_window_state"
+    cursor_position: str = "get_cursor_position"
     click: str = "click"
     scroll: str = "scroll"
     type_text: str = "type_text"
-    press_keystroke: str = "press_key"
-    focus_window: str = "focus_window"
+    press_key: str = "press_key"
+    hotkey: str = "hotkey"
+    bring_to_front: str = "bring_to_front"
 
     def all_names(self) -> tuple[str, ...]:
         return tuple(getattr(self, item.name) for item in fields(self))
@@ -89,11 +150,14 @@ class CuaToolNames:
 @dataclass(frozen=True, slots=True)
 class CuaDriverSettings:
     max_capture_bytes: int = DEFAULT_MAX_CAPTURE_BYTES
+    max_elements: int = 2_000
     tool_names: CuaToolNames = CuaToolNames()
 
     def __post_init__(self) -> None:
         if self.max_capture_bytes < 1:
             raise ValueError("CuaDriverSettings.max_capture_bytes must be positive")
+        if self.max_elements < 1:
+            raise ValueError("CuaDriverSettings.max_elements must be positive")
 
 
 class CuaDriverComputerDriver:
@@ -134,103 +198,129 @@ class CuaDriverComputerDriver:
 
     # --- read-only observation -------------------------------------------
 
-    def capture(self, request: CaptureRequest) -> CaptureResult:
-        payload = self._call(
-            self._settings.tool_names.capture,
-            {
-                "window_id": request.window_id,
-                "include_screenshot": request.include_screenshot,
-                "include_elements": request.include_elements,
-                "max_elements": request.max_elements,
-            },
-        )
-        body = _object(payload)
-        window = _window(_object(_required(body, "window")))
-        elements = tuple(
-            _element(_object(entry)) for entry in _array(body.get("elements", []), "elements")
-        )
-        screenshot = self._screenshot(body.get("screenshot"))
-        return CaptureResult(window=window, elements=elements, screenshot=screenshot)
-
-    def pointer_position(self) -> ScreenPoint:
-        payload = self._call(self._settings.tool_names.pointer_position, {})
-        return _point(_object(payload))
-
     def list_windows(self) -> tuple[WindowInfo, ...]:
-        payload = self._call(self._settings.tool_names.list_windows, {})
+        payload = self._read(self._settings.tool_names.list_windows, {})
         body = _object(payload)
         return tuple(
             _window(_object(entry)) for entry in _array(_required(body, "windows"), "windows")
         )
 
-    def active_window(self) -> WindowInfo | None:
-        payload = self._call(self._settings.tool_names.active_window, {})
-        window = _object(payload).get("window")
-        if window is None:
-            return None
-        return _window(_object(window))
+    def find_window(self, ref: WindowRef) -> WindowInfo | None:
+        """Filter the listing by pid, then match the window id.
+
+        The pid filter is the driver's own parameter, so this stays one narrow
+        read rather than a full desktop enumeration.
+        """
+        payload = self._read(self._settings.tool_names.list_windows, {"pid": ref.pid})
+        body = _object(payload)
+        for entry in _array(_required(body, "windows"), "windows"):
+            window = _window(_object(entry))
+            if window.ref == ref:
+                return window
+        return None
+
+    def capture(self, request: CaptureRequest) -> CaptureResult:
+        payload = self._read(
+            self._settings.tool_names.window_state,
+            {
+                "pid": request.ref.pid,
+                "window_id": request.ref.window_id,
+                "include_screenshot": request.include_screenshot,
+                "max_elements": min(request.max_elements, self._settings.max_elements),
+            },
+        )
+        body = _object(payload)
+        elements = tuple(
+            _element(_object(entry)) for entry in _array(body.get("elements", []), "elements")
+        )
+        return CaptureResult(elements=elements, screenshot=self._screenshot(body.get("screenshot")))
+
+    def cursor_position(self) -> ScreenPoint:
+        payload = self._read(self._settings.tool_names.cursor_position, {})
+        return _point(_object(payload))
 
     # --- mutating input ---------------------------------------------------
 
-    def move_pointer(self, target: PointerTarget) -> DriverResult:
-        return self._mutate(self._settings.tool_names.move_pointer, _target_arguments(target))
-
-    def click(self, target: PointerTarget, *, button: PointerButton, count: int) -> DriverResult:
-        return self._mutate(
+    def click(self, target: AddressedTarget, *, button: PointerButton, count: int) -> DriverResult:
+        return self._act(
             self._settings.tool_names.click,
             {**_target_arguments(target), "button": button.value, "count": count},
         )
 
-    def scroll(self, target: PointerTarget, *, delta: ScrollDelta) -> DriverResult:
-        return self._mutate(
+    def scroll(self, target: ActionTarget, *, command: ScrollCommand) -> DriverResult:
+        return self._act(
             self._settings.tool_names.scroll,
-            {**_target_arguments(target), "dx": delta.dx, "dy": delta.dy},
-        )
-
-    def type_text(self, text: str, *, window_id: str | None) -> DriverResult:
-        return self._mutate(
-            self._settings.tool_names.type_text, {"text": text, "window_id": window_id}
-        )
-
-    def press_keystroke(self, keystroke: Keystroke, *, window_id: str | None) -> DriverResult:
-        return self._mutate(
-            self._settings.tool_names.press_keystroke,
             {
-                "key": keystroke.key,
-                "modifiers": [modifier.value for modifier in keystroke.modifiers],
-                "window_id": window_id,
+                **_target_arguments(target),
+                "direction": command.direction.value,
+                "amount": command.amount,
+                "by": command.by.value,
             },
         )
 
-    def focus_window(self, window_id: str) -> DriverResult:
-        return self._mutate(self._settings.tool_names.focus_window, {"window_id": window_id})
+    def type_text(self, text: str, *, target: AddressedTarget) -> DriverResult:
+        return self._act(
+            self._settings.tool_names.type_text, {**_target_arguments(target), "text": text}
+        )
+
+    def press_key(self, keystroke: Keystroke, *, target: ActionTarget) -> DriverResult:
+        """A bare key press. Modifiers route to `hotkey` instead — they are
+        separate operations in the driver, not one call with a flag."""
+        return self._act(
+            self._settings.tool_names.press_key,
+            {**_target_arguments(target), "key": _key_name(keystroke.key)},
+        )
+
+    def hotkey(self, keystroke: Keystroke, *, target: ActionTarget) -> DriverResult:
+        """A combination, sent as `keys: [modifiers..., key]` — the driver's
+        documented order: modifiers first, exactly one non-modifier last."""
+        keys: list[JsonValue] = [_modifier_name(modifier.value) for modifier in keystroke.modifiers]
+        keys.append(_key_name(keystroke.key))
+        return self._act(
+            self._settings.tool_names.hotkey, {**_target_arguments(target), "keys": keys}
+        )
+
+    def bring_to_front(self, ref: WindowRef) -> DriverResult:
+        return self._act(
+            self._settings.tool_names.bring_to_front,
+            {"pid": ref.pid, "window_id": ref.window_id},
+        )
 
     # --- internals --------------------------------------------------------
 
-    def _call(self, name: str, arguments: Mapping[str, JsonValue]) -> JsonValue:
-        if not self._transport_ready():
-            raise ComputerDriverUnavailable("the computer-use driver is not running")
+    def _read(self, name: str, arguments: Mapping[str, JsonValue]) -> JsonValue:
+        """An observation. Strict: a reply Friday cannot parse is not data."""
+        self._ensure_running()
         return self._transport.call_tool(name, arguments)
 
-    def _transport_ready(self) -> bool:
+    def _act(self, name: str, arguments: Mapping[str, JsonValue]) -> DriverResult:
+        """A mutation. Lenient about the reply body, never about failure.
+
+        A tool error still raises — that path is the transport's. But a reply
+        that carried only a text summary means "no structured detail", not "the
+        action failed": the side effect has already happened, and reporting it
+        as a driver failure would tell the caller the opposite of the truth.
+        """
+        self._ensure_running()
+        payload = self._transport.call_tool(name, arguments, require_payload=False)
+        if not isinstance(payload, dict):
+            return DriverResult()
+        effect = payload.get("effect")
+        verified = payload.get("verified")
+        return DriverResult(
+            effect=effect if isinstance(effect, str) else None,
+            verified=verified if isinstance(verified, bool) else None,
+        )
+
+    def _ensure_running(self) -> None:
         """`start()` is idempotent, so calling it here costs nothing on the
         happy path and removes a class of "driver used before preflight" bugs."""
-        self._transport.start()
-        return True
-
-    def _mutate(self, name: str, arguments: Mapping[str, JsonValue]) -> DriverResult:
-        payload = self._call(name, arguments)
-        if payload is None:
-            return DriverResult()
-        body = _object(payload)
-        position = body.get("pointer_position")
-        window_id = body.get("window_id")
-        if window_id is not None and not isinstance(window_id, str):
-            raise ComputerDriverFailed("the computer-use driver returned a malformed window id")
-        return DriverResult(
-            pointer_position=_point(_object(position)) if position is not None else None,
-            window_id=window_id,
-        )
+        try:
+            self._transport.start()
+        except ComputerDriverUnavailable:
+            raise
+        except ComputerUseError as exc:
+            raise ComputerDriverUnavailable("the computer-use driver is not running") from exc
 
     def _screenshot(self, value: JsonValue) -> Screenshot | None:
         if value is None:
@@ -332,13 +422,34 @@ def _bounds(body: dict[str, JsonValue]) -> ScreenBounds:
     )
 
 
+def _frame(body: dict[str, JsonValue]) -> PixelFrame:
+    """An element frame, in window-local screenshot pixels.
+
+    The driver spells the extents `w`/`h` here rather than `width`/`height`, and
+    that difference is exactly why this is a separate reader from `_bounds`
+    instead of a shared one with optional keys.
+    """
+    return PixelFrame(
+        x=_int(body, "x"),
+        y=_int(body, "y"),
+        width=_int(body, "w"),
+        height=_int(body, "h"),
+    )
+
+
 def _window(body: dict[str, JsonValue]) -> WindowInfo:
+    try:
+        ref = WindowRef(pid=_int(body, "pid"), window_id=_int(body, "window_id"))
+    except ValueError as exc:
+        raise ComputerDriverFailed(_MALFORMED) from exc
     return WindowInfo(
-        window_id=_str(body, "window_id"),
+        ref=ref,
         title=_str(body, "title", default=""),
         bounds=_bounds(_object(_required(body, "bounds"))),
-        application=_str(body, "application", default=""),
-        is_active=_bool(body, "is_active", default=False),
+        app_name=_str(body, "app_name", default=""),
+        z_index=_int(body, "z_index") if "z_index" in body else 0,
+        is_on_screen=_bool(body, "is_on_screen", default=False),
+        on_current_space=_bool(body, "on_current_space", default=False),
     )
 
 
@@ -346,13 +457,68 @@ def _element(body: dict[str, JsonValue]) -> CapturedElement:
     label = body.get("label")
     if label is not None and not isinstance(label, str):
         raise ComputerDriverFailed(_MALFORMED)
-    return CapturedElement(
-        element_id=_int(body, "element_id"),
-        role=_str(body, "role"),
-        bounds=_bounds(_object(_required(body, "bounds"))),
-        label=label,
-    )
+    token = body.get("element_token")
+    if token is not None and not isinstance(token, str):
+        raise ComputerDriverFailed(_MALFORMED)
+    try:
+        return CapturedElement(
+            element_index=_int(body, "element_index"),
+            role=_str(body, "role"),
+            frame=_frame(_object(_required(body, "frame"))),
+            label=label,
+            element_token=token,
+        )
+    except ValueError as exc:
+        # a driver-supplied role, label, or token its own value object rejects
+        raise ComputerDriverFailed(_MALFORMED) from exc
 
 
-def _target_arguments(target: PointerTarget) -> dict[str, JsonValue]:
-    return {"x": target.point.x, "y": target.point.y, "window_id": target.window_id}
+def _target_arguments(target: ActionTarget) -> dict[str, JsonValue]:
+    """Render a resolved target as the driver's addressing arguments.
+
+    Element addressing carries `element_token` alongside the index when the
+    driver supplied one: the token lets the driver itself detect a superseded
+    snapshot and refuse, which is a second, independent check on the freshness
+    Friday already established by capturing moments earlier.
+    """
+    if isinstance(target, ElementTarget):
+        arguments: dict[str, JsonValue] = {
+            "pid": target.ref.pid,
+            "window_id": target.ref.window_id,
+            "element_index": target.element_index,
+        }
+        if target.element_token is not None:
+            arguments["element_token"] = target.element_token
+        return arguments
+    if isinstance(target, PixelTarget):
+        return {
+            "pid": target.ref.pid,
+            "window_id": target.ref.window_id,
+            "x": target.point.x,
+            "y": target.point.y,
+        }
+    if isinstance(target, WindowTarget):
+        return {"pid": target.ref.pid, "window_id": target.ref.window_id}
+    raise ComputerDriverFailed(_MALFORMED)  # pragma: no cover - union is exhaustive
+
+
+def _key_name(key: str) -> str:
+    """Map one Friday key name onto the driver's vocabulary.
+
+    Single characters pass through; named keys must be in the table. An unknown
+    name is a refusal rather than a passthrough, because a name the driver does
+    not recognize is a keystroke nobody can predict.
+    """
+    if len(key) == 1:
+        return key
+    mapped = _KEY_NAMES.get(key)
+    if mapped is None:
+        raise ComputerDriverFailed("the requested key has no driver equivalent")
+    return mapped
+
+
+def _modifier_name(modifier: str) -> str:
+    mapped = _MODIFIER_NAMES.get(modifier)
+    if mapped is None:  # pragma: no cover - KeyModifier is a closed enum
+        raise ComputerDriverFailed("the requested modifier has no driver equivalent")
+    return mapped

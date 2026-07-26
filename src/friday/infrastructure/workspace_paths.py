@@ -1,5 +1,13 @@
-"""Workspace path confinement — the single choke point every filesystem and
-process tool must pass through.
+"""Workspace path confinement — the single choke point every write into the
+workspace must pass through: filesystem tools, process working directories, and
+computer-use screenshot artifacts.
+
+Lives directly under `friday.infrastructure` rather than inside
+`friday.infrastructure.tools` because it is not a tools-package concern. The
+computer package is a leaf that must not reach sideways into sibling packages
+(see tests/architecture/test_phase13_boundaries.py), and duplicating the rule
+there would create a second containment implementation free to drift from this
+one.
 
 Strategy: reject absolute paths and any `..` component up front, then fully
 resolve symlinks (`Path.resolve`) and require the result to remain inside the

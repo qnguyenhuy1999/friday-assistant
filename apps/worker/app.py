@@ -68,6 +68,7 @@ from friday.infrastructure.tools.computer_composition import (
     ComputerGatewayConfig,
     build_computer_gateway,
 )
+from friday.infrastructure.tools.computer_gateway import ComputerToolGateway
 from friday.infrastructure.tools.gateway import (
     WorkspaceToolGateway,
     WorkspaceToolGatewaySettings,
@@ -81,6 +82,20 @@ class Worker:
     settings: WorkerSettings
     loop: WorkerLoop
     processor: AgentRunProcessor
+    computer_gateway: ComputerToolGateway | None = None
+
+    def close(self) -> None:
+        """Release everything the worker owns outside this process.
+
+        The database engine is not the only such resource once computer use is
+        enabled: the driver is a child process holding a stdio pipe, and a
+        worker that exits without closing it leaves it orphaned. Both are
+        released here so `main` has one shutdown call rather than a list that
+        silently falls behind.
+        """
+        if self.computer_gateway is not None:
+            self.computer_gateway.close()
+        self.engine.dispose()
 
 
 class _DisabledMemoryRetriever:
@@ -254,14 +269,18 @@ def _disabled_memory_stack() -> _MemoryStack:
     return _MemoryStack(_DisabledMemoryRetriever(), None, None, None)
 
 
-def _computer_gateway(runtime: RuntimeSettings) -> ToolGateway | None:
+def _computer_gateway(runtime: RuntimeSettings) -> ComputerToolGateway | None:
     """Build the opt-in computer-use gateway, or None when it is disabled.
 
     This composition root deliberately knows only three things: that computer
     use is another ToolGateway, that it is off by default, and that a broken
-    enabled configuration must stop startup. Drivers, MCP framing, snapshot
-    registries, and screenshot storage all stay behind build_computer_gateway —
+    enabled configuration must stop startup. Drivers, MCP framing, target
+    resolution, and screenshot storage all stay behind build_computer_gateway —
     see friday.infrastructure.tools.computer_composition.
+
+    The concrete type is returned rather than the ToolGateway protocol for one
+    reason: the worker has to be able to shut the driver process down, and
+    `close()` is not part of what a tool gateway is.
 
     Unlike memory, an invalid configuration is not silently downgraded: memory
     degrades to "no relevant memory found", which is a truthful answer, whereas
@@ -279,9 +298,7 @@ def _computer_gateway(runtime: RuntimeSettings) -> ToolGateway | None:
             timeout_seconds=settings.timeout_seconds,
             max_capture_bytes=settings.max_capture_bytes,
             max_type_chars=settings.max_type_chars,
-            max_scroll_delta=settings.max_scroll_delta,
-            capture_ttl_seconds=settings.capture_ttl_seconds,
-            max_snapshots=settings.max_snapshots,
+            max_scroll_amount=settings.max_scroll_amount,
             max_elements=settings.max_elements,
             telemetry_enabled=settings.telemetry_enabled,
         )
@@ -375,4 +392,10 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
         maintenance_interval_seconds=settings.maintenance_interval_seconds,
         poll_interval_seconds=settings.poll_interval_seconds,
     )
-    return Worker(engine=engine, settings=settings, loop=loop, processor=processor)
+    return Worker(
+        engine=engine,
+        settings=settings,
+        loop=loop,
+        processor=processor,
+        computer_gateway=computer_gateway,
+    )

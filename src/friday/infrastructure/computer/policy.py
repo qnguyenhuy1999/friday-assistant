@@ -13,8 +13,24 @@ Two rules are structural rather than merely tested:
   approval can never be satisfied by a filesystem or process approval.
 
 Descriptions are Claude's only schema for these tools, which is why they name
-the fencing fields (`snapshot_id`, `window_id`) as required: an action that
-cannot cite a live capture is refused, and the description has to say so.
+the required identity (`pid`, `window_id`) and spell out how a target is
+addressed: an action that cannot name what it is acting on is refused, and the
+description has to say so.
+
+**Nine tools, each with a real backing operation.** Three earlier entries were
+removed rather than adapted, because a name that promises more than the desktop
+delivers is worse than a missing capability:
+
+* `pointer_move` — pointer motion without a click has no faithful backing (the
+  driver's cursor move is an overlay in window scope; the real pointer moves
+  only in desktop scope, which Friday never captures) and nothing needs it.
+* `active_window` — no operation reports the focused window. It would have been
+  derived from z-order, and z-order is not keyboard-focus ownership. The raw
+  facts (`z_index`, `is_on_screen`, `on_current_space`) are in `window_list`,
+  where they are not dressed up as focus.
+* `focus_window` — renamed to `bring_to_front`, matching the operation it
+  actually performs. The driver documents that operation as explicitly stealing
+  foreground, which "focus a window" does not convey.
 
 Deliberately absent, and not merely unimplemented: shell/AppleScript
 execution, raw keycodes, clipboard access, credential entry, and OS
@@ -51,96 +67,124 @@ class ComputerToolPolicy:
             )
 
 
-_FENCE = "Requires {snapshot_id, window_id} naming a live computer.capture result."
+_IDENTITY = "Requires {pid, window_id} from computer.window_list."
+
+_TARGET = (
+    "Address the target as element: {role, label} — the role and label survive the "
+    "re-capture Friday performs before acting. Use x/y (window-local screenshot "
+    "pixels, from an element's frame) only for surfaces with no label or when two "
+    "controls share one. Never both."
+)
+
+_REVALIDATED = (
+    "Friday captures the window again immediately before acting and refuses if the "
+    "target is missing (computer_target_not_found), matches more than one control "
+    "(computer_target_ambiguous), or the window is gone (computer_window_gone)."
+)
 
 COMPUTER_TOOL_POLICY: dict[str, ComputerToolPolicy] = {
-    "computer.capture": ComputerToolPolicy(
-        description=(
-            "Capture one window's accessibility state and a screenshot artifact. "
-            "Input: {window_id?: string, include_screenshot?: bool = true, "
-            "include_elements?: bool = true, max_elements?: integer}. "
-            "Returns a snapshot_id plus numbered elements; every mutating computer "
-            "tool must cite that snapshot_id."
-        ),
-        read_only=True,
-        approval_required=False,
-    ),
-    "computer.pointer_position": ComputerToolPolicy(
-        description="Report the current pointer position. Input: {}.",
-        read_only=True,
-        approval_required=False,
-    ),
     "computer.window_list": ComputerToolPolicy(
         description=(
-            "List open windows with their bounds. Input: {limit?: integer}. "
+            "List open windows with their pid, window_id, title, bounds, and stacking "
+            "facts (z_index, is_on_screen, on_current_space). Input: {limit?: integer}. "
+            "Start here: every other computer tool needs a pid and window_id. "
             "Results are bounded; `truncated` reports whether any were dropped."
         ),
         read_only=True,
         approval_required=False,
     ),
-    "computer.active_window": ComputerToolPolicy(
-        description="Report the focused window, or null if nothing is focused. Input: {}.",
+    "computer.capture": ComputerToolPolicy(
+        description=(
+            "Capture one window's controls and a screenshot artifact. "
+            f"{_IDENTITY} "
+            "Input: {pid, window_id, include_screenshot?: bool = true, "
+            "max_elements?: integer}. "
+            "Returns each control's role, label, and pixel frame — the terms a "
+            "mutating call is written in. Returns no fence: mutating tools re-capture "
+            "for themselves, so there is no id here to cite later."
+        ),
         read_only=True,
         approval_required=False,
     ),
-    "computer.pointer_move": ComputerToolPolicy(
+    "computer.cursor_position": ComputerToolPolicy(
         description=(
-            f"Move the pointer to a captured element or coordinate. {_FENCE} "
-            "Input: {snapshot_id, window_id, element?: integer, x?: integer, y?: integer} — "
-            "supply either `element` or both `x` and `y`."
+            "Report the OS cursor position in desktop points. Input: {}. "
+            "These are NOT window-local screenshot pixels and cannot be used as a "
+            "click or scroll target."
         ),
-        read_only=False,
-        approval_required=True,
+        read_only=True,
+        approval_required=False,
     ),
     "computer.click": ComputerToolPolicy(
         description=(
-            f"Click a captured element or coordinate. {_FENCE} "
-            "Input: {snapshot_id, window_id, element?: integer, x?: integer, y?: integer, "
-            "button?: 'left'|'right'|'middle', count?: integer}."
+            f"Click a control. {_IDENTITY} {_TARGET} "
+            "Input: {pid, window_id, element?: {role, label}, x?: integer, y?: integer, "
+            "button?: 'left'|'right'|'middle', count?: 1|2}. "
+            f"{_REVALIDATED}"
         ),
         read_only=False,
         approval_required=True,
     ),
     "computer.scroll": ComputerToolPolicy(
         description=(
-            f"Scroll at a captured element or coordinate. {_FENCE} "
-            "Input: {snapshot_id, window_id, element?: integer, x?: integer, y?: integer, "
-            "dx?: integer, dy?: integer} — at least one axis must be non-zero."
+            f"Scroll a window, or a specific region of it. {_IDENTITY} "
+            "Input: {pid, window_id, direction: 'up'|'down'|'left'|'right', "
+            "amount?: integer, by?: 'line'|'page', element?: {role, label}, "
+            "x?: integer, y?: integer}. "
+            "Omit the target to scroll the window's focused scroller; supply one to "
+            "scroll a specific region, which is the only way to reach a nested "
+            "scrollable area. "
+            f"{_REVALIDATED}"
         ),
         read_only=False,
         approval_required=True,
     ),
     "computer.type_text": ComputerToolPolicy(
         description=(
-            f"Type bounded literal text into the focused control. {_FENCE} "
-            "Input: {snapshot_id, window_id, text: string}. Credentials are refused."
+            f"Type literal text into one control. {_IDENTITY} {_TARGET} "
+            "A target is required — text goes into a named field, not wherever focus "
+            "happens to be. "
+            "Input: {pid, window_id, element?: {role, label}, x?: integer, y?: integer, "
+            "text: string}. "
+            "Literal characters only: no newline, no tab. Use computer.press_key for "
+            "'enter' or 'tab', which are actions rather than content. "
+            "Credentials are refused. "
+            f"{_REVALIDATED}"
         ),
         read_only=False,
         approval_required=True,
     ),
     "computer.press_key": ComputerToolPolicy(
         description=(
-            f"Press one named key. {_FENCE} "
-            "Input: {snapshot_id, window_id, key: string} where `key` is a named key "
-            "such as 'enter' or 'escape', or a single character."
+            f"Press one named key. {_IDENTITY} "
+            "Input: {pid, window_id, key: string, element?: {role, label}, "
+            "x?: integer, y?: integer} where `key` is a named key such as 'enter' or "
+            "'escape', or a single character. "
+            "The target is optional: omit it to send the key to the window. "
+            f"{_REVALIDATED}"
         ),
         read_only=False,
         approval_required=True,
     ),
     "computer.hotkey": ComputerToolPolicy(
         description=(
-            f"Press one key with modifiers. {_FENCE} "
-            "Input: {snapshot_id, window_id, key: string, "
-            "modifiers: ['meta'|'ctrl'|'alt'|'shift', ...]}. "
-            "Combinations that log out, lock, or force-quit are refused."
+            f"Press one key with modifiers. {_IDENTITY} "
+            "Input: {pid, window_id, key: string, "
+            "modifiers: ['meta'|'ctrl'|'alt'|'shift', ...], element?: {role, label}, "
+            "x?: integer, y?: integer}. "
+            "The target is optional: omit it to send the combination to the window. "
+            "Combinations that log out, lock, or force-quit are refused. "
+            f"{_REVALIDATED}"
         ),
         read_only=False,
         approval_required=True,
     ),
-    "computer.focus_window": ComputerToolPolicy(
+    "computer.bring_to_front": ComputerToolPolicy(
         description=(
-            f"Bring one captured window to the foreground. {_FENCE} "
-            "Input: {snapshot_id, window_id}."
+            "Bring one window to the foreground. This genuinely takes foreground away "
+            "from whatever the user is in, and changes which application receives "
+            "subsequent keystrokes — it is not focus bookkeeping. "
+            f"{_IDENTITY} Input: {{pid, window_id}}."
         ),
         read_only=False,
         approval_required=True,

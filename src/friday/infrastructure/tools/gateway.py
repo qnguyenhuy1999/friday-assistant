@@ -36,7 +36,7 @@ from friday.domain.json_value import JsonValue
 from friday.infrastructure.tools.memory_tools import MemoryTools, MemoryToolSettings, memory_failure
 from friday.infrastructure.tools.process_runner import ProcessRunner, ProcessRunnerSettings
 from friday.infrastructure.tools.workspace_files import WorkspaceFiles, WorkspaceFileSettings
-from friday.infrastructure.tools.workspace_paths import resolve_workspace_root
+from friday.infrastructure.workspace_paths import resolve_workspace_root
 
 
 @dataclass(frozen=True, slots=True)

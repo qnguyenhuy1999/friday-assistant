@@ -23,7 +23,7 @@ from friday.application.errors import ToolInputInvalid
 from friday.application.tool_gateway import ToolExecutionResult
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.json_value import JsonValue
-from friday.infrastructure.tools.workspace_paths import resolve_workspace_path
+from friday.infrastructure.workspace_paths import resolve_workspace_path
 
 PROCESS_ENVIRONMENT_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR")
 """Environment a tool subprocess may inherit — no FRIDAY_*, no ANTHROPIC_*,

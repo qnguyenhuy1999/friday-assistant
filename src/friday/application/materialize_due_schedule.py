@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from friday.application.errors import EntityConflict, TaskNotFound
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.schedule_recurrence import coalesced_next
@@ -9,6 +11,8 @@ from friday.application.start_run import StartRun
 from friday.domain.identifiers import ScheduleFireId, ScheduleId
 from friday.domain.schedule import ScheduleStatus
 from friday.domain.schedule_fire import ScheduleFire
+
+logger = logging.getLogger(__name__)
 
 
 class MaterializeDueSchedules:
@@ -20,7 +24,18 @@ class MaterializeDueSchedules:
     def execute(self) -> int:
         with self._uow_factory() as uow:
             ids = [x.id for x in uow.schedules.list_due(self._clock.now(), self._batch_size)]
-        return sum(1 for schedule_id in ids if self._materialize_one(schedule_id))
+        materialized = 0
+        for schedule_id in ids:
+            try:
+                materialized += self._materialize_one(schedule_id)
+            except Exception:  # noqa: BLE001 - one corrupt schedule must not starve its batch
+                # The scheduler is a best-effort batch dispatcher.  Keep the
+                # durable row due for a later retry, but always let unrelated
+                # schedules in this batch make progress.
+                logger.exception(
+                    "schedule.materialization_failed", extra={"schedule_id": str(schedule_id)}
+                )
+        return materialized
 
     def _materialize_one(self, schedule_id: ScheduleId) -> bool:
         try:

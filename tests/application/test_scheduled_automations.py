@@ -56,6 +56,29 @@ def test_two_scheduler_actors_and_restart_materialize_one_durable_fire() -> None
     assert next(iter(uow.run_repo.items.values())).status is RunStatus.QUEUED
 
 
+def test_one_broken_schedule_does_not_starve_other_due_schedules(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    uow, clock, factory, task = _prepared()
+    broken = _schedule(factory, clock, task, T0 + timedelta(minutes=1))
+    healthy = _schedule(factory, clock, task, T0 + timedelta(minutes=1))
+    clock.fixed_now = T0 + timedelta(minutes=1)
+    materializer = MaterializeDueSchedules(factory, clock, batch_size=10)
+    real_materialize = materializer._materialize_one
+
+    def materialize_with_broken_record(schedule_id: object) -> bool:
+        if schedule_id == broken.id:
+            raise RuntimeError("corrupt recurrence payload")
+        return real_materialize(schedule_id)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(materializer, "_materialize_one", materialize_with_broken_record)
+
+    assert materializer.execute() == 1
+    assert len(uow.schedule_fire_repo.items) == 1
+    assert uow.schedule_fire_repo.items[0].schedule_id == healthy.id
+    assert "schedule.materialization_failed" in caplog.text
+
+
 def test_overlap_is_deferred_until_retry_lineage_is_terminal_then_overdue_fires_once() -> None:
     uow, clock, factory, task = _prepared()
     schedule = CreateSchedule(factory, clock).execute(
@@ -115,6 +138,32 @@ def test_past_one_shot_and_dst_gap_are_rejected_and_dst_policy_is_explicit() -> 
     assert first_occurrence(
         ScheduleKind.ONCE, None, datetime(2026, 11, 1, 1, 30), "America/New_York", T0
     ) == datetime(2026, 11, 1, 5, 30, tzinfo=UTC)
+
+
+def test_cron_dst_spring_and_fall_back_behavior_is_pinned() -> None:
+    # croniter advances a nonexistent 02:30 spring wall time to 03:00 EDT.
+    assert first_occurrence(
+        ScheduleKind.CRON,
+        "30 2 * * *",
+        None,
+        "America/New_York",
+        datetime(2026, 3, 8, 6, 59, tzinfo=UTC),
+    ) == datetime(2026, 3, 8, 7, 0, tzinfo=UTC)
+    # During the repeated fall-back hour, both distinct 01:30 instants occur.
+    assert first_occurrence(
+        ScheduleKind.CRON,
+        "30 1 * * *",
+        None,
+        "America/New_York",
+        datetime(2026, 11, 1, 4, 59, tzinfo=UTC),
+    ) == datetime(2026, 11, 1, 5, 30, tzinfo=UTC)
+    assert first_occurrence(
+        ScheduleKind.CRON,
+        "30 1 * * *",
+        None,
+        "America/New_York",
+        datetime(2026, 11, 1, 5, 31, tzinfo=UTC),
+    ) == datetime(2026, 11, 1, 6, 30, tzinfo=UTC)
 
 
 def test_downtime_coalescing_jumps_directly_to_the_next_future_cron_occurrence() -> None:

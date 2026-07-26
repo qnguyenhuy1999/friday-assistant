@@ -10,6 +10,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import text
 
 from apps.worker.app import Worker, create_worker
@@ -19,8 +21,11 @@ from friday.application.agent_run_processor import AgentRunProcessor
 from friday.application.approval_workflow import ApproveRequest
 from friday.application.commands import ApproveRequestCommand
 from friday.application.errors import BrainUnavailable, WorkspaceAccessDenied
+from friday.application.materialize_due_schedule import MaterializeDueSchedules
+from friday.application.schedule_lifecycle import CreateSchedule, CreateScheduleCommand
 from friday.domain.identifiers import RunId, TaskId
 from friday.domain.run import Run, RunStatus
+from friday.domain.schedule import ScheduleKind
 from friday.domain.task import Task
 from friday.domain.tool import ToolInvocationStatus
 from friday.infrastructure.clock import SystemClock
@@ -90,6 +95,23 @@ def build_worker(tmp_path: Path, action_jsons: list[str]) -> Worker:
     worker = create_worker(worker_settings(tmp_path), runtime_settings(tmp_path, executable))
     Base.metadata.create_all(worker.engine)
     return worker
+
+
+class FixedClock:
+    def __init__(self, now: datetime) -> None:
+        self.now_value = now
+
+    def now(self) -> datetime:
+        return self.now_value
+
+
+def build_migrated_worker(tmp_path: Path, action_jsons: list[str]) -> Worker:
+    settings = worker_settings(tmp_path)
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", settings.database_url)
+    command.upgrade(config, "head")
+    executable, _ = make_fake_claude(tmp_path, action_jsons=action_jsons)
+    return create_worker(settings, runtime_settings(tmp_path, executable))
 
 
 def seed_queued_run(worker: Worker) -> RunId:
@@ -226,6 +248,73 @@ def test_full_approval_cycle_executes_the_approved_tool(tmp_path: Path) -> None:
         # the tool actually wrote the file inside the confined workspace
         written = tmp_path / "workspace" / "out.txt"
         assert written.read_text() == "hello"
+    finally:
+        worker.engine.dispose()
+
+
+def test_scheduled_run_flows_through_real_worker_and_approval_before_mutation(
+    tmp_path: Path,
+) -> None:
+    """Create Schedule -> scheduler tick -> Fire/queued Run -> real worker.
+
+    This deliberately uses the production worker composition and an Alembic
+    migrated SQLite database.  The protected write must park the scheduled
+    Run before any workspace mutation, then execute only after approval.
+    """
+    worker = build_migrated_worker(tmp_path, [WRITE, WRITE, FINISH])
+    clock = FixedClock(T0)
+    try:
+        factory = create_unit_of_work_factory(create_session_factory(worker.engine))
+        task = Task.new(
+            id=TaskId.new(), title="scheduled", description="write out.txt", created_at=T0
+        )
+        with factory() as uow:
+            uow.tasks.add(task)
+            uow.commit()
+        due = T0 + timedelta(minutes=1)
+        schedule = CreateSchedule(factory, clock).execute(
+            CreateScheduleCommand(task.id, ScheduleKind.ONCE, run_at=due, timezone="UTC")
+        )
+        clock.now_value = due
+
+        # The scheduler owns only durable materialization; it never invokes a tool.
+        assert MaterializeDueSchedules(factory, clock, batch_size=10).execute() == 1
+        with factory() as uow:
+            fires = uow.schedule_fires.list_for_schedule(schedule.id, limit=10)
+            assert len(fires) == 1
+            run_id = fires[0].run_id
+            run = uow.runs.get(run_id)
+            assert run is not None and run.status is RunStatus.QUEUED
+            assert uow.work_queue.get(run_id) is not None
+
+        # Process loss after durable materialization cannot lose or duplicate
+        # the queued execution: a new worker stack claims this same Run.
+        worker.engine.dispose()
+        runner = build_migrated_worker(tmp_path, [WRITE, WRITE, FINISH])
+        factory = create_unit_of_work_factory(create_session_factory(runner.engine))
+        assert runner.loop.run_once(runner.processor) is True
+        with factory() as uow:
+            run = uow.runs.get(run_id)
+            approvals = uow.approvals.list_for_run(run_id)
+            assert run is not None and run.status is RunStatus.WAITING_FOR_APPROVAL
+            assert len(approvals) == 1
+            assert uow.work_queue.get(run_id) is None
+            approval_id = approvals[0].id
+            assert uow.tool_invocations.list_for_run(run_id) == []
+        assert not (tmp_path / "workspace" / "out.txt").exists()
+
+        ApproveRequest(factory, SystemClock()).execute(
+            ApproveRequestCommand(approval_id=approval_id, resolver="scheduled-e2e")
+        )
+        assert runner.loop.run_once(runner.processor) is True
+        with factory() as uow:
+            run = uow.runs.get(run_id)
+            assert run is not None and run.status is RunStatus.SUCCEEDED
+            invocations = uow.tool_invocations.list_for_run(run_id)
+            assert len(invocations) == 1
+            assert invocations[0].status is ToolInvocationStatus.SUCCEEDED
+        assert (tmp_path / "workspace" / "out.txt").read_text() == "hello"
+        runner.engine.dispose()
     finally:
         worker.engine.dispose()
 

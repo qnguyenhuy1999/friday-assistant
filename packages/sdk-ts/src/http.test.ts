@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { FridayApiError, FridayHttpClient, FridayNetworkError } from "./http";
+import { WireFormatError } from "@friday/contracts";
 
 const response = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -15,12 +16,12 @@ describe("FridayHttpClient", () => {
     });
     await client.request({
       method: "POST",
-      path: "/v1/tasks",
+      path: "/test/echo",
       query: { limit: 25, cursor: undefined },
       body: { title: "x" },
     });
     expect(fetchImpl).toHaveBeenCalledWith(
-      "http://api.test/v1/tasks?limit=25",
+      "http://api.test/test/echo?limit=25",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ title: "x" }),
@@ -47,6 +48,15 @@ describe("FridayHttpClient", () => {
       status: 404,
       errorType: "run_not_found",
     } satisfies Partial<FridayApiError>);
+  });
+  it("rejects a successful response that drifts from the wire contract", async () => {
+    const client = new FridayHttpClient({
+      baseUrl: "http://api.test",
+      fetchImpl: vi.fn().mockResolvedValue(response({ id: "t-1" })),
+    });
+    await expect(
+      client.request({ method: "GET", path: "/v1/tasks/t-1" }),
+    ).rejects.toBeInstanceOf(WireFormatError);
   });
   it("wraps transport failures but preserves caller cancellations", async () => {
     const client = new FridayHttpClient({

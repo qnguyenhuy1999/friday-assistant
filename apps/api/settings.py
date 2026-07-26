@@ -28,7 +28,7 @@ class ApiSettings:
         raw_origins = os.environ.get("FRIDAY_API_CORS_ORIGINS")
         cors_allowed_origins = (
             tuple(origin.strip() for origin in raw_origins.split(",") if origin.strip())
-            if raw_origins
+            if raw_origins is not None
             else _DEFAULT_CORS_ORIGINS
         )
         return cls(

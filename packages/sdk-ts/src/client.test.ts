@@ -28,10 +28,20 @@ describe("FridayClient", () => {
     // A Response body can only be read once, so hand out a fresh one per call.
     const fetchImpl = vi.fn<(url: RequestInfo | URL) => Promise<Response>>(
       async () =>
-        new Response("{}", {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+        new Response(
+          JSON.stringify({
+            id: "t-1",
+            title: "test",
+            description: "",
+            status: "pending",
+            created_at: "2026-01-01T00:00:00Z",
+            failure: null,
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
     );
     const friday = new FridayClient({
       baseUrl: "http://api.test/",

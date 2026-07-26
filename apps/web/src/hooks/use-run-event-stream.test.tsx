@@ -75,7 +75,7 @@ describe("useRunEventStream", () => {
       jsonResponse({ items: [event("e1", 1)], next_cursor: null }),
     );
     const { result } = renderHook(() => useRunEventStream("r-1"), { wrapper });
-    await waitFor(() => expect(result.current).toHaveLength(1));
+    await waitFor(() => expect(result.current.events).toHaveLength(1));
 
     act(() =>
       FakeEventSource.instances[0]!.emit(
@@ -83,7 +83,7 @@ describe("useRunEventStream", () => {
         event("e2", 2, "step_created"),
       ),
     );
-    await waitFor(() => expect(result.current).toHaveLength(2));
+    await waitFor(() => expect(result.current.events).toHaveLength(2));
 
     // Re-delivering the same event_id must not grow the timeline.
     act(() =>
@@ -92,7 +92,7 @@ describe("useRunEventStream", () => {
         event("e2", 2, "step_created"),
       ),
     );
-    expect(result.current.map((e) => e.event_id)).toEqual(["e1", "e2"]);
+    expect(result.current.events.map((e) => e.event_id)).toEqual(["e1", "e2"]);
   });
 
   it("keeps a live event that arrived before the backfill resolved", async () => {
@@ -114,16 +114,16 @@ describe("useRunEventStream", () => {
         event("live", 2, "step_created"),
       ),
     );
-    await waitFor(() => expect(result.current).toHaveLength(1));
+    await waitFor(() => expect(result.current.events).toHaveLength(1));
 
     act(() =>
       resolveBackfill(
         jsonResponse({ items: [event("backfilled", 1)], next_cursor: null }),
       ),
     );
-    await waitFor(() => expect(result.current).toHaveLength(2));
+    await waitFor(() => expect(result.current.events).toHaveLength(2));
     // Ordered by sequence, not by arrival.
-    expect(result.current.map((e) => e.event_id)).toEqual([
+    expect(result.current.events.map((e) => e.event_id)).toEqual([
       "backfilled",
       "live",
     ]);
@@ -150,7 +150,8 @@ describe("useRunEventStream", () => {
     );
     const { result } = renderHook(() => useRunEventStream("r-1"), { wrapper });
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
-    expect(result.current).toEqual([]);
+    await waitFor(() => expect(result.current.isDegraded).toBe(true));
+    expect(result.current.events).toEqual([]);
   });
 
   it("invalidates the query that matches each event kind", async () => {

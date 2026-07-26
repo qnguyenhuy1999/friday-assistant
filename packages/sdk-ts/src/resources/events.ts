@@ -4,6 +4,7 @@ import type {
   RunEventType,
   TaskEvent,
 } from "@friday/contracts";
+import { validateRunEvent } from "@friday/contracts";
 import type { FridayHttpClient } from "../http";
 export interface ListEventsParams {
   limit?: number;
@@ -46,8 +47,9 @@ export class RunEventStream {
   private readonly source: EventSource;
   private readonly listeners = new Set<(event: RunEvent) => void>();
   private readonly handler = (message: MessageEvent<string>) => {
-    const event = JSON.parse(message.data) as RunEvent;
-    for (const listener of this.listeners) listener(event);
+    const event: unknown = JSON.parse(message.data);
+    validateRunEvent(event);
+    for (const listener of this.listeners) listener(event as RunEvent);
   };
   constructor(url: string, Source: typeof EventSource) {
     this.source = new Source(url);

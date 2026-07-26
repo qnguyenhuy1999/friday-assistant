@@ -2,12 +2,16 @@ import type { ResolveApprovalBody } from "@friday/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { friday } from "../friday-client";
 import { runQueryKey } from "./use-run";
+import { loadAllPages } from "./use-all-pages";
 export const runApprovalsQueryKey = (id: string) =>
   ["run-approvals", id] as const;
 export function useRunApprovals(id: string) {
   return useQuery({
     queryKey: runApprovalsQueryKey(id),
-    queryFn: () => friday.approvals.listForRun(id, { limit: 25 }),
+    queryFn: () =>
+      loadAllPages((cursor) =>
+        friday.approvals.listForRun(id, { limit: 100, cursor }),
+      ),
   });
 }
 type ResolveInput = { approvalId: string; input: ResolveApprovalBody };

@@ -1,4 +1,4 @@
-import type { ApiErrorBody } from "@friday/contracts";
+import { validateWireResponse, type ApiErrorBody } from "@friday/contracts";
 export interface FridayHttpClientOptions {
   baseUrl: string;
   fetchImpl?: typeof fetch;
@@ -86,8 +86,9 @@ export class FridayHttpClient {
         error?.details ?? {},
       );
     }
-    return response.status === 204
-      ? (undefined as T)
-      : ((await response.json()) as T);
+    if (response.status === 204) return undefined as T;
+    const body: unknown = await response.json();
+    validateWireResponse(options.path, body);
+    return body as T;
   }
 }

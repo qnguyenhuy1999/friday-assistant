@@ -2,6 +2,7 @@ import type { Run } from "@friday/contracts";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { FinalResultPanel } from "./final-result-panel";
+import type { RunEvent } from "@friday/contracts";
 
 function run(overrides: Partial<Run>): Run {
   return {
@@ -25,6 +26,26 @@ describe("FinalResultPanel", () => {
   it("announces a succeeded run", () => {
     render(<FinalResultPanel run={run({ status: "succeeded" })} />);
     expect(screen.getByRole("status")).toHaveTextContent("Run succeeded.");
+  });
+
+  it("shows the final agent answer persisted in the event history", () => {
+    const events: RunEvent[] = [
+      {
+        event_id: "e-1",
+        run_id: "r-1",
+        step_id: null,
+        type: "agent_finished",
+        sequence: 4,
+        occurred_at: "x",
+        payload: { summary: "Shipped.", details: "All checks passed." },
+      },
+    ];
+    render(
+      <FinalResultPanel run={run({ status: "succeeded" })} events={events} />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Final answer");
+    expect(screen.getByRole("status")).toHaveTextContent("Shipped.");
+    expect(screen.getByRole("status")).toHaveTextContent("All checks passed.");
   });
 
   it("announces a cancelled run", () => {

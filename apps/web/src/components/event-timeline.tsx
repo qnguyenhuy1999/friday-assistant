@@ -5,6 +5,7 @@ export function EventTimeline({ events }: { events: RunEvent[] }) {
       {events.map((e) => (
         <li key={e.event_id}>
           {e.occurred_at} — {e.type}
+          <pre>{JSON.stringify(e.payload, null, 2)}</pre>
         </li>
       ))}
     </ul>

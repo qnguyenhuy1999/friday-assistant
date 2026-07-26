@@ -16,40 +16,70 @@ export function RunDetailPage({
   onViewApprovals: () => void;
 }) {
   const { data: run, isLoading, isError } = useRun(runId);
-  const { data: steps } = useRunSteps(runId);
-  const { data: invocations } = useRunToolInvocations(runId);
-  const { data: artifacts } = useRunArtifacts(runId);
-  const { data: approvals } = useRunApprovals(runId);
-  const events = useRunEventStream(runId);
+  const steps = useRunSteps(runId);
+  const invocations = useRunToolInvocations(runId);
+  const artifacts = useRunArtifacts(runId);
+  const approvals = useRunApprovals(runId);
+  const eventStream = useRunEventStream(runId);
   if (isLoading) return <p>Loading run…</p>;
   if (isError || !run) return <p role="alert">Failed to load run.</p>;
-  const pending =
-    approvals?.items.filter((a) => a.status === "pending").length ?? 0;
+  const pending = approvals.data?.items.filter(
+    (a) => a.status === "pending",
+  ).length;
+  const mustExposeApprovals = run.status === "waiting_for_approval";
   return (
     <section>
       <h2>Run {run.id}</h2>
       <p>Status: {run.status}</p>
-      {pending > 0 && (
+      {approvals.isLoading && <p>Loading approval state…</p>}
+      {approvals.isError && (
         <p role="alert">
-          {pending} pending approval(s).{" "}
+          Failed to load approval state. You can still view approvals.
+        </p>
+      )}
+      {(mustExposeApprovals || (pending ?? 0) > 0) && (
+        <p role="alert">
+          {pending === undefined
+            ? "Approval action may be required."
+            : `${pending} pending approval(s).`}{" "}
           <button onClick={onViewApprovals}>View approvals</button>
         </p>
       )}
       <h3>Steps</h3>
+      {steps.isLoading && <p>Loading steps…</p>}
+      {steps.isError && <p role="alert">Failed to load steps.</p>}
       <ul>
-        {steps?.items.map((s) => (
+        {steps.data?.items.map((s) => (
           <li key={s.id}>
             {s.position}. {s.name} — {s.status}
           </li>
         ))}
       </ul>
       <h3>Tool invocations</h3>
-      <ToolInvocationList invocations={invocations?.items ?? []} />
+      {invocations.isLoading && <p>Loading tool invocations…</p>}
+      {invocations.isError ? (
+        <p role="alert">Failed to load tool invocations.</p>
+      ) : (
+        <ToolInvocationList invocations={invocations.data?.items ?? []} />
+      )}
       <h3>Artifacts</h3>
-      <ArtifactList artifacts={artifacts?.items ?? []} />
+      {artifacts.isLoading && <p>Loading artifacts…</p>}
+      {artifacts.isError ? (
+        <p role="alert">Failed to load artifacts.</p>
+      ) : (
+        <ArtifactList artifacts={artifacts.data?.items ?? []} />
+      )}
       <h3>Events</h3>
-      <EventTimeline events={events} />
-      {isTerminalRunStatus(run.status) && <FinalResultPanel run={run} />}
+      {eventStream.isLoading && <p>Loading event history…</p>}
+      {eventStream.isDegraded && (
+        <p role="alert">
+          Event stream is degraded; refreshing event history periodically.
+        </p>
+      )}
+      <EventTimeline events={eventStream.events} />
+      {isTerminalRunStatus(run.status) && (
+        <FinalResultPanel run={run} events={eventStream.events} />
+      )}
     </section>
   );
 }

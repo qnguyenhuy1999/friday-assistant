@@ -46,8 +46,12 @@ export function ApprovalDetail({
         </dd>
         <dt>Originating run</dt>
         <dd>{approval.run_id}</dd>
+        <dt>Originating step</dt>
+        <dd>{approval.step_id ?? "—"}</dd>
         <dt>Requested at</dt>
         <dd>{approval.requested_at}</dd>
+        <dt>Expires at</dt>
+        <dd>{approval.expires_at ?? "—"}</dd>
       </dl>
       {approval.status === "pending" ? (
         <form onSubmit={(e) => e.preventDefault()}>

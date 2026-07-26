@@ -36,8 +36,8 @@ policy and the domain-to-contract mapping rationale.
 
 ## Current Status
 
-`src/index.ts` exports `CONTRACTS_VERSION` and `schemaPath()` as before, plus
-a hand-written TypeScript wire-contract layer under `src/wire/`. It mirrors
-the HTTP responses and requests from `apps/api` (including wire-specific ID
-names such as `approval_id` and `event_id`) without modifying the versioned
-domain JSON-Schema mirror. `@friday/sdk` is its browser-facing consumer.
+`src/index.ts` exports `CONTRACTS_VERSION` and `schemaPath()` as before. The
+versioned HTTP wire schemas in `src/wire/response-validation.ts` are compiled
+with Ajv and applied by `@friday/sdk` to every HTTP response and SSE run event.
+The SDK therefore rejects a server response that has drifted from the public
+wire shape instead of treating a TypeScript assertion as runtime validation.

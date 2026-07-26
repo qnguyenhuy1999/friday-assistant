@@ -9,8 +9,27 @@ export * from "./wire/approval";
 export * from "./wire/tool-invocation";
 export * from "./wire/artifact";
 export * from "./wire/event";
-export { WireFormatError, validateRunEvent } from "./wire/response-validation";
-export * from "./wire/http.generated";
+export {
+  WireFormatError,
+  validateRunEvent,
+  validateTaskEvent,
+  validateRunPage,
+  validateTaskPage,
+  validateRun,
+  validateTask,
+  validateStep,
+  validateStepPage,
+  validateApproval,
+  validateApprovalPage,
+  validateInvocation,
+  validateInvocationPage,
+  validateArtifact,
+  validateArtifactPage,
+  validateRunEventPage,
+  validateTaskEventPage,
+  validateStartRun,
+  type WireValidator,
+} from "./wire/response-validation";
 
 export const CONTRACTS_VERSION = "v1" as const;
 

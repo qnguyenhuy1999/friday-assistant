@@ -52,7 +52,7 @@ export class RunEventStream {
   private readonly listeners = new Set<(event: RunEvent) => void>();
   private readonly handler = (message: MessageEvent<string>) => {
     const event: unknown = JSON.parse(message.data);
-    validateRunEvent(event);
+    validateRunEvent(event, "SSE run event");
     for (const listener of this.listeners) listener(event as RunEvent);
   };
   constructor(url: string, Source: typeof EventSource) {

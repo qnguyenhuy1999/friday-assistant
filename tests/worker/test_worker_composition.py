@@ -159,6 +159,27 @@ def test_run_progresses_to_succeeded_through_brain_finish(tmp_path: Path) -> Non
         worker.engine.dispose()
 
 
+def test_terminal_run_is_not_replayed_after_a_worker_restart(tmp_path: Path) -> None:
+    worker = build_worker(tmp_path, [FINISH])
+    try:
+        run_id = seed_queued_run(worker)
+        assert worker.loop.run_once(worker.processor) is True
+    finally:
+        worker.engine.dispose()
+
+    restarted = build_worker(tmp_path, [FINISH])
+    try:
+        # A fresh process sees no work item for the durable terminal Run.
+        assert restarted.loop.run_once(restarted.processor) is False
+        factory = create_unit_of_work_factory(create_session_factory(restarted.engine))
+        with factory() as uow:
+            run = uow.runs.get(run_id)
+            assert run is not None and run.status is RunStatus.SUCCEEDED
+            assert uow.work_queue.get(run_id) is None
+    finally:
+        restarted.engine.dispose()
+
+
 def test_full_approval_cycle_executes_the_approved_tool(tmp_path: Path) -> None:
     # claim 1: brain proposes a protected write -> approval intercepted
     # human approves -> run resumes with a fresh work item

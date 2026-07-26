@@ -7,7 +7,9 @@ import threading
 import time
 from typing import Protocol
 
+from apps.worker.operational_logging import lifecycle_log
 from friday.application.errors import ClaimLost
+from friday.application.ports import Clock
 from friday.application.run_processor import ClaimContext, ProcessingOutcome, RunProcessor
 from friday.application.worker_coordination import (
     ApplyFailedOutcome,
@@ -39,6 +41,7 @@ class WorkerLoop:
         apply_waiting: ApplyWaitingOutcome,
         recover_expired_leases: RecoverExpiredLeases,
         expire_due_approvals: ExpireDueApprovals,
+        clock: Clock,
         heartbeat_interval_seconds: float,
         maintenance_interval_seconds: float,
         poll_interval_seconds: float,
@@ -53,6 +56,7 @@ class WorkerLoop:
         self._apply_waiting = apply_waiting
         self._recover_expired_leases = recover_expired_leases
         self._expire_due_approvals = expire_due_approvals
+        self._clock = clock
         self._refresh_memory_index = refresh_memory_index
         self._memory_index_maintenance_interval_seconds = memory_index_maintenance_interval_seconds
         self._last_memory_index_maintenance = time.monotonic()
@@ -60,12 +64,25 @@ class WorkerLoop:
         self._maintenance_interval_seconds = maintenance_interval_seconds
         self._poll_interval_seconds = poll_interval_seconds
 
-    def run_once(self, processor: RunProcessor | None) -> bool:
+    def run_once(
+        self,
+        processor: RunProcessor | None,
+        shutdown_event: threading.Event | None = None,
+    ) -> bool:
         if processor is None:
+            return False
+        if shutdown_event is not None and shutdown_event.is_set():
             return False
         claim = self._claim_next_run.execute()
         if claim is None:
             return False
+        fields = {
+            "task_id": claim.task_id,
+            "run_id": claim.run_id,
+            "worker_id": claim.worker_id,
+            "claim_generation": claim.claim_generation,
+        }
+        lifecycle_log(logger, logging.INFO, "worker.claimed_run", **fields)
 
         lease_lost = threading.Event()
         stop_heartbeat = threading.Event()
@@ -97,7 +114,9 @@ class WorkerLoop:
             claim_token=claim.claim_token,
             claim_generation=claim.claim_generation,
             attempt_number=claim.attempt_number,
-            is_lease_lost=lease_lost.is_set,
+            is_lease_lost=lambda: (
+                lease_lost.is_set() or (shutdown_event is not None and shutdown_event.is_set())
+            ),
         )
         processor_error: Exception | None = None
         outcome: ProcessingOutcome | None = None
@@ -110,24 +129,28 @@ class WorkerLoop:
             heartbeat_thread.join()
 
         if heartbeat_errors:
-            logger.error(
-                "Heartbeat thread failed with %s for run %s; lease state unknown, "
-                "skipping outcome application",
-                type(heartbeat_errors[0]).__name__,
-                claim.run_id,
-            )
+            lifecycle_log(logger, logging.ERROR, "worker.heartbeat_failed", **fields)
+            return True
+
+        if shutdown_event is not None and shutdown_event.is_set():
+            try:
+                self._requeue_claimed_run.execute(
+                    claim.run_id,
+                    claim.worker_id,
+                    claim.claim_token,
+                    claim.claim_generation,
+                    self._clock.now(),
+                )
+                lifecycle_log(logger, logging.INFO, "worker.shutdown_requeued_claim", **fields)
+            except ClaimLost:
+                lifecycle_log(logger, logging.INFO, "worker.shutdown_claim_fenced", **fields)
             return True
 
         if lease_lost.is_set():
             if processor_error is not None:
-                logger.error(
-                    "Processor raised %s for run %s after its claim was already lost; "
-                    "discarding outcome",
-                    type(processor_error).__name__,
-                    claim.run_id,
-                )
+                lifecycle_log(logger, logging.ERROR, "worker.processor_error_after_fence", **fields)
             else:
-                logger.info("Claim lost before applying outcome for run %s", claim.run_id)
+                lifecycle_log(logger, logging.INFO, "worker.outcome_fenced", **fields)
             return True
 
         if processor_error is not None:
@@ -137,12 +160,7 @@ class WorkerLoop:
                 retryable=True,
                 cause=FailureCause.RUNTIME,
             )
-            logger.error(
-                "Processor exception class %s for run %s; recording failure code %s",
-                type(processor_error).__name__,
-                claim.run_id,
-                failure.code,
-            )
+            lifecycle_log(logger, logging.ERROR, "worker.processor_exception", **fields)
             try:
                 self._apply_failed.execute(
                     claim.run_id,
@@ -152,9 +170,7 @@ class WorkerLoop:
                     failure,
                 )
             except ClaimLost:
-                logger.info(
-                    "Claim lost while applying synthetic failure outcome for run %s", claim.run_id
-                )
+                lifecycle_log(logger, logging.INFO, "worker.failure_outcome_fenced", **fields)
             return True
 
         assert outcome is not None
@@ -195,12 +211,7 @@ class WorkerLoop:
                     outcome.available_at,
                 )
             else:
-                logger.error(
-                    "Unrecognized processing outcome kind %r for run %s; failing the run "
-                    "instead of leaving its claim to stall",
-                    outcome.kind,
-                    claim.run_id,
-                )
+                lifecycle_log(logger, logging.ERROR, "worker.unknown_processing_outcome", **fields)
                 self._apply_failed.execute(
                     claim.run_id,
                     claim.worker_id,
@@ -214,14 +225,23 @@ class WorkerLoop:
                     ),
                 )
         except ClaimLost:
-            logger.info("Claim lost while applying outcome for run %s", claim.run_id)
+            lifecycle_log(logger, logging.INFO, "worker.outcome_fenced", **fields)
+        else:
+            lifecycle_log(logger, logging.INFO, f"worker.outcome_{outcome.kind}", **fields)
         return True
 
     def run_maintenance_tick(self) -> None:
         recovered = self._recover_expired_leases.execute()
         approvals = self._expire_due_approvals.execute()
-        logger.info("Recovered %d expired leases", recovered)
-        logger.info("Expired %d due approvals", len(approvals))
+        lifecycle_log(
+            logger, logging.INFO, "worker.expired_leases_recovered", recovered_count=recovered
+        )
+        lifecycle_log(
+            logger,
+            logging.INFO,
+            "worker.approvals_expired",
+            expired_approval_count=len(approvals),
+        )
         self._refresh_memory_index_if_due()
 
     def _refresh_memory_index_if_due(self) -> None:
@@ -234,8 +254,8 @@ class WorkerLoop:
             return
         try:
             refresh.execute()
-        except Exception as exc:  # noqa: BLE001 - maintenance must not stop the worker
-            logger.warning("Memory index refresh failed: %s", type(exc).__name__)
+        except Exception:  # noqa: BLE001 - maintenance must not stop the worker
+            lifecycle_log(logger, logging.WARNING, "worker.memory_index_refresh_failed")
         self._last_memory_index_maintenance = now
 
     def serve_forever(
@@ -247,5 +267,5 @@ class WorkerLoop:
                 self.run_maintenance_tick()
                 last_maintenance = time.monotonic()
 
-            if processor is None or not self.run_once(processor):
+            if processor is None or not self.run_once(processor, shutdown_event):
                 shutdown_event.wait(timeout=self._poll_interval_seconds)

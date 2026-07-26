@@ -61,6 +61,20 @@ jobs:
       - name: Coverage
         run: just test-cov
 
+      - name: Install Chromium for browser E2E
+        run: pnpm --filter @friday/web exec playwright install --with-deps chromium
+
+      - name: Browser E2E
+        run: just e2e
+
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: browser-e2e-diagnostics
+          path: apps/web/test-results
+          if-no-files-found: ignore
+
       - name: Pre-commit (all hooks, all stages)
         run: just pre-commit
 

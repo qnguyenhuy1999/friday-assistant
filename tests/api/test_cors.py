@@ -102,3 +102,37 @@ def test_blank_origins_allow_nothing_rather_than_reverting_to_defaults(
     monkeypatch.setenv("FRIDAY_API_CORS_ORIGINS", "   ,  ")
 
     assert ApiSettings.from_env().cors_allowed_origins == ()
+
+
+@pytest.mark.parametrize("origin", ["*", "http://*.example.test", "https://example.test/path"])
+def test_wildcard_or_path_cors_origin_fails_early(origin: str) -> None:
+    with pytest.raises(ValueError, match="CORS_ORIGINS"):
+        ApiSettings(
+            database_url="sqlite:///./friday.db",
+            host="127.0.0.1",
+            port=8000,
+            sse_poll_interval_seconds=0.5,
+            cors_allowed_origins=(origin,),
+        )
+
+
+def test_non_loopback_bind_requires_explicit_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FRIDAY_API_HOST", "0.0.0.0")
+    monkeypatch.delenv("FRIDAY_API_ALLOW_REMOTE_BIND", raising=False)
+
+    with pytest.raises(ValueError, match="ALLOW_REMOTE_BIND"):
+        ApiSettings.from_env()
+
+
+def test_remote_bind_can_be_explicitly_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FRIDAY_API_HOST", "0.0.0.0")
+    monkeypatch.setenv("FRIDAY_API_ALLOW_REMOTE_BIND", "true")
+
+    assert ApiSettings.from_env().allow_remote_bind is True
+
+
+def test_invalid_api_environment_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FRIDAY_API_PORT", "not-a-port")
+
+    with pytest.raises(ValueError, match="FRIDAY_API_PORT must be an integer"):
+        ApiSettings.from_env()

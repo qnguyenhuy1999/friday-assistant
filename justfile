@@ -32,6 +32,9 @@ test-ts:
     pnpm --filter @friday/sdk test
     pnpm --filter @friday/web test
 
+e2e:
+    pnpm --filter @friday/web test:e2e
+
 test-cov:
     uv run pytest --cov=src/friday --cov=apps/api --cov=apps/worker --cov-report=term-missing
 
@@ -68,6 +71,10 @@ worker:
 worker-check:
     uv run python -m apps.worker.preflight
 
+# Full non-mutating local dependency diagnosis. The worker preflight already
+# owns these checks; keep one source of truth rather than duplicating probes.
+doctor: worker-check
+
 memory-check:
     uv run python -m apps.worker.preflight --memory-only
 
@@ -94,7 +101,7 @@ check: generate-contracts format-check lint typecheck test test-ts architecture-
 # loop). pre-commit's pre-push stage re-runs typecheck/test-cov/lock-check
 # again as an end-to-end proof that the hook wiring itself works — this is
 # intentional overlap, not a bug.
-ci: check test-cov lock-check pre-commit
+ci: check test-cov e2e lock-check pre-commit
     git diff --exit-code
     test -z "$(git status --porcelain)"
 

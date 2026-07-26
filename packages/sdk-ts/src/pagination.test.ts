@@ -21,6 +21,16 @@ describe("paginate", () => {
     expect(items).toEqual([]);
     expect(fetchPage).toHaveBeenCalledTimes(1);
   });
+  it("rejects a repeated cursor instead of fetching indefinitely", async () => {
+    const fetchPage = vi.fn(async () => ({ items: [1], next_cursor: "stuck" }));
+    await expect(async () => {
+      for await (const item of paginate(fetchPage)) {
+        // Consume the generator so it reaches the malformed second page.
+        expect(item).toBe(1);
+      }
+    }).rejects.toThrow("repeated a cursor");
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+  });
   it("stops as soon as the consumer breaks out of the loop", async () => {
     const fetchPage = vi.fn(async () => ({ items: [1, 2], next_cursor: "c" }));
     for await (const item of paginate<number>(fetchPage)) {

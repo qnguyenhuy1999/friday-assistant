@@ -5,7 +5,13 @@ database location (e.g. for tests) only ever touches `app.state`.
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import cast
+
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi import Request
+from sqlalchemy import text
 
 from apps.api.settings import ApiSettings
 from friday.application.ports import Clock, UnitOfWorkFactory
@@ -29,3 +35,21 @@ def get_settings(request: Request) -> ApiSettings:
 
 def get_database_reachable(request: Request) -> bool:
     return is_database_reachable(request.app.state.engine)
+
+
+def get_database_schema_current(request: Request) -> bool:
+    """Check that this database has the Alembic head without mutating it."""
+    try:
+        root = Path(__file__).resolve().parents[2]
+        config = Config(str(root / "alembic.ini"))
+        config.set_main_option("script_location", str(root / "migrations"))
+        expected = ScriptDirectory.from_config(config).get_current_head()
+        with request.app.state.engine.connect() as connection:
+            version = cast(
+                str | None,
+                connection.execute(text("SELECT version_num FROM alembic_version")).scalar(),
+            )
+        # Do not run migrations here: they remain an explicit operator action.
+        return version == expected
+    except Exception:  # noqa: BLE001 - readiness intentionally reports unavailable
+        return False

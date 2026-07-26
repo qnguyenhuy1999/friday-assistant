@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@friday/contracts": "workspace:*",
@@ -17,6 +18,7 @@
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.0",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.0",

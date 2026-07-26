@@ -18,7 +18,10 @@
 - `friday.application`
 - `friday.domain`
 
-## Current Status
+## Operations
 
-No actual runtime exists yet. `main()` returns a static identification
-string only. No framework, networking, or database access is present.
+Run the API with `uv run python -m apps.api.main`. It binds to loopback by
+default. `GET /health` is liveness and `GET /ready` additionally verifies that
+the database is reachable and migrated to the current Alembic head. See the
+[operations runbook](../../docs/operations-runbook.md) for startup, preflight,
+diagnosis, and safe configuration.

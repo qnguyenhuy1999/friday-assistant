@@ -32,6 +32,17 @@ def test_create_app_registers_health_route(tmp_path: Path) -> None:
         app.state.engine.dispose()
 
 
+def test_readiness_reports_unavailable_before_schema_is_migrated(tmp_path: Path) -> None:
+    app = create_app(_settings_for(tmp_path))
+    try:
+        with TestClient(app) as client:
+            response = client.get("/ready")
+        assert response.status_code == 200
+        assert response.json() == {"status": "unavailable"}
+    finally:
+        app.state.engine.dispose()
+
+
 def test_create_app_uses_the_configured_temporary_database(tmp_path: Path) -> None:
     settings = _settings_for(tmp_path)
     app = create_app(settings)
@@ -46,6 +57,7 @@ def test_openapi_generation_is_deterministic(tmp_path: Path) -> None:
     try:
         schema = app.openapi()
         assert "/health" in schema["paths"]
+        assert "/ready" in schema["paths"]
         assert schema["paths"]["/health"]["get"]["operationId"] == "getHealth"
     finally:
         app.state.engine.dispose()

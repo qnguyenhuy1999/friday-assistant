@@ -10,6 +10,7 @@ from apps.api.settings import ApiSettings
 
 EXPECTED_OPERATIONS = {
     ("GET", "/health", "getHealth"),
+    ("GET", "/ready", "getReadiness"),
     ("GET", "/v1/tasks", "listTasks"),
     ("POST", "/v1/tasks", "createTask"),
     ("GET", "/v1/tasks/{task_id}", "getTask"),

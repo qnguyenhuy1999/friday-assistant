@@ -10,6 +10,7 @@
   "globs": ["**/*.md"],
   "ignores": [
     "node_modules/**",
+    "**/node_modules/**",
     ".venv/**",
     // Auto-generated planning documents from the superpowers writing-plans
     // skill use their own checkbox/fenced-code layout convention, not

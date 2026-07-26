@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.errors import ERROR_RESPONSES, register_exception_handlers
 from apps.api.routes.approvals import router as approvals_router
@@ -42,6 +43,12 @@ def create_app(settings: ApiSettings) -> FastAPI:
     app.state.engine = engine
     app.state.uow_factory = create_unit_of_work_factory(session_factory)
     app.state.clock = SystemClock()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.cors_allowed_origins),
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type", "Last-Event-ID"],
+    )
 
     register_exception_handlers(app)
     app.include_router(health_router, responses=ERROR_RESPONSES)

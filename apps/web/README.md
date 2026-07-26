@@ -10,7 +10,8 @@
 
 ## Current Status
 
-TypeScript package shell only. No React, JSX, DOM access, routes,
-components, CSS, state management, API calls, or build tooling exists yet.
-`src/index.ts` exports a static metadata object to validate workspace
-layout and type-checking.
+Vite + React + TanStack Query control plane. Query-parameter routing serves
+Tasks, Run Detail, and the run-scoped Approvals view. The app talks to the API
+only through `@friday/sdk`'s `FridayClient`, uses named SSE events plus
+bounded polling for live state, and renders approval authorization intent
+verbatim before an explicit human decision.

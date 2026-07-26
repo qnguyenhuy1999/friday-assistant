@@ -5,11 +5,11 @@ bootstrap:
 
 format:
     uv run ruff format .
-    pnpm exec prettier --write "**/*.{json,yaml,yml}" "apps/**/*.ts" "packages/**/*.ts" eslint.config.mjs
+    pnpm exec prettier --write "**/*.{json,yaml,yml}" "apps/**/*.{ts,tsx}" "packages/**/*.{ts,tsx}" eslint.config.mjs
 
 format-check:
     uv run ruff format --check .
-    pnpm exec prettier --check "**/*.{json,yaml,yml}" "apps/**/*.ts" "packages/**/*.ts" eslint.config.mjs
+    pnpm exec prettier --check "**/*.{json,yaml,yml}" "apps/**/*.{ts,tsx}" "packages/**/*.{ts,tsx}" eslint.config.mjs
 
 lint:
     uv run ruff check .
@@ -27,6 +27,10 @@ typecheck:
 
 test:
     uv run pytest
+
+test-ts:
+    pnpm --filter @friday/sdk test
+    pnpm --filter @friday/web test
 
 test-cov:
     uv run pytest --cov=src/friday --cov=apps/api --cov=apps/worker --cov-report=term-missing
@@ -78,7 +82,7 @@ pre-commit:
 # they're re-run here individually so a contributor gets an explicit,
 # fast-failing signal naming exactly which dimension broke, at negligible
 # cost (each subset runs in well under a second).
-check: format-check lint typecheck test architecture-check policy-check domain-check schema-check schema-parity-check migration-check persistence-check
+check: format-check lint typecheck test test-ts architecture-check policy-check domain-check schema-check schema-parity-check migration-check persistence-check
 
 # Full CI-equivalent gate. test-cov and lock-check are not part of `check`
 # because test-cov needs coverage instrumentation (slower, and duplicates

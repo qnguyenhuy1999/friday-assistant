@@ -1,5 +1,18 @@
 {
   "name": "@friday/sdk",
   "version": "0.0.0",
-  "private": true
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@friday/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
 }

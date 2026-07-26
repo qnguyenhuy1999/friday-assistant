@@ -1,7 +1,15 @@
-"""Enforces Phase 3 Node dependency-manifest policy across all package.json
-files in the pnpm workspace: root stays private with no production deps,
-workspace packages stay private and named @friday/*, packageManager and
-engines.node stay pinned/explicit, and no file:/git/http(s) tarball deps.
+"""Enforces the Node dependency-manifest policy across all package.json files
+in the pnpm workspace: root stays private with no production deps, workspace
+packages stay private and named @friday/*, packageManager and engines.node stay
+pinned/explicit, and no file:/git/http(s) tarball deps.
+
+The blanket "no production dependencies anywhere" rule was a Phase 3 scope
+guard ("no React/Vite; all new tools are dev-only"). Phase 14 ships the web
+control plane and the SDK, whose runtime dependencies (react, react-dom,
+@tanstack/react-query, the workspace contracts package) are the deliverable
+rather than a violation. The guard is therefore scoped to the root manifest,
+which must never grow runtime dependencies, while every other rule still
+applies to every manifest.
 """
 
 from __future__ import annotations
@@ -41,8 +49,10 @@ def check_manifest(manifest: dict[str, Any], *, is_root: bool) -> list[str]:
         violations.append(f"{name}: workspace package name must start with @friday/")
 
     prod_deps = manifest.get("dependencies")
-    if prod_deps:
-        violations.append(f"{name}: production dependencies not allowed in Phase 3: {prod_deps}")
+    if is_root and prod_deps:
+        violations.append(
+            f"{name}: the root manifest must not declare production dependencies: {prod_deps}"
+        )
 
     for field in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
         deps = manifest.get(field)
@@ -76,10 +86,26 @@ def test_all_real_manifests_are_compliant() -> None:
     assert violations == {}
 
 
-def test_detector_flags_production_dependency() -> None:
-    manifest = {"name": "@friday/web", "private": True, "dependencies": {"react": "^19.0.0"}}
-    violations = check_manifest(manifest, is_root=False)
-    assert any("production dependencies" in v for v in violations)
+def test_detector_flags_production_dependency_on_the_root_manifest() -> None:
+    manifest = {
+        "name": "friday-agent-os",
+        "private": True,
+        "packageManager": "pnpm@11.16.0",
+        "engines": {"node": ">=22 <25"},
+        "dependencies": {"react": "^19.0.0"},
+    }
+    violations = check_manifest(manifest, is_root=True)
+    assert any("must not declare production dependencies" in v for v in violations)
+
+
+def test_detector_allows_runtime_dependencies_on_a_workspace_package() -> None:
+    """apps/web cannot ship without react; the guard applies to the root only."""
+    manifest = {
+        "name": "@friday/web",
+        "private": True,
+        "dependencies": {"react": "^19.0.0", "@friday/sdk": "workspace:*"},
+    }
+    assert check_manifest(manifest, is_root=False) == []
 
 
 def test_detector_flags_non_private_package() -> None:

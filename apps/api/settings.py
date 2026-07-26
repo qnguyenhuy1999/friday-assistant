@@ -12,6 +12,7 @@ _DEFAULT_DATABASE_URL = "sqlite:///./friday.db"
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8000
 _DEFAULT_SSE_POLL_INTERVAL_SECONDS = 0.5
+_DEFAULT_CORS_ORIGINS: tuple[str, ...] = ("http://localhost:5173", "http://127.0.0.1:5173")
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,9 +21,16 @@ class ApiSettings:
     host: str
     port: int
     sse_poll_interval_seconds: float
+    cors_allowed_origins: tuple[str, ...] = _DEFAULT_CORS_ORIGINS
 
     @classmethod
     def from_env(cls) -> ApiSettings:
+        raw_origins = os.environ.get("FRIDAY_API_CORS_ORIGINS")
+        cors_allowed_origins = (
+            tuple(origin.strip() for origin in raw_origins.split(",") if origin.strip())
+            if raw_origins
+            else _DEFAULT_CORS_ORIGINS
+        )
         return cls(
             database_url=os.environ.get("FRIDAY_API_DATABASE_URL", _DEFAULT_DATABASE_URL),
             host=os.environ.get("FRIDAY_API_HOST", _DEFAULT_HOST),
@@ -33,4 +41,5 @@ class ApiSettings:
                     _DEFAULT_SSE_POLL_INTERVAL_SECONDS,
                 )
             ),
+            cors_allowed_origins=cors_allowed_origins,
         )

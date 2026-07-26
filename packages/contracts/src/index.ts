@@ -1,3 +1,15 @@
+export * from "./wire/json-value";
+export * from "./wire/failure";
+export * from "./wire/error";
+export * from "./wire/pagination";
+export * from "./wire/task";
+export * from "./wire/run";
+export * from "./wire/step";
+export * from "./wire/approval";
+export * from "./wire/tool-invocation";
+export * from "./wire/artifact";
+export * from "./wire/event";
+
 export const CONTRACTS_VERSION = "v1" as const;
 
 export const contractsPackageMetadata = {

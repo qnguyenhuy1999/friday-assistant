@@ -7,14 +7,17 @@
     "node": ">=22 <25"
   },
   "scripts": {
-    "format": "prettier --write \"**/*.{json,yaml,yml}\" \"apps/**/*.ts\" \"packages/**/*.ts\" eslint.config.mjs",
-    "format:check": "prettier --check \"**/*.{json,yaml,yml}\" \"apps/**/*.ts\" \"packages/**/*.ts\" eslint.config.mjs",
+    "format": "prettier --write \"**/*.{json,yaml,yml}\" \"apps/**/*.{ts,tsx}\" \"packages/**/*.{ts,tsx}\" eslint.config.mjs",
+    "format:check": "prettier --check \"**/*.{json,yaml,yml}\" \"apps/**/*.{ts,tsx}\" \"packages/**/*.{ts,tsx}\" eslint.config.mjs",
     "lint": "eslint .",
-    "typecheck": "tsc -p apps/web/tsconfig.typecheck.json && tsc -p packages/contracts/tsconfig.typecheck.json && tsc -p packages/sdk-ts/tsconfig.typecheck.json"
+    "typecheck": "tsc -p apps/web/tsconfig.typecheck.json && tsc -p packages/contracts/tsconfig.typecheck.json && tsc -p packages/sdk-ts/tsconfig.typecheck.json",
+    "test": "pnpm --filter @friday/sdk test && pnpm --filter @friday/web test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.7.0",
+    "eslint-plugin-react-hooks": "^6.1.0",
+    "eslint-plugin-react-refresh": "^0.4.0",
     "markdownlint-cli2": "^0.23.1",
     "prettier": "^3.9.6",
     "typescript": "^6.0.3",

@@ -11,6 +11,9 @@ durable scheduled automations.
   interfaces. No outward dependency.
 - **`src/friday/application`** — use cases and orchestration. May depend
   on `domain` only.
+- **`src/friday/application/conversation_context.py`** — bounded, Run-scoped
+  conversational history for the agent runtime (see
+  [conversation-interface.md](conversation-interface.md)).
 - **`src/friday/infrastructure`** — adapters to databases, external APIs,
   and the filesystem. May depend on `application` and `domain`.
 - **`src/friday/infrastructure/persistence`** — SQLite adapter via
@@ -21,8 +24,9 @@ durable scheduled automations.
   [api-delivery.md](api-delivery.md)).
 - **`apps/worker`** — worker delivery process. A composition root plus a
   claim/lease/retry coordination loop over the Phase 6–9 use cases (see
-  [worker-coordination.md](worker-coordination.md)). No tool/model
-  execution exists yet.
+  [worker-coordination.md](worker-coordination.md)), the `AgentRunProcessor`
+  brain loop (see [agent-runtime.md](agent-runtime.md)), memory index
+  maintenance, and the durable schedule dispatcher.
 - **`src/friday/infrastructure/computer`** — the opt-in desktop computer-use
   substrate behind `ComputerToolGateway` (see
   [computer-use.md](computer-use.md)). Reachable only from
@@ -31,6 +35,8 @@ durable scheduled automations.
   application layer, domain layer, and worker loop must never import it.
 - **`apps/web`** — React/Vite browser control plane for tasks, runs,
   approvals, artifacts, events, final results, and schedules.
+- **`apps/web/src/voice`** — browser-native speech adapters and controller;
+  voice is delivery only and has no server-side execution surface.
 - **`packages/contracts`** — language-neutral schemas and cross-process
   protocol definitions (see [contracts.md](contracts.md)).
 - **`packages/sdk-ts`** — validated TypeScript client SDK for the HTTP and
@@ -91,13 +97,32 @@ reverse.
 
 ## Status
 
-Phase 4 adds a framework-independent domain model, application ports, and
-JSON Schema contracts. Those domain and contract surfaces are complete for
-the entities documented in their respective modules and tests.
+Implemented through **Phase 17 — Conversational Voice Interface**:
 
-Phase 5 adds a SQLite persistence adapter (see
-[persistence.md](persistence.md)) implementing all seven application
-ports via SQLAlchemy, with Alembic migrations as schema source of truth.
+- **Phase 4–5** — framework-independent domain model, application ports, JSON
+  Schema contracts, and the SQLite persistence adapter (see
+  [persistence.md](persistence.md)) with Alembic as the schema source of truth.
+- **Phase 6–9** — application kernel, lifecycle use cases, approval/tool/
+  artifact use cases, and the FastAPI delivery boundary (see
+  [api-delivery.md](api-delivery.md), [lifecycle-use-cases.md](lifecycle-use-cases.md),
+  [approval-tool-artifact-use-cases.md](approval-tool-artifact-use-cases.md)).
+- **Phase 10–11** — leased worker coordination with claim fencing (see
+  [worker-coordination.md](worker-coordination.md)) and the Claude-CLI brain
+  runtime with gateway-mediated tool execution (see
+  [agent-runtime.md](agent-runtime.md)).
+- **Phase 12–13** — structural memory retrieval over the canonical Obsidian
+  vault (see [../memory.md](../memory.md)) and opt-in desktop computer use
+  (see [computer-use.md](computer-use.md)).
+- **Phase 14–16** — TypeScript SDK and React control plane over generated
+  versioned contracts (see [contracts.md](contracts.md)), operational
+  hardening, and durable scheduled automations.
+- **Phase 17** — durable conversational turns, bounded Run-scoped context,
+  and browser-native voice delivery (see
+  [conversation-interface.md](conversation-interface.md)).
+
+Later phases add Friday-owned MCP and external integrations, a messaging
+gateway, skills and self-improvement, and multi-agent delegation. None of
+those are implemented yet.
 The adapter and migration behavior are covered by `tests/persistence`.
 
 Later phases add the FastAPI delivery boundary, leased worker coordination,

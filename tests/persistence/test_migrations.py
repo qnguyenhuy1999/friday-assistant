@@ -38,6 +38,8 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "memory_retrieval_items",
             "schedules",
             "schedule_fires",
+            "conversations",
+            "conversation_turns",
             "alembic_version",
         }
         assert "execution_id" in {column["name"] for column in inspector.get_columns("runs")}
@@ -47,6 +49,10 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "ck_schedules_kind_shape",
             "ck_schedules_status_next_fire",
         } <= checks
+        turn_checks = {
+            check["name"] for check in inspector.get_check_constraints("conversation_turns")
+        }
+        assert "ck_conversation_turns_input_mode" in turn_checks
     finally:
         engine.dispose()
 

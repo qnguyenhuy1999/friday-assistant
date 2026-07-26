@@ -57,12 +57,29 @@ def _succeed_run_event_specs(
 
 
 class _RunCancellation(LifecycleEvents):
+    def _cancel_pending_approvals(
+        self, uow: UnitOfWork, run: Run, now: datetime
+    ) -> list[tuple[RunEventType, JsonValue, RunStepId | None]]:
+        specs: list[tuple[RunEventType, JsonValue, RunStepId | None]] = []
+        for approval in uow.approvals.list_pending_for_run(run.id):
+            approval.cancel(now, resolution_note="run cancelled")
+            uow.approvals.save(approval)
+            specs.append(
+                (
+                    RunEventType.APPROVAL_RESOLVED,
+                    {"approval_request_id": str(approval.id), "status": approval.status.value},
+                    approval.step_id,
+                )
+            )
+        return specs
+
     def _cancel_run(self, uow: UnitOfWork, run: Run, now: datetime) -> None:
         specs: list[tuple[RunEventType, JsonValue, RunStepId | None]] = [
             (RunEventType.RUN_CANCELLED, {"run_id": str(run.id)}, None)
         ]
         run.cancel(now)
         uow.runs.save(run)
+        specs.extend(self._cancel_pending_approvals(uow, run, now))
         uow.work_queue.remove(run.id)
         for step in uow.steps.list_for_run(run.id):
             if step.status not in TERMINAL_RUN_STEP_STATUSES:

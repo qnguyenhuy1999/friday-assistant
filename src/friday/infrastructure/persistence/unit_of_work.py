@@ -30,6 +30,8 @@ from friday.application.ports import UnitOfWork, UnitOfWorkFactory
 from friday.infrastructure.persistence.repositories import (
     ApprovalRepository,
     ArtifactRepository,
+    ConversationRepository,
+    ConversationTurnRepository,
     MemoryIndexSnapshotRepository,
     MemoryRetrievalRecordRepository,
     RunEventStore,
@@ -60,6 +62,8 @@ class SqlAlchemyUnitOfWork:
         self._tasks = TaskRepository(session)
         self._runs = RunRepository(session)
         self._schedules = ScheduleRepository(session)
+        self._conversations = ConversationRepository(session)
+        self._conversation_turns = ConversationTurnRepository(session)
         self._schedule_fires = ScheduleFireRepository(session)
         self._steps = RunStepRepository(session)
         self._approvals = ApprovalRepository(session)
@@ -82,6 +86,14 @@ class SqlAlchemyUnitOfWork:
     @property
     def schedules(self) -> ScheduleRepository:
         return self._schedules
+
+    @property
+    def conversations(self) -> ConversationRepository:
+        return self._conversations
+
+    @property
+    def conversation_turns(self) -> ConversationTurnRepository:
+        return self._conversation_turns
 
     @property
     def schedule_fires(self) -> ScheduleFireRepository:

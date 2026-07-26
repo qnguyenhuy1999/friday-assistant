@@ -8,10 +8,12 @@ from datetime import datetime
 
 from friday.domain.approval import ApprovalCategory
 from friday.domain.artifact import ArtifactKind
+from friday.domain.conversation import ConversationInputMode
 from friday.domain.failure import Failure
 from friday.domain.identifiers import (
     ApprovalRequestId,
     ArtifactId,
+    ConversationId,
     RunId,
     RunStepId,
     TaskId,
@@ -29,6 +31,15 @@ class CreateTaskCommand:
 @dataclass(frozen=True, slots=True)
 class StartRunCommand:
     task_id: TaskId
+
+
+@dataclass(frozen=True, slots=True)
+class SubmitConversationTurnCommand:
+    conversation_id: ConversationId
+    client_turn_id: str
+    input_text: str
+    input_mode: ConversationInputMode
+    recognition_language: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,11 +15,17 @@ export type {
 } from "./wire/tool-invocation";
 export type { RecordArtifactBody } from "./wire/artifact";
 export type {
+  ConversationInputMode,
+  SubmitConversationTurnBody,
+} from "./wire/conversation";
+export type {
   ApprovalCategory,
   ApprovalRequest,
   ApprovalStatus,
   Artifact,
   ArtifactKind,
+  Conversation,
+  ConversationTurn,
   Failure,
   Run,
   RunEvent,
@@ -60,6 +66,9 @@ export {
   validateScheduleFire,
   validateScheduleFirePage,
   validateSchedulePage,
+  validateConversation,
+  validateConversationTurn,
+  validateConversationTurnPage,
   type WireValidator,
 } from "./wire/response-validation";
 

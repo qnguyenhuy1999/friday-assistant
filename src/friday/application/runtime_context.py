@@ -15,6 +15,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
+from friday.application.conversation_context import ConversationContext, build_conversation_section
 from friday.application.memory.context import build_memory_section
 from friday.application.memory.models import MemoryContext, RetrievalMode
 from friday.application.tool_gateway import ToolDescriptor
@@ -32,6 +33,7 @@ MIN_CONTEXT_CHARS = 1000
 MAX_ITEM_CHARS = 2000
 _TRUNCATION_SUFFIX = "…[truncated]"
 _DEFAULT_MEMORY_CONTEXT_CHARS = 4_000
+_DEFAULT_CONVERSATION_CONTEXT_CHARS = 6_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,6 +272,8 @@ def build_runtime_context(
     max_chars: int,
     memory_context: MemoryContext | None = None,
     memory_max_chars: int = _DEFAULT_MEMORY_CONTEXT_CHARS,
+    conversation_context: ConversationContext | None = None,
+    conversation_max_chars: int = _DEFAULT_CONVERSATION_CONTEXT_CHARS,
 ) -> str:
     """Render the bounded context document. Deterministic for a given
     snapshot and budget; never exceeds `max_chars`."""
@@ -277,6 +281,8 @@ def build_runtime_context(
         raise ValueError(f"max_chars must be >= {MIN_CONTEXT_CHARS}")
     if memory_max_chars < 1:
         raise ValueError("memory_max_chars must be positive")
+    if conversation_max_chars < 1:
+        raise ValueError("conversation_max_chars must be positive")
 
     omitted = _Omitted()
     document = _render(snapshot, tool_manifest, attempt_number, turn_number, omitted)
@@ -287,12 +293,20 @@ def build_runtime_context(
             return document[: max_chars - len(marker)] + marker
         omitted = next_omitted
         document = _render(snapshot, tool_manifest, attempt_number, turn_number, omitted)
-    if memory_context is None:
-        return document
-    available = max_chars - len(document) - 2
-    if available <= 0:
-        return document
-    memory = _bounded_memory_section(memory_context, max_chars=min(memory_max_chars, available))
-    if not memory:
-        return document
-    return f"{document}\n\n{memory}"
+    if conversation_context is not None:
+        available = max_chars - len(document) - 2
+        if available > 0:
+            section = build_conversation_section(
+                conversation_context, max_chars=min(conversation_max_chars, available)
+            )
+            if section:
+                document = f"{document}\n\n{section}"
+    if memory_context is not None:
+        available = max_chars - len(document) - 2
+        if available > 0:
+            memory = _bounded_memory_section(
+                memory_context, max_chars=min(memory_max_chars, available)
+            )
+            if memory:
+                document = f"{document}\n\n{memory}"
+    return document

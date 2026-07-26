@@ -2,12 +2,28 @@ import { ApprovalsPage } from "./pages/approvals-page";
 import { RunDetailPage } from "./pages/run-detail-page";
 import { TasksPage } from "./pages/tasks-page";
 import { SchedulesPage } from "./pages/schedules-page";
+import { ConversationPage } from "./pages/conversation-page";
 import { useRoute } from "./router/use-route";
 export function App() {
   const [route, navigate] = useRoute();
   return (
     <main>
       <h1>Friday Agent OS</h1>
+      <nav>
+        <button
+          type="button"
+          onClick={() => navigate({ view: "conversation", id: null })}
+        >
+          Conversation
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate({ view: "tasks", id: null })}
+        >
+          Tasks
+        </button>
+      </nav>
+      {route.view === "conversation" && <ConversationPage />}
       {route.view === "tasks" && (
         <TasksPage
           onRunStarted={(id) => navigate({ view: "run", id })}

@@ -8,10 +8,13 @@ from datetime import datetime
 
 from friday.domain.approval import ApprovalCategory, ApprovalStatus
 from friday.domain.artifact import ArtifactKind
+from friday.domain.conversation import ConversationInputMode
 from friday.domain.failure import Failure
 from friday.domain.identifiers import (
     ApprovalRequestId,
     ArtifactId,
+    ConversationId,
+    ConversationTurnId,
     RunId,
     RunStepId,
     TaskId,
@@ -33,6 +36,35 @@ class CreateTaskResult:
 class StartRunResult:
     task_id: TaskId
     run_id: RunId
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationResult:
+    conversation_id: ConversationId
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationTurnResult:
+    turn_id: ConversationTurnId
+    conversation_id: ConversationId
+    client_turn_id: str
+    input_text: str
+    input_mode: ConversationInputMode
+    recognition_language: str | None
+    task_id: TaskId
+    run_id: RunId
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SubmitConversationTurnResult:
+    conversation_id: ConversationId
+    turn_id: ConversationTurnId
+    task_id: TaskId
+    run_id: RunId
+    deduplicated: bool
 
 
 @dataclass(frozen=True, slots=True)

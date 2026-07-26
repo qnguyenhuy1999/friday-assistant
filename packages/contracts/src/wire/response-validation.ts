@@ -22,5 +22,8 @@ export {
   validateScheduleFire,
   validateScheduleFirePage,
   validateSchedulePage,
+  validateConversation,
+  validateConversationTurn,
+  validateConversationTurnPage,
   type WireValidator,
 } from "./http.generated";

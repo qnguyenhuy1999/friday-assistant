@@ -8,12 +8,16 @@ from __future__ import annotations
 
 from friday.domain.approval import ApprovalCategory, ApprovalRequest, ApprovalStatus
 from friday.domain.artifact import Artifact, ArtifactKind
+from friday.domain.conversation import Conversation, ConversationInputMode
+from friday.domain.conversation_turn import ConversationTurn
 from friday.domain.errors import DomainError, DomainValidationError, InvalidStateTransition
 from friday.domain.event import RunEvent, RunEventType
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.identifiers import (
     ApprovalRequestId,
     ArtifactId,
+    ConversationId,
+    ConversationTurnId,
     RunEventId,
     RunId,
     RunStepId,
@@ -41,6 +45,11 @@ __all__ = [
     "Artifact",
     "ArtifactId",
     "ArtifactKind",
+    "Conversation",
+    "ConversationId",
+    "ConversationInputMode",
+    "ConversationTurn",
+    "ConversationTurnId",
     "DomainError",
     "DomainValidationError",
     "Failure",

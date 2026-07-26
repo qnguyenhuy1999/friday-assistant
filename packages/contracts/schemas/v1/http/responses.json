@@ -332,6 +332,42 @@
         "task_id": { "type": "string" },
         "run_id": { "type": "string" }
       }
+    },
+    "Conversation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "created_at", "updated_at"],
+      "properties": {
+        "id": { "type": "string" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      }
+    },
+    "ConversationTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "conversation_id",
+        "client_turn_id",
+        "input_text",
+        "input_mode",
+        "recognition_language",
+        "task_id",
+        "run_id",
+        "created_at"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "conversation_id": { "type": "string" },
+        "client_turn_id": { "type": "string" },
+        "input_text": { "type": "string" },
+        "input_mode": { "enum": ["typed", "push_to_talk", "hands_free"] },
+        "recognition_language": { "type": ["string", "null"] },
+        "task_id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "created_at": { "type": "string" }
+      }
     }
   },
   "responses": {
@@ -345,6 +381,8 @@
     "taskEvent": { "$ref": "#/definitions/TaskEvent" },
     "schedule": { "$ref": "#/definitions/Schedule" },
     "scheduleFire": { "$ref": "#/definitions/ScheduleFire" },
+    "conversation": { "$ref": "#/definitions/Conversation" },
+    "conversationTurn": { "$ref": "#/definitions/ConversationTurn" },
     "taskPage": {
       "type": "object",
       "additionalProperties": false,
@@ -455,6 +493,18 @@
         "items": {
           "type": "array",
           "items": { "$ref": "#/definitions/ScheduleFire" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "conversationTurnPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ConversationTurn" }
         },
         "next_cursor": { "type": ["string", "null"] }
       }

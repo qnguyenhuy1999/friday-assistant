@@ -19,6 +19,8 @@ from friday.application.memory.ports import (
 from friday.application.ports import (
     ApprovalRepository,
     ArtifactRepository,
+    ConversationRepository,
+    ConversationTurnRepository,
     RunEventStore,
     RunRepository,
     RunStepRepository,
@@ -32,10 +34,14 @@ from friday.application.ports import (
 )
 from friday.domain.approval import ApprovalRequest, ApprovalStatus
 from friday.domain.artifact import Artifact
-from friday.domain.event import RunEvent
+from friday.domain.conversation import Conversation
+from friday.domain.conversation_turn import ConversationTurn
+from friday.domain.event import RunEvent, RunEventType
 from friday.domain.identifiers import (
     ApprovalRequestId,
     ArtifactId,
+    ConversationId,
+    ConversationTurnId,
     RunId,
     RunStepId,
     ScheduleId,
@@ -176,6 +182,87 @@ class FakeScheduleRepository:
                 schedule.cancel(at) if cancelled else schedule.complete(at)
 
 
+class FakeConversationRepository:
+    def __init__(self) -> None:
+        self.items: dict[ConversationId, Conversation] = {}
+
+    def add(self, conversation: Conversation) -> None:
+        self.items[conversation.id] = conversation
+
+    def get(self, conversation_id: ConversationId) -> Conversation | None:
+        return self.items.get(conversation_id)
+
+    def save(self, conversation: Conversation) -> None:
+        self.items[conversation.id] = conversation
+
+
+class FakeConversationTurnRepository:
+    def __init__(self) -> None:
+        self.items: dict[ConversationTurnId, ConversationTurn] = {}
+
+    def add(self, turn: ConversationTurn) -> None:
+        from friday.application.errors import EntityConflict
+
+        if self.get_by_client_turn_id(turn.conversation_id, turn.client_turn_id) or self.get_by_run(
+            turn.run_id
+        ):
+            raise EntityConflict("duplicate conversation turn")
+        self.items[turn.id] = turn
+
+    def get(self, turn_id: ConversationTurnId) -> ConversationTurn | None:
+        return self.items.get(turn_id)
+
+    def get_by_client_turn_id(
+        self, conversation_id: ConversationId, client_turn_id: str
+    ) -> ConversationTurn | None:
+        return next(
+            (
+                turn
+                for turn in self.items.values()
+                if turn.conversation_id == conversation_id and turn.client_turn_id == client_turn_id
+            ),
+            None,
+        )
+
+    def get_by_run(self, run_id: RunId) -> ConversationTurn | None:
+        return next((turn for turn in self.items.values() if turn.run_id == run_id), None)
+
+    def list_for_conversation_page(
+        self,
+        conversation_id: ConversationId,
+        limit: int,
+        after_created_at: datetime | None,
+        after_id: str | None,
+    ) -> list[ConversationTurn]:
+        turns = sorted(
+            (turn for turn in self.items.values() if turn.conversation_id == conversation_id),
+            key=lambda turn: (turn.created_at, str(turn.id)),
+        )
+        if after_created_at is not None and after_id is not None:
+            turns = [
+                turn
+                for turn in turns
+                if (turn.created_at, str(turn.id)) > (after_created_at, after_id)
+            ]
+        return turns[:limit]
+
+    def list_recent_before(
+        self,
+        conversation_id: ConversationId,
+        before_created_at: datetime | None,
+        before_id: str | None,
+        limit: int,
+    ) -> list[ConversationTurn]:
+        turns = self.list_for_conversation_page(conversation_id, len(self.items), None, None)
+        if before_created_at is not None and before_id is not None:
+            turns = [
+                turn
+                for turn in turns
+                if (turn.created_at, str(turn.id)) < (before_created_at, before_id)
+            ]
+        return turns[-limit:]
+
+
 class FakeScheduleFireRepository:
     def __init__(self) -> None:
         self.items: list[ScheduleFire] = []
@@ -229,6 +316,12 @@ class FakeRunEventStore:
 
     def append(self, event: RunEvent) -> None:
         self.appended.append(event)
+
+    def latest_of_type_for_run(self, run_id: RunId, event_type: RunEventType) -> RunEvent | None:
+        events = [
+            event for event in self.appended if event.run_id == run_id and event.type is event_type
+        ]
+        return max(events, key=lambda event: event.sequence) if events else None
 
     def list_for_run(self, run_id: RunId) -> list[RunEvent]:
         matching = [event for event in self.appended if event.run_id == run_id]
@@ -737,6 +830,8 @@ class FakeUnitOfWork:
         self.task_repo = FakeTaskRepository()
         self.run_repo = FakeRunRepository()
         self.schedule_repo = FakeScheduleRepository()
+        self.conversation_repo = FakeConversationRepository()
+        self.conversation_turn_repo = FakeConversationTurnRepository()
         self.schedule_fire_repo = FakeScheduleFireRepository()
         self.schedule_fire_repo._runs = self.run_repo
         self.event_store = FakeRunEventStore()
@@ -763,6 +858,14 @@ class FakeUnitOfWork:
     @property
     def schedules(self) -> ScheduleRepository:
         return self.schedule_repo
+
+    @property
+    def conversations(self) -> ConversationRepository:
+        return self.conversation_repo
+
+    @property
+    def conversation_turns(self) -> ConversationTurnRepository:
+        return self.conversation_turn_repo
 
     @property
     def schedule_fires(self) -> ScheduleFireRepository:

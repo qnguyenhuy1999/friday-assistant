@@ -10,6 +10,8 @@ from __future__ import annotations
 from friday.domain.identifiers import (
     ApprovalRequestId,
     ArtifactId,
+    ConversationId,
+    ConversationTurnId,
     RunId,
     RunStepId,
     ScheduleId,
@@ -38,6 +40,18 @@ class ScheduleNotFound(ApplicationError):
     def __init__(self, schedule_id: ScheduleId) -> None:
         self.schedule_id = schedule_id
         super().__init__(f"Schedule not found: {schedule_id}")
+
+
+class ConversationNotFound(ApplicationError):
+    def __init__(self, conversation_id: ConversationId) -> None:
+        self.conversation_id = conversation_id
+        super().__init__(f"Conversation not found: {conversation_id}")
+
+
+class ConversationTurnNotFound(ApplicationError):
+    def __init__(self, turn_id: ConversationTurnId) -> None:
+        self.turn_id = turn_id
+        super().__init__(f"Conversation turn not found: {turn_id}")
 
 
 class RunStepNotFound(ApplicationError):

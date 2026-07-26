@@ -42,6 +42,7 @@ from typing import Any
 from friday.application.brain_runtime import BrainRequest, BrainResponse, BrainRuntime
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
 from friday.application.commands import RequestApprovalCommand
+from friday.application.conversation_context import ConversationContextAssembler
 from friday.application.errors import (
     BrainProtocolError,
     BrainResponseInvalid,
@@ -141,6 +142,7 @@ class AgentRunProcessor:
         limits: RuntimeLimits,
         memory_retriever: MemoryRetrieverPort | None = None,
         memory_query_builder: MemoryQueryBuilder | None = None,
+        conversation_context: ConversationContextAssembler | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._uow_factory = uow_factory
@@ -153,6 +155,7 @@ class AgentRunProcessor:
         self._limits = limits
         self._memory_retriever = memory_retriever
         self._memory_query_builder = memory_query_builder or MemoryQueryBuilder()
+        self._conversation_context = conversation_context
         self._monotonic = monotonic
 
     # ------------------------------------------------------------------ API
@@ -176,6 +179,11 @@ class AgentRunProcessor:
             snapshot = self._load_snapshot(context, tuple(turn_notes))
             if snapshot is None:
                 return self._yield_now()
+            conversation = (
+                self._conversation_context.assemble(context.run_id)
+                if self._conversation_context
+                else None
+            )
 
             objective = (snapshot.task.title, snapshot.task.description)
             if previous_objective is not None and objective != previous_objective:
@@ -198,6 +206,7 @@ class AgentRunProcessor:
                 turn_number=turn,
                 max_chars=self._limits.max_context_chars,
                 memory_context=memory,
+                conversation_context=conversation,
             )
             remaining = deadline - self._monotonic()
             if remaining <= 0:

@@ -24,10 +24,14 @@ from friday.application.memory.ports import (
 )
 from friday.domain.approval import ApprovalRequest
 from friday.domain.artifact import Artifact
-from friday.domain.event import RunEvent
+from friday.domain.conversation import Conversation
+from friday.domain.conversation_turn import ConversationTurn
+from friday.domain.event import RunEvent, RunEventType
 from friday.domain.identifiers import (
     ApprovalRequestId,
     ArtifactId,
+    ConversationId,
+    ConversationTurnId,
     RunId,
     RunStepId,
     ScheduleId,
@@ -209,6 +213,35 @@ class ScheduleFireRepository(Protocol):
     def has_non_terminal_execution_for_schedule(self, schedule_id: ScheduleId) -> bool: ...
 
 
+class ConversationRepository(Protocol):
+    def add(self, conversation: Conversation) -> None: ...
+    def get(self, conversation_id: ConversationId) -> Conversation | None: ...
+    def save(self, conversation: Conversation) -> None: ...
+
+
+class ConversationTurnRepository(Protocol):
+    def add(self, turn: ConversationTurn) -> None: ...
+    def get(self, turn_id: ConversationTurnId) -> ConversationTurn | None: ...
+    def get_by_client_turn_id(
+        self, conversation_id: ConversationId, client_turn_id: str
+    ) -> ConversationTurn | None: ...
+    def get_by_run(self, run_id: RunId) -> ConversationTurn | None: ...
+    def list_for_conversation_page(
+        self,
+        conversation_id: ConversationId,
+        limit: int,
+        after_created_at: datetime | None,
+        after_id: str | None,
+    ) -> list[ConversationTurn]: ...
+    def list_recent_before(
+        self,
+        conversation_id: ConversationId,
+        before_created_at: datetime | None,
+        before_id: str | None,
+        limit: int,
+    ) -> list[ConversationTurn]: ...
+
+
 class ApprovalRepository(Protocol):
     def add(self, approval: ApprovalRequest) -> None: ...
     def get(self, approval_id: ApprovalRequestId) -> ApprovalRequest | None: ...
@@ -270,6 +303,9 @@ class ToolInvocationRepository(Protocol):
 
 class RunEventStore(Protocol):
     def append(self, event: RunEvent) -> None: ...
+    def latest_of_type_for_run(
+        self, run_id: RunId, event_type: RunEventType
+    ) -> RunEvent | None: ...
 
     def list_for_run(self, run_id: RunId) -> list[RunEvent]:
         """Ordered by sequence."""
@@ -313,6 +349,10 @@ class UnitOfWork(Protocol):
     def runs(self) -> RunRepository: ...
     @property
     def schedules(self) -> ScheduleRepository: ...
+    @property
+    def conversations(self) -> ConversationRepository: ...
+    @property
+    def conversation_turns(self) -> ConversationTurnRepository: ...
     @property
     def schedule_fires(self) -> ScheduleFireRepository: ...
     @property

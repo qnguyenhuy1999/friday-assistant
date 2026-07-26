@@ -27,6 +27,11 @@ from friday.domain import (
     Artifact,
     ArtifactId,
     ArtifactKind,
+    Conversation,
+    ConversationId,
+    ConversationInputMode,
+    ConversationTurn,
+    ConversationTurnId,
     Failure,
     FailureCause,
     Run,
@@ -58,6 +63,8 @@ from friday.domain.json_value import JsonValue
 from friday.infrastructure.persistence.models import (
     ApprovalRequestRow,
     ArtifactRow,
+    ConversationRow,
+    ConversationTurnRow,
     MemoryIndexSnapshotRow,
     MemoryRetrievalItemRow,
     MemoryRetrievalRecordRow,
@@ -123,6 +130,50 @@ def task_from_row(row: TaskRow) -> Task:
         _failed_at=_read_back_utc(row.failed_at) if row.failed_at is not None else None,
         _cancelled_at=_read_back_utc(row.cancelled_at) if row.cancelled_at is not None else None,
         _failure=_failure_from_dict(row.failure),
+    )
+
+
+def conversation_to_row(conversation: Conversation) -> ConversationRow:
+    return ConversationRow(
+        id=str(conversation.id),
+        created_at=conversation.created_at,
+        updated_at=conversation.updated_at,
+    )
+
+
+def conversation_from_row(row: ConversationRow) -> Conversation:
+    return Conversation(
+        _id=ConversationId.parse(row.id),
+        _created_at=_read_back_utc(row.created_at),
+        _updated_at=_read_back_utc(row.updated_at),
+    )
+
+
+def conversation_turn_to_row(turn: ConversationTurn) -> ConversationTurnRow:
+    return ConversationTurnRow(
+        id=str(turn.id),
+        conversation_id=str(turn.conversation_id),
+        client_turn_id=turn.client_turn_id,
+        input_text=turn.input_text,
+        input_mode=turn.input_mode.value,
+        recognition_language=turn.recognition_language,
+        task_id=str(turn.task_id),
+        run_id=str(turn.run_id),
+        created_at=turn.created_at,
+    )
+
+
+def conversation_turn_from_row(row: ConversationTurnRow) -> ConversationTurn:
+    return ConversationTurn(
+        id=ConversationTurnId.parse(row.id),
+        conversation_id=ConversationId.parse(row.conversation_id),
+        client_turn_id=row.client_turn_id,
+        input_text=row.input_text,
+        input_mode=ConversationInputMode(row.input_mode),
+        recognition_language=row.recognition_language,
+        task_id=TaskId.parse(row.task_id),
+        run_id=RunId.parse(row.run_id),
+        created_at=_read_back_utc(row.created_at),
     )
 
 

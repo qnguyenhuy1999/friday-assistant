@@ -1,0 +1,11 @@
+export const SILENCE_TIMEOUT_MS = 1_500;
+export const MIN_TTS_RATE = 0.75;
+export const MAX_TTS_RATE = 1.5;
+export const DEFAULT_TTS_RATE = 1;
+export const DEFAULT_STT_LANGUAGE = "en-US";
+export const MAX_TTS_QUEUE = 3;
+export const MAX_SPOKEN_CHARS = 600;
+export const AUDIO_LEVEL_POLL_MS = 50;
+export const BARGE_IN_BASELINE_SAMPLES = 10;
+export const BARGE_IN_RMS_MULTIPLIER = 2.5;
+export const BARGE_IN_SUSTAIN_MS = 300;

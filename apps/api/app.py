@@ -18,6 +18,7 @@ from apps.api.errors import ERROR_RESPONSES, register_exception_handlers
 from apps.api.request_size import RequestBodyLimitMiddleware
 from apps.api.routes.approvals import router as approvals_router
 from apps.api.routes.artifacts import router as artifacts_router
+from apps.api.routes.conversations import router as conversations_router
 from apps.api.routes.events import router as events_router
 from apps.api.routes.health import router as health_router
 from apps.api.routes.runs import router as runs_router
@@ -57,6 +58,7 @@ def create_app(settings: ApiSettings) -> FastAPI:
     app.include_router(health_router, responses=ERROR_RESPONSES)
     app.include_router(tasks_router, responses=ERROR_RESPONSES)
     app.include_router(schedules_router, responses=ERROR_RESPONSES)
+    app.include_router(conversations_router, responses=ERROR_RESPONSES)
     app.include_router(runs_router, responses=ERROR_RESPONSES)
     app.include_router(steps_router, responses=ERROR_RESPONSES)
     app.include_router(approvals_router, responses=ERROR_RESPONSES)

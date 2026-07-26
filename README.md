@@ -134,6 +134,17 @@ The browser reaches Friday through the SDK and API; it does not directly reach p
 
 A schedule decides when a Run exists; scheduled automation never executes tools directly.
 
+### Conversational voice interface
+
+- durable conversation turns with idempotent Task/Run materialization
+- bounded, Run-scoped conversational context
+- typed input, push-to-talk, and hands-free silence finalization
+- browser TTS of final summaries with recognition suppression during playback
+- explicit interrupt semantics and approval-safe cancellation
+
+Voice is delivery only: a spoken phrase is text, and it cannot approve,
+authorize, or execute anything.
+
 ## Repository structure
 
 ```text
@@ -171,13 +182,12 @@ Domain never depends outward. See [docs/architecture/README.md](docs/architectur
 Completed core foundations through:
 
 ```text
-Phase 16 — Durable Scheduled Automations
+Phase 17 — Conversational Voice Interface
 ```
 
 Remaining v1 phases:
 
 ```text
-Phase 17 — Conversational Voice Interface
 Phase 18 — Friday-owned MCP & External Integrations
 Phase 19 — Messaging Gateway & Scheduled Delivery
 Phase 20 — Skills & Self-Improvement Loop
@@ -220,4 +230,4 @@ See `justfile` for the complete command set and `docs/` for architecture, govern
 
 Friday is actively developed and should still be treated as pre-release software.
 
-The core execution/runtime foundations are implemented through Phase 16; voice, external MCP integrations, messaging, skills/self-improvement, and multi-agent workflows remain upcoming work.
+The core execution/runtime foundations are implemented through Phase 17; external MCP integrations, messaging, skills/self-improvement, and multi-agent workflows remain upcoming work.

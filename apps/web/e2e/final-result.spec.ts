@@ -7,9 +7,11 @@ test("a real browser receives a durable deterministic agent result", async ({
   if (!webUrl)
     throw new Error("FRIDAY_E2E_WEB_URL was not set by global setup");
   await page.goto(webUrl);
+  // Conversation is the primary screen; Tasks remains an operational surface.
+  await page.getByRole("button", { name: "Tasks" }).click();
   await page.getByLabel("Title").fill("Browser-to-runtime proof");
   await page.getByRole("button", { name: "Create task" }).click();
-  await page.getByRole("button", { name: "Start run" }).click();
+  await page.getByRole("button", { name: "Start run" }).first().click();
 
   await expect(page.getByText("Status: succeeded")).toBeVisible();
   await expect(page.getByRole("status")).toContainText("Run succeeded.");

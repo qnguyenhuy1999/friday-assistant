@@ -27,13 +27,13 @@ describe("App", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("renders the shell and the tasks view by default", async () => {
+  it("renders the shell and conversation view by default", async () => {
     renderApp();
     expect(
       screen.getByRole("heading", { name: "Friday Agent OS" }),
     ).toBeInTheDocument();
     expect(
-      await screen.findByRole("heading", { name: "Tasks" }),
+      await screen.findByRole("heading", { name: "Conversation" }),
     ).toBeInTheDocument();
   });
 

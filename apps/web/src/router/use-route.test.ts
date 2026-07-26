@@ -7,9 +7,9 @@ beforeEach(() => {
 });
 
 describe("useRoute", () => {
-  it("defaults to the tasks view with no id", () => {
+  it("defaults to the conversation view with no id", () => {
     const { result } = renderHook(() => useRoute());
-    expect(result.current[0]).toEqual({ view: "tasks", id: null });
+    expect(result.current[0]).toEqual({ view: "conversation", id: null });
   });
 
   it("reads an existing ?view=run&id=... URL on mount", () => {
@@ -18,10 +18,10 @@ describe("useRoute", () => {
     expect(result.current[0]).toEqual({ view: "run", id: "r-1" });
   });
 
-  it("falls back to tasks for an unknown view", () => {
+  it("falls back to conversation for an unknown view", () => {
     window.history.replaceState({}, "", "/?view=nonsense&id=r-1");
     const { result } = renderHook(() => useRoute());
-    expect(result.current[0]).toEqual({ view: "tasks", id: null });
+    expect(result.current[0]).toEqual({ view: "conversation", id: null });
   });
 
   it("navigate() updates both the URL and the returned route", () => {

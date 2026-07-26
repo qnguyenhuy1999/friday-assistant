@@ -11,6 +11,10 @@ from apps.api.settings import ApiSettings
 EXPECTED_OPERATIONS = {
     ("GET", "/health", "getHealth"),
     ("GET", "/ready", "getReadiness"),
+    ("POST", "/v1/conversations", "createConversation"),
+    ("GET", "/v1/conversations/{conversation_id}", "getConversation"),
+    ("GET", "/v1/conversations/{conversation_id}/turns", "listConversationTurns"),
+    ("POST", "/v1/conversations/{conversation_id}/turns", "submitConversationTurn"),
     ("GET", "/v1/tasks", "listTasks"),
     ("POST", "/v1/tasks", "createTask"),
     ("GET", "/v1/tasks/{task_id}", "getTask"),

@@ -18,6 +18,7 @@ from apps.worker.worker_loop import WorkerLoop
 from friday.application.agent_run_processor import AgentRunProcessor, RuntimeLimits
 from friday.application.brain_runtime import BrainRuntime
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
+from friday.application.conversation_context import ConversationContextAssembler
 from friday.application.materialize_due_schedule import MaterializeDueSchedules
 from friday.application.memory.index_coordination import (
     BuildMemoryIndex,
@@ -370,6 +371,7 @@ def create_worker(
             max_processing_seconds=runtime.max_processing_seconds,
         ),
         memory_retriever=memory.retriever,
+        conversation_context=ConversationContextAssembler(uow_factory),
     )
 
     loop = WorkerLoop(

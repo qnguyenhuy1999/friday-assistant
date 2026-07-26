@@ -15,8 +15,13 @@ from friday.domain import (
     ApprovalStatus,
     Artifact,
     ArtifactId,
+    Conversation,
+    ConversationId,
+    ConversationTurn,
+    ConversationTurnId,
     Run,
     RunEvent,
+    RunEventType,
     RunId,
     RunStep,
     RunStepId,
@@ -38,6 +43,10 @@ from friday.infrastructure.persistence.mappers import (
     approval_to_row,
     artifact_from_row,
     artifact_to_row,
+    conversation_from_row,
+    conversation_to_row,
+    conversation_turn_from_row,
+    conversation_turn_to_row,
     index_snapshot_from_row,
     index_snapshot_to_row,
     memory_retrieval_item_from_row,
@@ -64,6 +73,8 @@ from friday.infrastructure.persistence.mappers import (
 from friday.infrastructure.persistence.models import (
     ApprovalRequestRow,
     ArtifactRow,
+    ConversationRow,
+    ConversationTurnRow,
     MemoryIndexSnapshotRow,
     MemoryRetrievalItemRow,
     MemoryRetrievalRecordRow,
@@ -238,6 +249,104 @@ class ScheduleRepository:
             )
             .values(status=status, next_fire_at=None, updated_at=at)
         )
+
+
+class ConversationRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, conversation: Conversation) -> None:
+        self._session.add(conversation_to_row(conversation))
+
+    def get(self, conversation_id: ConversationId) -> Conversation | None:
+        row = self._session.get(ConversationRow, str(conversation_id))
+        return conversation_from_row(row) if row is not None else None
+
+    def save(self, conversation: Conversation) -> None:
+        self._session.merge(conversation_to_row(conversation))
+
+
+class ConversationTurnRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, turn: ConversationTurn) -> None:
+        self._session.add(conversation_turn_to_row(turn))
+
+    def get(self, turn_id: ConversationTurnId) -> ConversationTurn | None:
+        row = self._session.get(ConversationTurnRow, str(turn_id))
+        return conversation_turn_from_row(row) if row is not None else None
+
+    def get_by_client_turn_id(
+        self, conversation_id: ConversationId, client_turn_id: str
+    ) -> ConversationTurn | None:
+        row = self._session.scalar(
+            select(ConversationTurnRow).where(
+                ConversationTurnRow.conversation_id == str(conversation_id),
+                ConversationTurnRow.client_turn_id == client_turn_id,
+            )
+        )
+        return conversation_turn_from_row(row) if row is not None else None
+
+    def get_by_run(self, run_id: RunId) -> ConversationTurn | None:
+        row = self._session.scalar(
+            select(ConversationTurnRow).where(ConversationTurnRow.run_id == str(run_id))
+        )
+        return conversation_turn_from_row(row) if row is not None else None
+
+    def list_for_conversation_page(
+        self,
+        conversation_id: ConversationId,
+        limit: int,
+        after_created_at: object | None,
+        after_id: str | None,
+    ) -> list[ConversationTurn]:
+        stmt = select(ConversationTurnRow).where(
+            ConversationTurnRow.conversation_id == str(conversation_id)
+        )
+        if after_created_at is not None and after_id is not None:
+            stmt = stmt.where(
+                or_(
+                    ConversationTurnRow.created_at > after_created_at,
+                    and_(
+                        ConversationTurnRow.created_at == after_created_at,
+                        ConversationTurnRow.id > after_id,
+                    ),
+                )
+            )
+        return [
+            conversation_turn_from_row(row)
+            for row in self._session.execute(
+                stmt.order_by(ConversationTurnRow.created_at, ConversationTurnRow.id).limit(limit)
+            ).scalars()
+        ]
+
+    def list_recent_before(
+        self,
+        conversation_id: ConversationId,
+        before_created_at: object | None,
+        before_id: str | None,
+        limit: int,
+    ) -> list[ConversationTurn]:
+        stmt = select(ConversationTurnRow).where(
+            ConversationTurnRow.conversation_id == str(conversation_id)
+        )
+        if before_created_at is not None and before_id is not None:
+            stmt = stmt.where(
+                or_(
+                    ConversationTurnRow.created_at < before_created_at,
+                    and_(
+                        ConversationTurnRow.created_at == before_created_at,
+                        ConversationTurnRow.id < before_id,
+                    ),
+                )
+            )
+        rows = self._session.execute(
+            stmt.order_by(
+                ConversationTurnRow.created_at.desc(), ConversationTurnRow.id.desc()
+            ).limit(limit)
+        ).scalars()
+        return [conversation_turn_from_row(row) for row in reversed(list(rows))]
 
 
 class ScheduleFireRepository:
@@ -597,6 +706,16 @@ class RunEventStore:
 
     def append(self, event: RunEvent) -> None:
         self._session.add(run_event_to_row(event))
+
+    def latest_of_type_for_run(self, run_id: RunId, event_type: RunEventType) -> RunEvent | None:
+        stmt = (
+            select(RunEventRow)
+            .where(RunEventRow.run_id == str(run_id), RunEventRow.type == event_type.value)
+            .order_by(RunEventRow.sequence.desc())
+            .limit(1)
+        )
+        row = self._session.execute(stmt).scalar_one_or_none()
+        return run_event_from_row(row) if row is not None else None
 
     def list_for_run(self, run_id: RunId) -> list[RunEvent]:
         stmt = (

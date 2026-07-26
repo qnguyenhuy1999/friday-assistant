@@ -181,6 +181,24 @@ export interface StartRunResponse {
   run_id: string;
 }
 
+export interface Conversation {
+  id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationTurn {
+  id: string;
+  conversation_id: string;
+  client_turn_id: string;
+  input_text: string;
+  input_mode: "typed" | "push_to_talk" | "hands_free";
+  recognition_language: string | null;
+  task_id: string;
+  run_id: string;
+  created_at: string;
+}
+
 export type TaskStatus = Task["status"];
 export type RunStatus = Run["status"];
 export type RunStepStatus = RunStep["status"];
@@ -201,6 +219,7 @@ export type RunEventPage = Page<RunEvent>;
 export type TaskEventPage = Page<TaskEvent>;
 export type SchedulePage = Page<Schedule>;
 export type ScheduleFirePage = Page<ScheduleFire>;
+export type ConversationTurnPage = Page<ConversationTurn>;
 
 export type WireValidator = (value: unknown, path: string) => void;
 export class WireFormatError extends Error {
@@ -718,6 +737,66 @@ const schema = {
         },
       },
     },
+    Conversation: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "created_at", "updated_at"],
+      properties: {
+        id: {
+          type: "string",
+        },
+        created_at: {
+          type: "string",
+        },
+        updated_at: {
+          type: "string",
+        },
+      },
+    },
+    ConversationTurn: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "conversation_id",
+        "client_turn_id",
+        "input_text",
+        "input_mode",
+        "recognition_language",
+        "task_id",
+        "run_id",
+        "created_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        conversation_id: {
+          type: "string",
+        },
+        client_turn_id: {
+          type: "string",
+        },
+        input_text: {
+          type: "string",
+        },
+        input_mode: {
+          enum: ["typed", "push_to_talk", "hands_free"],
+        },
+        recognition_language: {
+          type: ["string", "null"],
+        },
+        task_id: {
+          type: "string",
+        },
+        run_id: {
+          type: "string",
+        },
+        created_at: {
+          type: "string",
+        },
+      },
+    },
   },
   responses: {
     task: {
@@ -749,6 +828,12 @@ const schema = {
     },
     scheduleFire: {
       $ref: "#/definitions/ScheduleFire",
+    },
+    conversation: {
+      $ref: "#/definitions/Conversation",
+    },
+    conversationTurn: {
+      $ref: "#/definitions/ConversationTurn",
     },
     taskPage: {
       type: "object",
@@ -910,6 +995,22 @@ const schema = {
         },
       },
     },
+    conversationTurnPage: {
+      type: "object",
+      additionalProperties: false,
+      required: ["items", "next_cursor"],
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/ConversationTurn",
+          },
+        },
+        next_cursor: {
+          type: ["string", "null"],
+        },
+      },
+    },
     startRun: {
       $ref: "#/definitions/StartRunResponse",
     },
@@ -949,6 +1050,10 @@ export const validateSchedule: WireValidator = (value, path) =>
   assertWire("schedule", value, path);
 export const validateScheduleFire: WireValidator = (value, path) =>
   assertWire("scheduleFire", value, path);
+export const validateConversation: WireValidator = (value, path) =>
+  assertWire("conversation", value, path);
+export const validateConversationTurn: WireValidator = (value, path) =>
+  assertWire("conversationTurn", value, path);
 export const validateTaskPage: WireValidator = (value, path) =>
   assertWire("taskPage", value, path);
 export const validateRunPage: WireValidator = (value, path) =>
@@ -969,5 +1074,7 @@ export const validateSchedulePage: WireValidator = (value, path) =>
   assertWire("schedulePage", value, path);
 export const validateScheduleFirePage: WireValidator = (value, path) =>
   assertWire("scheduleFirePage", value, path);
+export const validateConversationTurnPage: WireValidator = (value, path) =>
+  assertWire("conversationTurnPage", value, path);
 export const validateStartRun: WireValidator = (value, path) =>
   assertWire("startRun", value, path);

@@ -299,6 +299,10 @@ class _FakeRunEventStore:
     def append(self, event: RunEvent) -> None:
         self._events.setdefault(event.run_id, []).append(event)
 
+    def latest_of_type_for_run(self, run_id: RunId, event_type: RunEventType) -> RunEvent | None:
+        matching = [event for event in self._events.get(run_id, []) if event.type is event_type]
+        return max(matching, key=lambda event: event.sequence) if matching else None
+
     def list_for_run(self, run_id: RunId) -> list[RunEvent]:
         return sorted(self._events.get(run_id, []), key=lambda e: e.sequence)
 

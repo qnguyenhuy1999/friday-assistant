@@ -1,6 +1,7 @@
 import { FridayHttpClient } from "./http";
 import { ApprovalsResource } from "./resources/approvals";
 import { ArtifactsResource } from "./resources/artifacts";
+import { ConversationsResource } from "./resources/conversations";
 import { EventsResource } from "./resources/events";
 import { HealthResource } from "./resources/health";
 import { RunsResource } from "./resources/runs";
@@ -23,6 +24,7 @@ export class FridayClient {
   readonly events;
   readonly health;
   readonly schedules;
+  readonly conversations;
   constructor(options: FridayClientOptions) {
     const http = new FridayHttpClient(options);
     this.tasks = new TasksResource(http);
@@ -34,5 +36,6 @@ export class FridayClient {
     this.events = new EventsResource(http, options.baseUrl.replace(/\/+$/, ""));
     this.health = new HealthResource(http);
     this.schedules = new SchedulesResource(http);
+    this.conversations = new ConversationsResource(http);
   }
 }

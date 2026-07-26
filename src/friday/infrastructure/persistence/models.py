@@ -108,6 +108,45 @@ class ScheduleFireRow(Base):
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
 
 
+class ConversationRow(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+
+
+class ConversationTurnRow(Base):
+    __tablename__ = "conversation_turns"
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id", "client_turn_id", name="uq_conversation_turns_client_turn_id"
+        ),
+        UniqueConstraint("run_id", name="uq_conversation_turns_run_id"),
+        Index("ix_conversation_turns_conversation_id", "conversation_id"),
+        Index(
+            "ix_conversation_turns_conversation_id_created_at_id",
+            "conversation_id",
+            "created_at",
+            "id",
+        ),
+        CheckConstraint(
+            "input_mode IN ('typed', 'push_to_talk', 'hands_free')",
+            name="ck_conversation_turns_input_mode",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"))
+    client_turn_id: Mapped[str]
+    input_text: Mapped[str]
+    input_mode: Mapped[str]
+    recognition_language: Mapped[str | None]
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"))
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    created_at: Mapped[datetime]
+
+
 class RunWorkItemRow(Base):
     __tablename__ = "run_work_items"
     __table_args__ = (

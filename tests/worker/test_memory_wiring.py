@@ -113,7 +113,7 @@ def test_disabled_memory_does_not_construct_a_vault_store(
         worker.engine.dispose()
 
 
-def test_enabled_memory_without_include_globs_is_disabled_and_reported(
+def test_enabled_memory_without_include_globs_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("FRIDAY_MEMORY_ENABLED", "true")
@@ -122,11 +122,25 @@ def test_enabled_memory_without_include_globs_is_disabled_and_reported(
 
     report = run_memory_preflight()
     assert report.ok is False
-    assert report.checks[0][2] == "configuration missing"
+    assert "include_globs" in report.checks[0][2]
 
-    stack = app._memory_stack(_uow_factory(tmp_path))
-    memory = stack.retriever.retrieve(query=MemoryQuery(terms=("never",)))
-    assert memory.mode is RetrievalMode.DISABLED
+    with pytest.raises(ValueError, match="include_globs"):
+        app._memory_stack(_uow_factory(tmp_path))
+
+
+def test_enabled_graphify_with_missing_executable_fails_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    _configure_memory(monkeypatch, vault, tmp_path / "index")
+    monkeypatch.setenv("FRIDAY_GRAPHIFY_ENABLED", "true")
+    monkeypatch.setenv("FRIDAY_GRAPHIFY_EXECUTABLE", str(tmp_path / "missing-graphify"))
+
+    report = run_memory_preflight()
+
+    assert report.ok is False
+    assert report.checks == (("graphify", False, "executable is unavailable"),)
 
 
 def test_elapsed_memory_maintenance_interval_refreshes_once() -> None:

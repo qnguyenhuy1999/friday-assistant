@@ -31,7 +31,7 @@ class JsonOperationalFormatter(logging.Formatter):
             "event": getattr(record, "event", record.getMessage()),
             "logger": record.name,
         }
-        for field in _CORRELATION_FIELDS:
+        for field in _SAFE_FIELDS:
             value = getattr(record, field, None)
             if value is not None:
                 payload[field] = value

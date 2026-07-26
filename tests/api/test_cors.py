@@ -136,3 +136,10 @@ def test_invalid_api_environment_is_actionable(monkeypatch: pytest.MonkeyPatch) 
 
     with pytest.raises(ValueError, match="FRIDAY_API_PORT must be an integer"):
         ApiSettings.from_env()
+
+
+def test_invalid_request_size_setting_fails_early(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FRIDAY_API_MAX_REQUEST_BYTES", "0")
+
+    with pytest.raises(ValueError, match="max_request_bytes must be positive"):
+        ApiSettings.from_env()

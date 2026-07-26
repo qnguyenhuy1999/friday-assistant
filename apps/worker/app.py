@@ -181,13 +181,8 @@ class _MemoryStack:
 
 def _memory_stack(uow_factory: UnitOfWorkFactory) -> _MemoryStack:
     """Construct opt-in memory dependencies without ever scanning an invalid vault."""
-    try:
-        settings = MemorySettings.from_env()
-    except ValueError:
-        return _disabled_memory_stack()
-    if not settings.memory_enabled or not settings.include_globs:
-        return _disabled_memory_stack()
-    if not settings.vault_root.is_dir():
+    settings = MemorySettings.from_env()
+    if not settings.memory_enabled:
         return _disabled_memory_stack()
 
     policy = MemoryVaultPolicy(

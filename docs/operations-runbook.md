@@ -18,8 +18,9 @@ pnpm --filter @friday/web dev
 
 `just doctor` is an alias for the same full non-mutating worker preflight.
 `GET /health` is liveness: an `ok` response means the API process can answer.
-`GET /ready` is readiness: it is `ok` only when the configured database is
-reachable and its Alembic schema is at head. Worker dependencies are checked
+`GET /ready` is readiness: it returns `200 {"status":"ok"}` only when the
+configured database is reachable and its Alembic schema is at head; otherwise
+it returns `503 {"status":"unavailable"}`. Worker dependencies are checked
 by `just worker-check`, which performs the existing non-mutating preflight for
 database, schema, Claude's brain-only CLI mode, workspace, and enabled
 computer-use driver. `just memory-check` reports memory configuration without
@@ -30,10 +31,11 @@ reading the vault.
 - `worker-check` reports `claude_brain_only` failed: install/sign in to the
   local Claude CLI, or set `FRIDAY_CLAUDE_EXECUTABLE` to the intended binary.
   Do not replace it with a general shell-capable agent.
-- A memory check reports degraded or disabled: memory is opt-in. When enabled,
-  set a real vault root and an explicit `FRIDAY_MEMORY_INCLUDE_GLOBS` allowlist.
-  Friday falls back to no memory context rather than scanning an unbounded
-  personal vault.
+- A memory check fails: memory is opt-in. Disabled memory is healthy. When
+  enabled, a real vault root and explicit `FRIDAY_MEMORY_INCLUDE_GLOBS`
+  allowlist are mandatory; invalid enabled configuration fails startup and
+  preflight rather than silently disabling memory. Graphify stays healthy when
+  disabled; when enabled, its executable must be available to preflight.
 - The worker does not progress: check `/ready`, then run `just worker-check`.
   Inspect the run, steps, tool invocations, and durable event stream through
   the web control plane/API. Pending approvals must be resolved there; they
@@ -52,6 +54,8 @@ reading the vault.
 `FRIDAY_API_HOST` accepts loopback binding by default. Binding a non-loopback
 host requires `FRIDAY_API_ALLOW_REMOTE_BIND=true`; wildcard CORS origins are
 rejected. Use exact `http(s)` origins in `FRIDAY_API_CORS_ORIGINS`.
+`FRIDAY_API_MAX_REQUEST_BYTES` defaults to 1 MiB and rejects oversized request
+bodies with HTTP 413 before route parsing.
 
 To restart, stop API and worker with `SIGTERM`, then start them using the
 commands above. Claims, approvals, events, and terminal outcomes are durable.

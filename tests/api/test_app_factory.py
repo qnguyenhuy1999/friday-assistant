@@ -37,7 +37,7 @@ def test_readiness_reports_unavailable_before_schema_is_migrated(tmp_path: Path)
     try:
         with TestClient(app) as client:
             response = client.get("/ready")
-        assert response.status_code == 200
+        assert response.status_code == 503
         assert response.json() == {"status": "unavailable"}
     finally:
         app.state.engine.dispose()

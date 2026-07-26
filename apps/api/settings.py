@@ -14,6 +14,7 @@ _DEFAULT_DATABASE_URL = "sqlite:///./friday.db"
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8000
 _DEFAULT_SSE_POLL_INTERVAL_SECONDS = 0.5
+_DEFAULT_MAX_REQUEST_BYTES = 1_048_576
 _DEFAULT_CORS_ORIGINS: tuple[str, ...] = ("http://localhost:5173", "http://127.0.0.1:5173")
 
 
@@ -78,6 +79,7 @@ class ApiSettings:
     sse_poll_interval_seconds: float
     cors_allowed_origins: tuple[str, ...] = _DEFAULT_CORS_ORIGINS
     allow_remote_bind: bool = False
+    max_request_bytes: int = _DEFAULT_MAX_REQUEST_BYTES
 
     def __post_init__(self) -> None:
         if not self.database_url.strip():
@@ -88,6 +90,8 @@ class ApiSettings:
             raise ValueError("port must be between 1 and 65535")
         if self.sse_poll_interval_seconds <= 0:
             raise ValueError("sse_poll_interval_seconds must be positive")
+        if self.max_request_bytes <= 0:
+            raise ValueError("max_request_bytes must be positive")
         if not self.allow_remote_bind and not _is_loopback_host(self.host):
             raise ValueError(
                 "FRIDAY_API_HOST must be loopback unless FRIDAY_API_ALLOW_REMOTE_BIND=true"
@@ -112,4 +116,7 @@ class ApiSettings:
             ),
             cors_allowed_origins=cors_allowed_origins,
             allow_remote_bind=_parse_bool("FRIDAY_API_ALLOW_REMOTE_BIND", False),
+            max_request_bytes=_parse_int(
+                "FRIDAY_API_MAX_REQUEST_BYTES", _DEFAULT_MAX_REQUEST_BYTES
+            ),
         )

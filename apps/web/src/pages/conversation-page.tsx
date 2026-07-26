@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ConversationTranscript } from "../components/conversation-transcript";
 import { VoiceControls } from "../components/voice-controls";
 import { isPushToTalkKey } from "../voice/push-to-talk-key";
@@ -8,19 +8,33 @@ import {
   useSubmitConversationTurn,
 } from "../hooks/use-conversation";
 import { useVoice } from "../hooks/use-voice";
-export function ConversationPage() {
+import { friday } from "../friday-client";
+export function ConversationPage({
+  onReviewApproval,
+}: {
+  onReviewApproval(runId: string): void;
+}) {
   const { conversationId, isError } = useConversationId();
   const turns = useConversationTurns(conversationId);
   const submit = useSubmitConversationTurn(conversationId);
   const [text, setText] = useState("");
+  const activeRunId = useRef<string | null>(null);
+  const speakableRunIds = useRef(new Set<string>());
   const voice = useVoice(async (input) => {
-    await submit.mutateAsync({
+    const turn = await submit.mutateAsync({
       client_turn_id: crypto.randomUUID(),
       input_text: input.text,
       input_mode: input.inputMode,
       recognition_language: input.language,
     });
+    activeRunId.current = turn.run_id;
+    speakableRunIds.current.add(turn.run_id);
   });
+  const cancelActiveRun = useCallback(() => {
+    voice.controller.interrupt();
+    const runId = activeRunId.current;
+    if (runId) void friday.runs.cancel(runId).catch(() => undefined);
+  }, [voice.controller]);
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
       if (isPushToTalkKey(event)) {
@@ -35,7 +49,7 @@ export function ConversationPage() {
       }
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") voice.controller.interrupt();
+      if (event.key === "Escape") cancelActiveRun();
     };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
@@ -45,16 +59,24 @@ export function ConversationPage() {
       window.removeEventListener("keyup", up);
       window.removeEventListener("keydown", escape);
     };
-  }, [voice.controller]);
+  }, [voice.controller, cancelActiveRun]);
   const send = () => {
     const input_text = text.trim();
     if (!input_text) return;
-    submit.mutate({
-      client_turn_id: crypto.randomUUID(),
-      input_text,
-      input_mode: "typed",
-      recognition_language: null,
-    });
+    submit.mutate(
+      {
+        client_turn_id: crypto.randomUUID(),
+        input_text,
+        input_mode: "typed",
+        recognition_language: null,
+      },
+      {
+        onSuccess: (turn) => {
+          activeRunId.current = turn.run_id;
+          speakableRunIds.current.add(turn.run_id);
+        },
+      },
+    );
     setText("");
   };
   if (isError)
@@ -78,16 +100,20 @@ export function ConversationPage() {
       </p>
       <ConversationTranscript
         turns={turns.data?.items ?? []}
-        onReviewApproval={() => undefined}
-        onAnswer={(summary) => {
-          if (voice.preferences.enabled) {
-            voice.synthesis?.speak({
+        onReviewApproval={onReviewApproval}
+        onAnswer={(runId, summary) => {
+          if (
+            speakableRunIds.current.delete(runId) &&
+            voice.preferences.enabled
+          ) {
+            voice.output?.speak({
               text: summary,
               voiceURI: voice.preferences.voiceURI,
               rate: voice.preferences.rate,
               lang: voice.preferences.language,
             });
           }
+          if (activeRunId.current === runId) activeRunId.current = null;
         }}
       />
       <label>

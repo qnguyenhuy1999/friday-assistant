@@ -6,6 +6,7 @@ import {
 import { createSpeechSynthesisAdapter } from "../voice/speech-synthesis";
 import { createAudioLevelMonitor } from "../voice/audio-level";
 import { VoiceController } from "../voice/voice-controller";
+import { TtsQueue } from "../voice/tts-queue";
 import {
   readVoicePreferences,
   writeVoicePreferences,
@@ -27,11 +28,16 @@ export function useVoice(
   submitRef.current = submit;
   languageRef.current = preferences.language;
   const synthesis = useMemo(() => createSpeechSynthesisAdapter(window), []);
+  const output = useMemo(
+    () => (synthesis ? new TtsQueue(synthesis) : null),
+    [synthesis],
+  );
   const audioLevel = useMemo(() => createAudioLevelMonitor(window), []);
   const controller = useMemo(
     () =>
       new VoiceController({
         recognition: createSpeechRecognitionAdapter(window),
+        output,
         language: () => languageRef.current,
         submit: (input) => submitRef.current(input),
         timers: {
@@ -40,7 +46,7 @@ export function useVoice(
         },
         audioLevel,
       }),
-    [audioLevel],
+    [audioLevel, output],
   );
   const [snapshot, setSnapshot] = useState(controller.snapshot());
   useEffect(() => {
@@ -52,15 +58,15 @@ export function useVoice(
   }, [controller]);
   useEffect(() => {
     if (!synthesis) return;
-    const start = synthesis.onStart(() => controller.speakingStarted());
-    const end = synthesis.onEnd(() => controller.speakingEnded());
+    const start = output?.onStart(() => controller.speakingStarted());
+    const end = output?.onEnd(() => controller.speakingEnded());
     return () => {
-      start();
-      end();
+      start?.();
+      end?.();
       synthesis.dispose();
       audioLevel?.dispose();
     };
-  }, [synthesis, controller, audioLevel]);
+  }, [synthesis, output, controller, audioLevel]);
   return {
     controller,
     snapshot,
@@ -70,6 +76,6 @@ export function useVoice(
       writeVoicePreferences(value);
       setStored(value);
     },
-    synthesis,
+    output,
   };
 }

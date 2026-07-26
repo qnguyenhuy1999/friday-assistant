@@ -44,3 +44,24 @@ def test_resubmission_is_idempotent_and_approval_words_are_only_text(client: Tes
     approvals = client.get(f"/v1/runs/{first.json()['run_id']}/approvals")
     assert approvals.status_code == 200
     assert approvals.json()["items"] == []
+
+
+def test_client_turn_id_cannot_replay_a_different_canonical_payload(client: TestClient) -> None:
+    conversation_id = _create(client)
+    first = {
+        "client_turn_id": "turn-1",
+        "input_text": "  read the newest email  ",
+        "input_mode": "typed",
+        "recognition_language": None,
+    }
+    replay = {**first, "input_text": "read the newest email"}
+    conflict = {**first, "input_text": "delete the newest email"}
+
+    created = client.post(f"/v1/conversations/{conversation_id}/turns", json=first)
+    same = client.post(f"/v1/conversations/{conversation_id}/turns", json=replay)
+    changed = client.post(f"/v1/conversations/{conversation_id}/turns", json=conflict)
+
+    assert created.status_code == same.status_code == 201
+    assert same.json()["run_id"] == created.json()["run_id"]
+    assert changed.status_code == 409
+    assert changed.json()["error"]["type"] == "entity_conflict"

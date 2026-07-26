@@ -20,10 +20,10 @@ export function useTurnAnswer(runId: string): TurnAnswer {
         friday.events.listForRun(runId, { limit: 100, cursor }),
       ),
   });
+  if (run?.status === "waiting_for_approval")
+    return { state: "awaiting_approval", summary: null, details: null };
   if (!run || !isTerminalRunStatus(run.status))
     return { state: "pending", summary: null, details: null };
-  if (run.status === "waiting_for_approval")
-    return { state: "awaiting_approval", summary: null, details: null };
   if (run.status === "failed")
     return {
       state: "failed",

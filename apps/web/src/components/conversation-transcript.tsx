@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { ConversationTurn } from "@friday/contracts";
 import { useTurnAnswer } from "../hooks/use-turn-answer";
 function Turn({
@@ -8,12 +8,19 @@ function Turn({
 }: {
   turn: ConversationTurn;
   onReviewApproval(runId: string): void;
-  onAnswer(summary: string): void;
+  onAnswer(runId: string, summary: string): void;
 }) {
   const answer = useTurnAnswer(turn.run_id);
+  const previousState = useRef(answer.state);
   useEffect(() => {
-    if (answer.state === "answered" && answer.summary) onAnswer(answer.summary);
-  }, [answer.state, answer.summary, onAnswer]);
+    if (
+      previousState.current !== "answered" &&
+      answer.state === "answered" &&
+      answer.summary
+    )
+      onAnswer(turn.run_id, answer.summary);
+    previousState.current = answer.state;
+  }, [answer.state, answer.summary, onAnswer, turn.run_id]);
   return (
     <li>
       <strong>You</strong>
@@ -51,7 +58,7 @@ export function ConversationTranscript({
 }: {
   turns: ConversationTurn[];
   onReviewApproval(runId: string): void;
-  onAnswer?(summary: string): void;
+  onAnswer?(runId: string, summary: string): void;
 }) {
   if (!turns.length) return <p>Ask Friday to get started.</p>;
   return (

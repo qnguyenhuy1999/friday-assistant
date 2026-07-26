@@ -68,6 +68,10 @@ export interface SpeechSynthesisAdapter {
   onEnd(listener: () => void): () => void;
   dispose(): void;
 }
+/** The sole output boundary owned by VoiceController. */
+export interface OutputSpeechController {
+  stop(): void;
+}
 export interface AudioLevelMonitor {
   start(): Promise<void>;
   stop(): void;

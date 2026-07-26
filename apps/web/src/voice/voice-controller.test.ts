@@ -44,15 +44,17 @@ function recognition() {
 function harness() {
   const rec = recognition();
   const submitted: string[] = [];
+  const output = { stops: 0, stop: () => output.stops++ };
   const controller = new VoiceController({
     recognition: rec.adapter,
+    output,
     language: () => "en-US",
     submit: async ({ text }) => {
       submitted.push(text);
     },
     timers: { set: () => 1, clear: () => undefined },
   });
-  return { controller, rec, submitted };
+  return { controller, rec, submitted, output };
 }
 
 describe("VoiceController", () => {
@@ -82,12 +84,21 @@ describe("VoiceController", () => {
       error: "not-allowed",
     });
   });
-  it("barge-in cannot submit or approve anything", () => {
+  it("barge-in stops output before recognition can resume", () => {
     const h = harness();
     h.controller.speakingStarted();
     h.controller.bargeIn();
     expect(h.submitted).toEqual([]);
+    expect(h.output.stops).toBe(1);
+    expect(h.rec.adapter.aborts).toBeGreaterThan(0);
     expect(h.controller.snapshot().state).toBe("idle");
+  });
+  it("push-to-talk cancels active speech before starting recognition", () => {
+    const h = harness();
+    h.controller.speakingStarted();
+    h.controller.pressToTalk();
+    expect(h.output.stops).toBe(1);
+    expect(h.rec.adapter.starts).toBe(1);
   });
   it("ignores adapter events after disposal", async () => {
     const h = harness();

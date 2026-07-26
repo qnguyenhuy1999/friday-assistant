@@ -284,23 +284,28 @@ def build_runtime_context(
     if conversation_max_chars < 1:
         raise ValueError("conversation_max_chars must be positive")
 
+    conversation_budget = min(conversation_max_chars, max_chars // 2)
+    conversation = (
+        build_conversation_section(conversation_context, max_chars=conversation_budget)
+        if conversation_context is not None
+        else ""
+    )
+    # Reserve the bounded conversational window before rendering the large
+    # static/runtime document.  Otherwise a full core document can starve the
+    # newest dialogue completely.
+    core_max_chars = max_chars - len(conversation) - (2 if conversation else 0)
     omitted = _Omitted()
     document = _render(snapshot, tool_manifest, attempt_number, turn_number, omitted)
-    while len(document) > max_chars:
+    while len(document) > core_max_chars:
         next_omitted = _next_drop(snapshot, omitted)
         if next_omitted is None:
             marker = "\n[context truncated to budget]"
-            return document[: max_chars - len(marker)] + marker
+            document = document[: core_max_chars - len(marker)] + marker
+            break
         omitted = next_omitted
         document = _render(snapshot, tool_manifest, attempt_number, turn_number, omitted)
-    if conversation_context is not None:
-        available = max_chars - len(document) - 2
-        if available > 0:
-            section = build_conversation_section(
-                conversation_context, max_chars=min(conversation_max_chars, available)
-            )
-            if section:
-                document = f"{document}\n\n{section}"
+    if conversation:
+        document = f"{document}\n\n{conversation}"
     if memory_context is not None:
         available = max_chars - len(document) - 2
         if available > 0:

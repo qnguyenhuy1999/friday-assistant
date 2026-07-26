@@ -47,11 +47,9 @@ from datetime import datetime
 from friday.domain.json_value import JsonValue
 from friday.infrastructure.computer.driver import ComputerDriver
 from friday.infrastructure.computer.errors import (
-    ComputerDriverFailed,
     TargetAmbiguous,
     TargetInvalid,
     TargetNotFound,
-    TargetOutOfBounds,
     WindowGone,
 )
 from friday.infrastructure.computer.models import (
@@ -67,14 +65,11 @@ from friday.infrastructure.computer.models import (
     CaptureRequest,
     ElementDescriptor,
     ElementTarget,
-    PixelPoint,
-    PixelTarget,
     ScreenSnapshot,
     WindowRef,
     WindowTarget,
 )
 from friday.infrastructure.computer.tool_input import (
-    optional_int,
     required_bounded_int,
     required_nested_object,
     required_str,
@@ -85,7 +80,15 @@ IDENTITY_FIELDS: frozenset[str] = frozenset({"pid", "window_id"})
 the driver resolves elements per (pid, window_id), and a pid alone names an
 application rather than a surface."""
 
-TARGET_FIELDS: frozenset[str] = frozenset({"element", "x", "y"})
+TARGET_FIELDS: frozenset[str] = frozenset({"element"})
+"""A delayed mutation names a semantic element, never a raw screenshot pixel.
+
+The screenshot can change while an approval is waiting.  Re-capturing only
+proves that a coordinate is in bounds, not that it is still the approved
+control; an unchanged coordinate may now be Delete rather than Continue.
+Pixel addressing remains an adapter capability for a future visual-equivalence
+fence, but it is intentionally not reachable through Friday's tool surface.
+"""
 
 ELEMENT_FIELDS: frozenset[str] = frozenset({"role", "label"})
 
@@ -110,25 +113,12 @@ def parse_window_ref(values: dict[str, JsonValue]) -> WindowRef:
 
 def parse_target_request(
     values: dict[str, JsonValue], *, required: bool
-) -> ElementDescriptor | PixelPoint | None:
-    """Read `element` or `x`/`y` — never both, and never a merge of the two.
-
-    A call carrying both is a call whose author is confused about where the
-    action lands, and there is no reading of it that is safe to guess.
-    """
-    has_element = "element" in values
-    x = optional_int(values, "x")
-    y = optional_int(values, "y")
-    has_pixel = x is not None or y is not None
-
-    if has_element and has_pixel:
-        raise TargetInvalid("supply either 'element' or 'x' and 'y', never both")
-    if has_element:
+) -> ElementDescriptor | None:
+    """Read the approved semantic target, if this operation needs one."""
+    if "element" in values:
         return _parse_descriptor(values)
-    if has_pixel:
-        return _parse_pixel(x, y)
     if required:
-        raise TargetInvalid("supply either 'element' or both 'x' and 'y'")
+        raise TargetInvalid("supply an 'element' with its role and label")
     return None
 
 
@@ -147,18 +137,6 @@ def _parse_descriptor(values: dict[str, JsonValue]) -> ElementDescriptor:
         return ElementDescriptor(role=role, label=label)
     except ValueError as exc:
         raise TargetInvalid(str(exc)) from None
-
-
-def _parse_pixel(x: int | None, y: int | None) -> PixelPoint:
-    if x is None or y is None:
-        raise TargetInvalid("supply both 'x' and 'y', or use 'element' instead")
-    try:
-        return PixelPoint(x=x, y=y)
-    except ValueError:
-        raise TargetOutOfBounds(
-            "coordinates are window-local screenshot pixels and cannot be negative "
-            "or beyond the addressable range"
-        ) from None
 
 
 class TargetResolver:
@@ -195,21 +173,19 @@ class TargetResolver:
         the thing that was actually raised.
         """
         ref = parse_window_ref(values)
-        return self._capture(ref, need_extent=False, now=now)
+        return self._capture(ref, now=now)
 
     def _resolve(
         self, values: dict[str, JsonValue], *, now: datetime, target_required: bool
     ) -> tuple[ScreenSnapshot, ActionTarget]:
         ref = parse_window_ref(values)
         request = parse_target_request(values, required=target_required)
-        snapshot = self._capture(ref, need_extent=isinstance(request, PixelPoint), now=now)
+        snapshot = self._capture(ref, now=now)
         if request is None:
             return snapshot, WindowTarget(ref=ref)
-        if isinstance(request, PixelPoint):
-            return snapshot, self._pixel_target(snapshot, request)
         return snapshot, self._element_target(snapshot, request)
 
-    def _capture(self, ref: WindowRef, *, need_extent: bool, now: datetime) -> ScreenSnapshot:
+    def _capture(self, ref: WindowRef, *, now: datetime) -> ScreenSnapshot:
         """Look at the named window, right now.
 
         The window's existence is checked against `list_windows` first so that
@@ -217,9 +193,8 @@ class TargetResolver:
         driver failure — the two call for different responses from Claude, and
         only one of them is worth re-proposing against.
 
-        The screenshot is only pulled when a pixel target needs its extent:
-        for an element target the image is dead weight, and the driver
-        documents the tree-only path as the cheap one.
+        Target resolution needs the accessibility tree, not image pixels. The
+        image belongs to explicit `computer.capture` observations.
         """
         window = self._driver.find_window(ref)
         if window is None:
@@ -227,21 +202,16 @@ class TargetResolver:
         result = self._driver.capture(
             CaptureRequest(
                 ref=ref,
-                include_screenshot=need_extent,
+                include_screenshot=False,
                 max_elements=self._settings.max_elements,
             )
         )
-        extent = result.screenshot.extent if result.screenshot is not None else None
-        if need_extent and extent is None:
-            raise ComputerDriverFailed(
-                "the driver returned no image, so a pixel target cannot be bounded"
-            )
         return ScreenSnapshot(
             capture_id=CaptureId.new(),
             captured_at=now,
             window=window,
             elements=result.elements,
-            extent=extent,
+            extent=None,
         )
 
     def _element_target(
@@ -255,7 +225,7 @@ class TargetResolver:
         if len(matches) > 1:
             raise TargetAmbiguous(
                 f"{len(matches)} controls in that window match {descriptor}; "
-                "address the one you mean by its x/y instead"
+                "wait for an unambiguous semantic descriptor before proposing again"
             )
         element = matches[0]
         return ElementTarget(
@@ -264,14 +234,3 @@ class TargetResolver:
             descriptor=descriptor,
             element_token=element.element_token,
         )
-
-    def _pixel_target(self, snapshot: ScreenSnapshot, point: PixelPoint) -> PixelTarget:
-        extent = snapshot.extent
-        if extent is None:  # pragma: no cover - _capture guarantees it
-            raise ComputerDriverFailed("the driver returned no image to bound a pixel target")
-        if not extent.contains(point):
-            raise TargetOutOfBounds(
-                "that coordinate lies outside the current image of the window "
-                f"({extent.width}x{extent.height} pixels)"
-            )
-        return PixelTarget(ref=snapshot.window.ref, point=point)

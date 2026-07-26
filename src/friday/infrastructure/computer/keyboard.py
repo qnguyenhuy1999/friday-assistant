@@ -91,16 +91,13 @@ DENIED_HOTKEYS: frozenset[Keystroke] = frozenset(
         # macOS: lock screen / sleep display
         Keystroke(key="q", modifiers=(KeyModifier.META, KeyModifier.CTRL)),
         # Windows/Linux: task manager, lock, log out
-        Keystroke(key="delete", modifiers=(KeyModifier.CTRL, KeyModifier.ALT)),
         # meta+l is a deliberate over-block: it locks the session on Windows
         # and most Linux desktops, but is "focus the address bar" on macOS.
         # One normalized Keystroke cannot mean both, and refusing a useful
         # shortcut is recoverable in a way that locking the user out is not.
         Keystroke(key="l", modifiers=(KeyModifier.META,)),
         Keystroke(key="l", modifiers=(KeyModifier.META, KeyModifier.CTRL)),
-        Keystroke(key="delete", modifiers=(KeyModifier.CTRL, KeyModifier.SHIFT)),
         # Windows/Linux: shut down / restart chords
-        Keystroke(key="delete", modifiers=(KeyModifier.META, KeyModifier.CTRL, KeyModifier.SHIFT)),
         Keystroke(key="backspace", modifiers=(KeyModifier.CTRL, KeyModifier.ALT)),
         # Linux: kill X session
         Keystroke(

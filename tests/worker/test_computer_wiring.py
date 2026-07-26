@@ -29,11 +29,12 @@ from apps.worker.runtime_settings import RuntimeSettings
 from apps.worker.settings import WorkerSettings
 from friday.application.tool_gateway import ToolGateway
 from friday.domain.json_value import JsonValue
-from friday.infrastructure.computer.mcp_stdio import McpTransport
+from friday.infrastructure.computer.mcp_stdio import McpToolResult, McpTransport
 from friday.infrastructure.tools.composite import CompositeToolGateway
 from friday.infrastructure.tools.computer_composition import (
     ComputerGatewayConfig,
     ComputerUseUnavailable,
+    _driver_environment,
     build_computer_gateway,
     check_computer_driver,
 )
@@ -48,21 +49,17 @@ COMPUTER_ENV = (
     "FRIDAY_COMPUTER_TIMEOUT_SECONDS",
     "FRIDAY_COMPUTER_MAX_CAPTURE_BYTES",
     "FRIDAY_COMPUTER_MAX_TYPE_CHARS",
-    "FRIDAY_COMPUTER_MAX_SCROLL_DELTA",
-    "FRIDAY_COMPUTER_CAPTURE_TTL_SECONDS",
-    "FRIDAY_COMPUTER_MAX_SNAPSHOTS",
+    "FRIDAY_COMPUTER_MAX_SCROLL_AMOUNT",
     "FRIDAY_COMPUTER_MAX_ELEMENTS",
     "FRIDAY_CUA_TELEMETRY_ENABLED",
 )
 
 EXPECTED_COMPUTER_TOOLS = (
-    "computer.active_window",
+    "computer.bring_to_front",
     "computer.capture",
     "computer.click",
-    "computer.focus_window",
+    "computer.cursor_position",
     "computer.hotkey",
-    "computer.pointer_move",
-    "computer.pointer_position",
     "computer.press_key",
     "computer.scroll",
     "computer.type_text",
@@ -92,12 +89,11 @@ def test_computer_use_defaults_disabled() -> None:
 def test_the_defaults_are_usable_without_any_other_configuration() -> None:
     settings = ComputerSettings.from_env()
 
-    assert settings.driver_command == ("cua-driver",)
-    assert settings.capture_ttl_seconds == 10.0
+    assert settings.driver_command == ("cua-driver", "mcp")
     assert settings.max_type_chars == 4_096
-    assert settings.max_scroll_delta == 5_000
+    assert settings.max_scroll_amount == 10
     assert settings.max_capture_bytes == 8_000_000
-    assert settings.max_snapshots == 32
+    assert settings.max_elements == 500
     assert settings.telemetry_enabled is False
 
 
@@ -107,6 +103,7 @@ def test_telemetry_defaults_off_and_is_stated_explicitly() -> None:
     config = _config(enabled=True, telemetry_enabled=False)
 
     assert config.telemetry_enabled is False
+    assert _driver_environment(config) == {"CUA_DRIVER_RS_TELEMETRY_ENABLED": "false"}
 
 
 @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
@@ -167,9 +164,7 @@ def test_an_empty_driver_command_is_rejected_only_when_enabled(
         "FRIDAY_COMPUTER_TIMEOUT_SECONDS",
         "FRIDAY_COMPUTER_MAX_CAPTURE_BYTES",
         "FRIDAY_COMPUTER_MAX_TYPE_CHARS",
-        "FRIDAY_COMPUTER_MAX_SCROLL_DELTA",
-        "FRIDAY_COMPUTER_CAPTURE_TTL_SECONDS",
-        "FRIDAY_COMPUTER_MAX_SNAPSHOTS",
+        "FRIDAY_COMPUTER_MAX_SCROLL_AMOUNT",
         "FRIDAY_COMPUTER_MAX_ELEMENTS",
     ],
 )
@@ -180,20 +175,12 @@ def test_every_limit_must_be_positive(monkeypatch: pytest.MonkeyPatch, name: str
         ComputerSettings.from_env()
 
 
-def test_an_absurd_capture_ttl_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A capture that stays valid for an hour is not a fence."""
-    monkeypatch.setenv("FRIDAY_COMPUTER_CAPTURE_TTL_SECONDS", "3600")
-
-    with pytest.raises(ValueError, match="stale capture is not a fence"):
-        ComputerSettings.from_env()
-
-
 def test_the_scroll_ceiling_cannot_exceed_the_representable_range(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("FRIDAY_COMPUTER_MAX_SCROLL_DELTA", "100001")
+    monkeypatch.setenv("FRIDAY_COMPUTER_MAX_SCROLL_AMOUNT", "51")
 
-    with pytest.raises(ValueError, match="representable scroll range"):
+    with pytest.raises(ValueError, match="must not exceed 50 notches"):
         ComputerSettings.from_env()
 
 
@@ -218,9 +205,11 @@ class RecordingTransport:
     def list_tool_names(self) -> tuple[str, ...]:
         return self.tool_names
 
-    def call_tool(self, name: str, arguments: Mapping[str, JsonValue]) -> JsonValue:
-        del name, arguments
-        return None
+    def call_tool(
+        self, name: str, arguments: Mapping[str, JsonValue], *, require_payload: bool = True
+    ) -> McpToolResult:
+        del name, arguments, require_payload
+        return McpToolResult()
 
     def close(self) -> None:
         self.closed += 1
@@ -236,9 +225,7 @@ def _config(
         "timeout_seconds": 15.0,
         "max_capture_bytes": 8_000_000,
         "max_type_chars": 4_096,
-        "max_scroll_delta": 5_000,
-        "capture_ttl_seconds": 10.0,
-        "max_snapshots": 32,
+        "max_scroll_amount": 10,
     }
     defaults.update(overrides)
     return ComputerGatewayConfig(**defaults)  # type: ignore[arg-type]
@@ -562,7 +549,7 @@ def test_the_computer_manifest_is_deterministically_sorted(
     names = _tool_names(computer)
 
     assert list(names) == sorted(names)
-    assert len(names) == 11
+    assert len(names) == 9
 
 
 def test_the_transport_protocol_is_satisfied_by_the_recording_double() -> None:

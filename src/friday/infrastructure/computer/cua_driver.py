@@ -64,7 +64,7 @@ from friday.infrastructure.computer.errors import (
     ComputerDriverUnavailable,
     ComputerUseError,
 )
-from friday.infrastructure.computer.mcp_stdio import McpTransport
+from friday.infrastructure.computer.mcp_stdio import McpImageContent, McpToolResult, McpTransport
 from friday.infrastructure.computer.models import (
     ActionTarget,
     AddressedTarget,
@@ -105,7 +105,6 @@ _KEY_NAMES: Final = {
     "tab": "tab",
     "space": "space",
     "backspace": "delete",
-    "delete": "forwarddelete",
     "arrow_up": "up",
     "arrow_down": "down",
     "arrow_left": "left",
@@ -119,9 +118,8 @@ _KEY_NAMES: Final = {
 unchanged; anything else must appear here or the call is refused rather than
 sent as a name the driver may not recognize.
 
-`backspace` maps to `delete` and `delete` to `forwarddelete`, following the
-macOS convention the driver uses: the key labelled Delete on an Apple keyboard
-deletes backwards."""
+`backspace` maps to cua's documented `delete`. Forward-delete is intentionally
+not exposed until the installed driver contract proves a backing key name."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,7 +198,7 @@ class CuaDriverComputerDriver:
 
     def list_windows(self) -> tuple[WindowInfo, ...]:
         payload = self._read(self._settings.tool_names.list_windows, {})
-        body = _object(payload)
+        body = _object(_payload_json(payload))
         return tuple(
             _window(_object(entry)) for entry in _array(_required(body, "windows"), "windows")
         )
@@ -212,7 +210,7 @@ class CuaDriverComputerDriver:
         read rather than a full desktop enumeration.
         """
         payload = self._read(self._settings.tool_names.list_windows, {"pid": ref.pid})
-        body = _object(payload)
+        body = _object(_payload_json(payload))
         for entry in _array(_required(body, "windows"), "windows"):
             window = _window(_object(entry))
             if window.ref == ref:
@@ -229,15 +227,20 @@ class CuaDriverComputerDriver:
                 "max_elements": min(request.max_elements, self._settings.max_elements),
             },
         )
-        body = _object(payload)
+        body = _object(_payload_json(payload))
         elements = tuple(
             _element(_object(entry)) for entry in _array(body.get("elements", []), "elements")
         )
-        return CaptureResult(elements=elements, screenshot=self._screenshot(body.get("screenshot")))
+        return CaptureResult(
+            elements=elements,
+            screenshot=self._capture_screenshot(
+                payload, body, requested=request.include_screenshot
+            ),
+        )
 
     def cursor_position(self) -> ScreenPoint:
         payload = self._read(self._settings.tool_names.cursor_position, {})
-        return _point(_object(payload))
+        return _point(_object(_payload_json(payload)))
 
     # --- mutating input ---------------------------------------------------
 
@@ -288,7 +291,7 @@ class CuaDriverComputerDriver:
 
     # --- internals --------------------------------------------------------
 
-    def _read(self, name: str, arguments: Mapping[str, JsonValue]) -> JsonValue:
+    def _read(self, name: str, arguments: Mapping[str, JsonValue]) -> McpToolResult:
         """An observation. Strict: a reply Friday cannot parse is not data."""
         self._ensure_running()
         return self._transport.call_tool(name, arguments)
@@ -302,7 +305,8 @@ class CuaDriverComputerDriver:
         as a driver failure would tell the caller the opposite of the truth.
         """
         self._ensure_running()
-        payload = self._transport.call_tool(name, arguments, require_payload=False)
+        result = self._transport.call_tool(name, arguments, require_payload=False)
+        payload = _payload_json_or_none(result)
         if not isinstance(payload, dict):
             return DriverResult()
         effect = payload.get("effect")
@@ -348,6 +352,42 @@ class CuaDriverComputerDriver:
             height=_int(body, "height"),
         )
 
+    def _capture_screenshot(
+        self,
+        payload: McpToolResult,
+        body: dict[str, JsonValue],
+        *,
+        requested: bool,
+    ) -> Screenshot | None:
+        """Join structured state with its sibling MCP image block.
+
+        Cua puts AX elements in structured content and the PNG in an MCP image
+        block. Keeping those sibling blocks intact is what lets a real capture
+        contain both semantic and visual evidence.
+        """
+        if not payload.image_content:
+            return self._screenshot(body.get("screenshot"))
+        if len(payload.image_content) != 1:
+            raise ComputerDriverFailed("the computer-use driver returned multiple capture images")
+        if not requested:
+            raise ComputerDriverFailed("the computer-use driver returned an unexpected image")
+        return self._image_screenshot(payload.image_content[0], body.get("screenshot"))
+
+    def _image_screenshot(self, image: McpImageContent, metadata: JsonValue) -> Screenshot:
+        self._reject_oversized(image.data)
+        try:
+            data = base64.b64decode(image.data, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ComputerDriverFailed(
+                "the computer-use driver returned an undecodable image payload"
+            ) from exc
+        if len(data) > self._settings.max_capture_bytes:
+            raise ComputerDriverFailed("the captured image exceeds the configured capture ceiling")
+        if image.media_type != "image/png":
+            raise ComputerDriverFailed("the computer-use driver returned a malformed media type")
+        width, height = _image_dimensions(metadata, data)
+        return Screenshot(data=data, media_type=image.media_type, width=width, height=height)
+
     def _reject_oversized(self, encoded: str) -> None:
         """Bound the encoded string before decoding it.
 
@@ -367,6 +407,34 @@ class CuaDriverComputerDriver:
 # it is never quoted back.
 
 _MALFORMED: Final = "the computer-use driver returned a malformed response"
+
+
+def _payload_json(result: McpToolResult) -> JsonValue:
+    """Select JSON only in the driver adapter, never in the transport."""
+    payload = _payload_json_or_none(result)
+    if payload is None:
+        raise ComputerDriverFailed("the computer-use driver returned no usable content")
+    return payload
+
+
+def _payload_json_or_none(result: McpToolResult) -> JsonValue | None:
+    return (
+        result.structured_content if result.structured_content is not None else result.text_content
+    )
+
+
+def _image_dimensions(metadata: JsonValue, data: bytes) -> tuple[int, int]:
+    """Use Cua's structured metadata, with a PNG-header fallback.
+
+    MCP image blocks carry bytes and MIME type but no width/height. Current
+    Cua structured state can provide the dimensions; accepting a standard PNG
+    IHDR as fallback keeps the adapter correct if that metadata is omitted.
+    """
+    if isinstance(metadata, dict) and "width" in metadata and "height" in metadata:
+        return _int(metadata, "width"), _int(metadata, "height")
+    if len(data) >= 24 and data.startswith(b"\x89PNG\r\n\x1a\n") and data[12:16] == b"IHDR":
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    raise ComputerDriverFailed("the computer-use driver returned image bytes without dimensions")
 
 
 def _object(value: JsonValue) -> dict[str, JsonValue]:

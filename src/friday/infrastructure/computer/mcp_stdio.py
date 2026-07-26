@@ -75,7 +75,7 @@ class McpTransport(Protocol):
         arguments: Mapping[str, JsonValue],
         *,
         require_payload: bool = True,
-    ) -> JsonValue: ...
+    ) -> McpToolResult: ...
 
     def close(self) -> None: ...
 
@@ -94,6 +94,29 @@ class McpStdioSettings:
             raise ValueError("McpStdioSettings.timeout_seconds must be positive")
         if self.max_response_bytes < 1:
             raise ValueError("McpStdioSettings.max_response_bytes must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class McpImageContent:
+    """One MCP image block, kept separate from a tool's JSON payload."""
+
+    data: str
+    media_type: str
+
+
+@dataclass(frozen=True, slots=True)
+class McpToolResult:
+    """Lossless subset of an MCP ``CallTool.Result`` envelope.
+
+    A tool may return structured data and an image in the same response.  They
+    are complementary, so selecting one at the transport boundary loses
+    information the driver adapter needs to build a capture.
+    """
+
+    structured_content: JsonValue | None = None
+    text_content: JsonValue | None = None
+    image_content: tuple[McpImageContent, ...] = ()
+    is_error: bool = False
 
 
 class McpStdioTransport:
@@ -195,17 +218,16 @@ class McpStdioTransport:
         arguments: Mapping[str, JsonValue],
         *,
         require_payload: bool = True,
-    ) -> JsonValue:
-        """Invoke one MCP tool and return its decoded payload.
+    ) -> McpToolResult:
+        """Invoke one MCP tool and preserve its complete useful envelope.
 
         Private by convention and by boundary: the driver adapter is the only
         caller, and it only ever passes names from its own fixed mapping. No
         layer above can reach a tool Friday did not declare.
 
-        `structuredContent` is the payload when present. The text fallback
-        exists for tools that answer in a JSON text block instead — but an MCP
-        result's text block is a *human* summary by convention, so failing to
-        parse it is not evidence that the call failed.
+        Structured JSON, text JSON, and image blocks are intentionally retained
+        together.  In particular, `get_window_state` supplies its elements in
+        `structuredContent` and its screenshot in an image block.
 
         `require_payload=False` says exactly that, and is used for mutating
         calls: `isError` still raises, but a reply carrying only a summary line
@@ -219,11 +241,16 @@ class McpStdioTransport:
             # the body may quote OS paths or window text; report nothing from it
             raise ComputerDriverFailed("the computer-use driver reported a tool error")
         structured = result.get("structuredContent")
-        if structured is not None:
-            return structured
-        if require_payload:
-            return _decode_text_content(result.get("content"))
-        return _decode_text_content_or_none(result.get("content"))
+        text = _decode_text_content_or_none(result.get("content"))
+        images = _image_content(result.get("content"))
+        if require_payload and structured is None and text is None:
+            raise ComputerDriverFailed("the computer-use driver returned no usable content")
+        return McpToolResult(
+            structured_content=structured,
+            text_content=text,
+            image_content=images,
+            is_error=False,
+        )
 
     # --- JSON-RPC ---------------------------------------------------------
 
@@ -334,31 +361,12 @@ def _spawn_daemon(target: object, *, name: str) -> None:
     thread.start()
 
 
-def _decode_text_content(content: JsonValue) -> JsonValue:
-    """Decode the first text block of an MCP tool result as JSON."""
-    if not isinstance(content, list) or not content:
-        raise ComputerDriverFailed("the computer-use driver returned no content")
-    for block in content:
-        if not isinstance(block, dict) or block.get("type") != "text":
-            continue
-        text = block.get("text")
-        if not isinstance(text, str):
-            continue
-        try:
-            decoded: JsonValue = json.loads(text)
-        except ValueError as exc:
-            raise ComputerDriverFailed("the computer-use driver returned non-JSON content") from exc
-        return decoded
-    raise ComputerDriverFailed("the computer-use driver returned no usable content")
+def _decode_text_content_or_none(content: JsonValue) -> JsonValue | None:
+    """Decode the first JSON text block, ignoring prose summaries.
 
-
-def _decode_text_content_or_none(content: JsonValue) -> JsonValue:
-    """Decode a JSON text block if there is one, otherwise report nothing.
-
-    The lenient counterpart used for mutations. "No structured detail" and "the
-    action failed" are different outcomes, and only the transport can tell them
-    apart — by the time this returns, the side effect has either happened or
-    raised.
+    MCP text blocks are normally human-readable summaries. They are only a
+    payload fallback when one happens to contain JSON; an image block must not
+    make the result malformed.
     """
     if not isinstance(content, list):
         return None
@@ -374,3 +382,19 @@ def _decode_text_content_or_none(content: JsonValue) -> JsonValue:
             continue
         return decoded
     return None
+
+
+def _image_content(content: JsonValue) -> tuple[McpImageContent, ...]:
+    """Read valid image blocks without flattening them into JSON text."""
+    if not isinstance(content, list):
+        return ()
+    images: list[McpImageContent] = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "image":
+            continue
+        data = block.get("data")
+        media_type = block.get("mimeType")
+        if not isinstance(data, str) or not isinstance(media_type, str):
+            raise ComputerDriverFailed("the computer-use driver returned a malformed image block")
+        images.append(McpImageContent(data=data, media_type=media_type))
+    return tuple(images)

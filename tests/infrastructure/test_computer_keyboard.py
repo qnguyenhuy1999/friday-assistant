@@ -10,6 +10,11 @@ sets and negative cases. Three specific things are load-bearing:
   walked around by reordering a list, and so could an approval fingerprint.
 * **Raw keycodes are unreachable.** Not merely undocumented — the field does not
   exist, and an integer `key` is refused.
+
+Every mutating call is made directly through `identity()` (window-level target)
+or `element_input()` (a labeled control) — there is no separate capture-then-
+fence step: each tool re-captures its window and resolves its target as part of
+the same call.
 """
 
 from __future__ import annotations
@@ -24,7 +29,9 @@ from friday.infrastructure.computer.models import KeyModifier, KeyName, Keystrok
 from tests.infrastructure.computer_harness import (
     Harness,
     build_harness,
+    element_input,
     failure_code,
+    identity,
     output_of,
 )
 
@@ -51,35 +58,25 @@ def test_keyboard_tools_require_approval(harness: Harness, tool: str) -> None:
 
 
 def test_type_text_types_the_requested_payload(harness: Harness) -> None:
-    snapshot_id = harness.capture_snapshot()
+    output = output_of(harness.run("computer.type_text", element_input(text="hello there")))
 
-    output = output_of(
-        harness.run("computer.type_text", {**harness.fence(snapshot_id), "text": "hello there"})
-    )
-
-    assert output == {"window_id": "win-mail", "chars": 11}
+    assert output["chars"] == 11
     assert harness.driver.only_call("type_text").argument("text") == "hello there"
 
 
 def test_type_text_does_not_echo_the_payload_back_to_the_brain(harness: Harness) -> None:
     """The text is already in the approved call and the durable invocation
     input; repeating it in the output only duplicates it into context."""
-    snapshot_id = harness.capture_snapshot()
-
-    output = output_of(
-        harness.run("computer.type_text", {**harness.fence(snapshot_id), "text": "secret plan"})
-    )
+    output = output_of(harness.run("computer.type_text", element_input(text="secret plan")))
 
     assert "secret plan" not in str(output)
 
 
 def test_type_text_is_bounded(tmp_path: Path) -> None:
     harness = build_harness(tmp_path, max_type_chars=16)
-    snapshot_id = harness.capture_snapshot()
-    harness.driver.calls.clear()
 
-    rejected = harness.run("computer.type_text", {**harness.fence(snapshot_id), "text": "x" * 17})
-    accepted = harness.run("computer.type_text", {**harness.fence(snapshot_id), "text": "x" * 16})
+    rejected = harness.run("computer.type_text", element_input(text="x" * 17))
+    accepted = harness.run("computer.type_text", element_input(text="x" * 16))
 
     assert failure_code(rejected) == "computer_text_rejected"
     assert accepted.status == "succeeded"
@@ -88,22 +85,14 @@ def test_type_text_is_bounded(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("text", ["", None, 5, True, ["a"], {"a": 1}])
 def test_type_text_rejects_empty_payload(harness: Harness, text: object) -> None:
-    snapshot_id = harness.capture_snapshot()
-    harness.driver.calls.clear()
-
-    result = harness.run(
-        "computer.type_text",
-        {**harness.fence(snapshot_id), "text": text},  # type: ignore[dict-item]
-    )
+    result = harness.run("computer.type_text", element_input(text=text))  # type: ignore[arg-type]
 
     assert failure_code(result) == "tool_invalid_input"
     assert harness.driver.mutating_calls == ()
 
 
 def test_type_text_requires_the_text_field(harness: Harness) -> None:
-    snapshot_id = harness.capture_snapshot()
-
-    result = harness.run("computer.type_text", harness.fence(snapshot_id))
+    result = harness.run("computer.type_text", element_input())
 
     assert failure_code(result) == "tool_invalid_input"
 
@@ -113,23 +102,20 @@ def test_type_text_requires_the_text_field(harness: Harness) -> None:
 )
 def test_type_text_rejects_control_payload(harness: Harness, text: str) -> None:
     """Escape sequences typed into a terminal are code, not text."""
-    snapshot_id = harness.capture_snapshot()
-    harness.driver.calls.clear()
-
-    result = harness.run("computer.type_text", {**harness.fence(snapshot_id), "text": text})
+    result = harness.run("computer.type_text", element_input(text=text))
 
     assert failure_code(result) == "computer_text_rejected"
     assert harness.driver.mutating_calls == ()
 
 
 @pytest.mark.parametrize("text", ["line one\nline two", "col\tcol"])
-def test_type_text_allows_tab_and_newline(harness: Harness, text: str) -> None:
-    """Refusing these would make the tool useless for any real form or message."""
-    snapshot_id = harness.capture_snapshot()
+def test_type_text_rejects_newline_and_tab(harness: Harness, text: str) -> None:
+    """A newline or tab is a key event wearing text's clothing: it is
+    available as `press_key`, proposed and approved as the action it is."""
+    result = harness.run("computer.type_text", element_input(text=text))
 
-    assert harness.run(
-        "computer.type_text", {**harness.fence(snapshot_id), "text": text}
-    ).status == ("succeeded")
+    assert failure_code(result) == "computer_text_rejected"
+    assert harness.driver.mutating_calls == ()
 
 
 @pytest.mark.parametrize(
@@ -154,10 +140,7 @@ def test_type_text_allows_tab_and_newline(harness: Harness, text: str) -> None:
 def test_type_text_rejects_secret_shaped_content(harness: Harness, text: str) -> None:
     """Defence in depth. Friday's real position is that it never puts a
     credential where Claude could propose typing it."""
-    snapshot_id = harness.capture_snapshot()
-    harness.driver.calls.clear()
-
-    result = harness.run("computer.type_text", {**harness.fence(snapshot_id), "text": text})
+    result = harness.run("computer.type_text", element_input(text=text))
 
     assert failure_code(result) == "computer_text_rejected"
     assert harness.driver.mutating_calls == ()
@@ -174,11 +157,7 @@ def test_type_text_rejects_secret_shaped_content(harness: Harness, text: str) ->
 )
 def test_type_text_allows_ordinary_prose(harness: Harness, text: str) -> None:
     """The screen must not be so eager that normal typing becomes impossible."""
-    snapshot_id = harness.capture_snapshot()
-
-    assert harness.run(
-        "computer.type_text", {**harness.fence(snapshot_id), "text": text}
-    ).status == ("succeeded")
+    assert harness.run("computer.type_text", element_input(text=text)).status == "succeeded"
 
 
 @pytest.mark.parametrize(
@@ -196,10 +175,7 @@ def test_long_paths_and_urls_are_refused_as_secret_shaped(harness: Harness, text
     that same detector, so this is pinned as known behaviour instead of being
     loosened here — the failure direction is refusal, which is recoverable.
     """
-    snapshot_id = harness.capture_snapshot()
-    harness.driver.calls.clear()
-
-    result = harness.run("computer.type_text", {**harness.fence(snapshot_id), "text": text})
+    result = harness.run("computer.type_text", element_input(text=text))
 
     assert failure_code(result) == "computer_text_rejected"
     assert harness.driver.mutating_calls == ()
@@ -210,22 +186,14 @@ def test_long_paths_and_urls_are_refused_as_secret_shaped(harness: Harness, text
 
 @pytest.mark.parametrize("key", [name.value for name in KeyName])
 def test_press_key_accepts_every_named_key(harness: Harness, key: str) -> None:
-    snapshot_id = harness.capture_snapshot()
+    output = output_of(harness.run("computer.press_key", {**identity(), "key": key}))
 
-    output = output_of(
-        harness.run("computer.press_key", {**harness.fence(snapshot_id), "key": key})
-    )
-
-    assert output == {"window_id": "win-mail", "key": key}
+    assert output["key"] == key
 
 
 @pytest.mark.parametrize("key", ["a", "z", "0", "9"])
 def test_press_key_accepts_the_single_character_subset(harness: Harness, key: str) -> None:
-    snapshot_id = harness.capture_snapshot()
-
-    assert harness.run("computer.press_key", {**harness.fence(snapshot_id), "key": key}).status == (
-        "succeeded"
-    )
+    assert harness.run("computer.press_key", {**identity(), "key": key}).status == "succeeded"
 
 
 @pytest.mark.parametrize(
@@ -247,12 +215,9 @@ def test_press_key_accepts_the_single_character_subset(harness: Harness, key: st
     ],
 )
 def test_press_key_rejects_unknown_key(harness: Harness, key: object) -> None:
-    snapshot_id = harness.capture_snapshot()
-    harness.driver.calls.clear()
-
     result = harness.run(
         "computer.press_key",
-        {**harness.fence(snapshot_id), "key": key},  # type: ignore[dict-item]
+        {**identity(), "key": key},  # type: ignore[dict-item]
     )
 
     assert failure_code(result) == "tool_invalid_input"
@@ -262,9 +227,6 @@ def test_press_key_rejects_unknown_key(harness: Harness, key: object) -> None:
 def test_raw_keycodes_are_not_exposed(harness: Harness) -> None:
     """There is no keycode field to populate, and an integer key is refused —
     a keycode means whatever the active layout says it means."""
-    snapshot_id = harness.capture_snapshot()
-    harness.driver.calls.clear()
-
     for payload in (
         {"keycode": 53},
         {"key": 53},
@@ -274,7 +236,7 @@ def test_raw_keycodes_are_not_exposed(harness: Harness) -> None:
     ):
         result = harness.run(
             "computer.press_key",
-            {**harness.fence(snapshot_id), **payload},  # type: ignore[dict-item]
+            {**identity(), **payload},  # type: ignore[dict-item]
         )
 
         assert failure_code(result) == "tool_invalid_input", payload
@@ -285,22 +247,14 @@ def test_raw_keycodes_are_not_exposed(harness: Harness) -> None:
 
 
 def test_hotkey_passes_a_normalized_keystroke(harness: Harness) -> None:
-    snapshot_id = harness.capture_snapshot()
-
     output = output_of(
-        harness.run(
-            "computer.hotkey",
-            {**harness.fence(snapshot_id), "key": "c", "modifiers": ["meta"]},
-        )
+        harness.run("computer.hotkey", {**identity(), "key": "c", "modifiers": ["meta"]})
     )
 
-    assert output == {
-        "window_id": "win-mail",
-        "key": "c",
-        "modifiers": ["meta"],
-        "combination": "meta+c",
-    }
-    keystroke = harness.driver.only_call("press_keystroke").argument("keystroke")
+    assert output["key"] == "c"
+    assert output["modifiers"] == ["meta"]
+    assert output["combination"] == "meta+c"
+    keystroke = harness.driver.only_call("hotkey").argument("keystroke")
     assert isinstance(keystroke, Keystroke)
     assert keystroke == Keystroke(key="c", modifiers=(KeyModifier.META,))
     assert keystroke.combination == "meta+c"
@@ -310,24 +264,15 @@ def test_hotkey_modifiers_are_canonical(harness: Harness) -> None:
     """Two spellings of one combination must produce one keystroke — otherwise
     both the deny-list and the approval fingerprint can be walked around by
     reordering a list."""
-    snapshot_id = harness.capture_snapshot()
-
     first = output_of(
-        harness.run(
-            "computer.hotkey",
-            {**harness.fence(snapshot_id), "key": "s", "modifiers": ["shift", "meta"]},
-        )
+        harness.run("computer.hotkey", {**identity(), "key": "s", "modifiers": ["shift", "meta"]})
     )
     second = output_of(
-        harness.run(
-            "computer.hotkey",
-            {**harness.fence(snapshot_id), "key": "s", "modifiers": ["meta", "shift"]},
-        )
+        harness.run("computer.hotkey", {**identity(), "key": "s", "modifiers": ["meta", "shift"]})
     )
 
-    assert first == second
-    assert first["modifiers"] == ["meta", "shift"]
-    assert first["combination"] == "meta+shift+s"
+    assert first["modifiers"] == second["modifiers"] == ["meta", "shift"]
+    assert first["combination"] == second["combination"] == "meta+shift+s"
 
 
 def test_hotkey_modifier_names_tolerate_case_and_surrounding_space(harness: Harness) -> None:
@@ -335,13 +280,8 @@ def test_hotkey_modifier_names_tolerate_case_and_surrounding_space(harness: Harn
     keystroke. The approval fingerprint still binds the exact spelling, so the
     only asymmetry this creates is an approval being too specific — never too
     permissive."""
-    snapshot_id = harness.capture_snapshot()
-
     output = output_of(
-        harness.run(
-            "computer.hotkey",
-            {**harness.fence(snapshot_id), "key": "c", "modifiers": ["META "]},
-        )
+        harness.run("computer.hotkey", {**identity(), "key": "c", "modifiers": ["META "]})
     )
 
     assert output["combination"] == "meta+c"
@@ -350,12 +290,8 @@ def test_hotkey_modifier_names_tolerate_case_and_surrounding_space(harness: Harn
 def test_hotkey_rejects_duplicate_modifiers(harness: Harness) -> None:
     """Silent dedup would mean an approval bound to ["meta","meta"] authorizes
     ["meta"] — one action must have one spelling."""
-    snapshot_id = harness.capture_snapshot()
-    harness.driver.calls.clear()
-
     result = harness.run(
-        "computer.hotkey",
-        {**harness.fence(snapshot_id), "key": "c", "modifiers": ["meta", "meta"]},
+        "computer.hotkey", {**identity(), "key": "c", "modifiers": ["meta", "meta"]}
     )
 
     assert failure_code(result) == "tool_invalid_input"
@@ -366,12 +302,9 @@ def test_hotkey_rejects_duplicate_modifiers(harness: Harness) -> None:
     "modifiers", [["command"], ["super"], ["fn"], [""], ["  "], [1], [None], "meta", {"a": 1}]
 )
 def test_hotkey_modifiers_are_a_closed_set(harness: Harness, modifiers: object) -> None:
-    snapshot_id = harness.capture_snapshot()
-    harness.driver.calls.clear()
-
     result = harness.run(
         "computer.hotkey",
-        {**harness.fence(snapshot_id), "key": "c", "modifiers": modifiers},  # type: ignore[dict-item]
+        {**identity(), "key": "c", "modifiers": modifiers},  # type: ignore[dict-item]
     )
 
     assert failure_code(result) == "tool_invalid_input"
@@ -386,13 +319,10 @@ DENY_LIST: tuple[Keystroke, ...] = tuple(
 @pytest.mark.parametrize("denied", DENY_LIST)
 def test_dangerous_hotkeys_are_rejected_before_driver(harness: Harness, denied: Keystroke) -> None:
     """Every deny-list entry, in every modifier order it could be written."""
-    snapshot_id = harness.capture_snapshot()
-    harness.driver.calls.clear()
-
     result = harness.run(
         "computer.hotkey",
         {
-            **harness.fence(snapshot_id),
+            **identity(),
             "key": denied.key,
             "modifiers": list(reversed([m.value for m in denied.modifiers])),
         },
@@ -402,7 +332,7 @@ def test_dangerous_hotkeys_are_rejected_before_driver(harness: Harness, denied: 
     assert harness.driver.mutating_calls == ()
 
 
-def test_the_deny_list_covers_session_destruction(harness: Harness) -> None:
+def test_the_deny_list_covers_session_destruction() -> None:
     """Named explicitly so removing an entry is a visible test change rather
     than a silently smaller deny-list."""
     combinations = {keystroke.combination for keystroke in DENIED_HOTKEYS}
@@ -410,19 +340,13 @@ def test_the_deny_list_covers_session_destruction(harness: Harness) -> None:
     assert "meta+alt+escape" in combinations  # macOS force quit
     assert "meta+shift+q" in combinations  # macOS log out
     assert "meta+ctrl+q" in combinations  # macOS lock screen
-    assert "ctrl+alt+delete" in combinations  # Windows security screen
     assert "meta+l" in combinations  # Windows/Linux lock
     assert "ctrl+alt+backspace" in combinations  # Linux kill session
 
 
 def test_an_ordinary_hotkey_is_still_permitted(harness: Harness) -> None:
     """The deny-list must not be so broad that copy and paste are unreachable."""
-    snapshot_id = harness.capture_snapshot()
-
     for key in ("c", "v", "a", "z"):
-        result = harness.run(
-            "computer.hotkey",
-            {**harness.fence(snapshot_id), "key": key, "modifiers": ["meta"]},
-        )
+        result = harness.run("computer.hotkey", {**identity(), "key": key, "modifiers": ["meta"]})
 
         assert result.status == "succeeded", key

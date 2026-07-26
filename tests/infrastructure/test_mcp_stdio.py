@@ -95,6 +95,16 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": request_id,
                   "result": {"structuredContent": {"x": 1, "y": 2}}})
             continue
+        if MODE == "structured_image":
+            send({"jsonrpc": "2.0", "id": request_id,
+                  "result": {
+                      "structuredContent": {"elements": [{"element_index": 14}]},
+                      "content": [
+                          {"type": "text", "text": "✅ window state"},
+                          {"type": "image", "data": "cG5n", "mimeType": "image/png"}
+                      ]
+                  }})
+            continue
         if MODE == "non_json_text":
             send({"jsonrpc": "2.0", "id": request_id,
                   "result": {"content": [{"type": "text", "text": "not json at all"}]}})
@@ -213,7 +223,8 @@ def test_call_tool_round_trips_arguments_and_decodes_text_content(
 
     result = transport.call_tool("click", {"x": 5, "y": 6})
 
-    assert result == {"echo": {"name": "click", "arguments": {"x": 5, "y": 6}}}
+    assert result.text_content == {"echo": {"name": "click", "arguments": {"x": 5, "y": 6}}}
+    assert result.structured_content is None
 
 
 def test_structured_content_is_preferred_when_present(
@@ -221,7 +232,22 @@ def test_structured_content_is_preferred_when_present(
 ) -> None:
     transport = _open(started, "structured")
 
-    assert transport.call_tool("pointer_position", {}) == {"x": 1, "y": 2}
+    result = transport.call_tool("pointer_position", {})
+
+    assert result.structured_content == {"x": 1, "y": 2}
+    assert result.text_content is None
+
+
+def test_structured_content_and_image_content_are_preserved_together(
+    started: list[McpStdioTransport],
+) -> None:
+    transport = _open(started, "structured_image")
+
+    result = transport.call_tool("get_window_state", {})
+
+    assert result.structured_content == {"elements": [{"element_index": 14}]}
+    assert result.image_content[0].data == "cG5n"
+    assert result.image_content[0].media_type == "image/png"
 
 
 def test_notifications_and_stale_ids_are_skipped(started: list[McpStdioTransport]) -> None:
@@ -231,7 +257,7 @@ def test_notifications_and_stale_ids_are_skipped(started: list[McpStdioTransport
 
     result = transport.call_tool("click", {"x": 1, "y": 1})
 
-    assert result == {"echo": {"name": "click", "arguments": {"x": 1, "y": 1}}}
+    assert result.text_content == {"echo": {"name": "click", "arguments": {"x": 1, "y": 1}}}
 
 
 # --- failure modes --------------------------------------------------------
@@ -314,7 +340,7 @@ def test_a_driver_that_floods_stderr_still_answers(
 
     result = transport.call_tool("click", {"x": 1, "y": 1})
 
-    assert result == {"echo": {"name": "click", "arguments": {"x": 1, "y": 1}}}
+    assert result.text_content == {"echo": {"name": "click", "arguments": {"x": 1, "y": 1}}}
 
 
 def test_writing_to_a_closed_driver_is_unavailable_not_a_crash() -> None:

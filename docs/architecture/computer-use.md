@@ -59,19 +59,17 @@ write, and the architecture tests assert it never learns otherwise.
 
 ## Tool manifest
 
-Eleven tools, registered only when computer use is enabled. All are
+Nine tools, registered only when computer use is enabled. All are
 `ApprovalCategory.COMPUTER_USE`.
 
 | Tool | Read-only | Approval |
 | --- | --- | --- |
-| `computer.active_window` | yes | no |
 | `computer.capture` | yes | no |
-| `computer.pointer_position` | yes | no |
+| `computer.cursor_position` | yes | no |
 | `computer.window_list` | yes | no |
 | `computer.click` | no | **required** |
-| `computer.focus_window` | no | **required** |
+| `computer.bring_to_front` | no | **required** |
 | `computer.hotkey` | no | **required** |
-| `computer.pointer_move` | no | **required** |
 | `computer.press_key` | no | **required** |
 | `computer.scroll` | no | **required** |
 | `computer.type_text` | no | **required** |
@@ -87,37 +85,19 @@ register a tool with no policy row (or a policy row with no handler). A new
 desktop capability cannot become reachable without passing through
 `friday/infrastructure/computer/policy.py` in review.
 
-## Snapshot fencing
+## Fresh semantic revalidation
 
-Every mutating tool must cite `{snapshot_id, window_id}` naming a live
-`computer.capture` result. Pointer tools additionally supply **either**
-`element` **or** `x` + `y` — never both, never neither.
+Approval binds a semantic intent, never a past screenshot: `{pid, window_id,
+element:{role,label}}`. At execution Friday finds that exact window, captures
+its current AX state, resolves the descriptor uniquely, then sends only the
+fresh `element_index`/token to Cua. The index is never accepted from Claude and
+never stored as approval evidence.
 
-```json
-{"snapshot_id": "cs_…", "window_id": "win-mail", "element": 14}
-{"snapshot_id": "cs_…", "window_id": "win-mail", "x": 300, "y": 220}
-```
-
-The gateway fails closed when the snapshot is unknown, expired, or from another
-run; when `window_id` disagrees with the captured window; when the element is
-not in that snapshot; when a coordinate falls outside the captured window
-bounds; or when the target shape is ambiguous. In every case **no driver call
-happens** — the tests assert `driver.mutating_calls == ()`, which is the actual
-safety property.
-
-`element_id` is meaningful **only inside its snapshot**. `14` is not a
-desktop-wide handle, and resolving it globally is the easiest mistake available
-here. Resolution happens in the gateway (`targets.py`), never in the driver: a
-driver that did its own snapshot lookup would be a second fence implementation,
-and the two would eventually disagree.
-
-Snapshots are transient in-process state, not a domain entity — no migration,
-no repository. Losing them on restart is correct: a worker that just restarted
-cannot vouch for a pre-restart observation of a desktop.
-
-Registry bounds: TTL (checked on lookup, not only on eviction), total count,
-per-run count, and run scoping. A capture from the future also fails closed, so
-clock skew cannot grant an unbounded lifetime.
+Missing or ambiguous controls, a changed role/label, or a different pid/window
+all fail closed before a mutation. Raw `x,y` targets are deliberately not
+exposed for approval-delayed mutations: an in-bounds pixel is not proof that it
+still means the approved action. A future visual-equivalence fence is required
+before pixel input can return.
 
 ## Approval binding
 
@@ -126,8 +106,7 @@ no computer-specific approval hash. The fingerprint covers the run, the step,
 the tool name, and the canonical JSON of the entire `tool_input`, so an approval
 for one action never authorizes a changed one:
 
-different snapshot · different window · different element · different
-coordinate (one pixel is enough) · different button · different click count ·
+different pid · different window · different descriptor · different button · different click count ·
 different text · different key · different modifiers.
 
 Approvals remain one-shot. A replayed identical action reuses the recorded
@@ -155,14 +134,14 @@ Screenshots go through Friday's existing artifact flow — `ArtifactKind.IMAGE`,
 `ArtifactCandidate`, Txn B. There is no parallel artifact system.
 
 ```text
-.friday/artifacts/computer/<invocation-id>/<snapshot-id>.png
+.friday/artifacts/computer/<invocation-id>/<capture-id>.png
 ```
 
 Keyed by invocation so a later capture can never overwrite the image an earlier
 artifact row points at. `.friday/` is git-ignored.
 
 - **Image bytes never enter JSON.** No base64, no data URI, no absolute path.
-  Tool output carries `snapshot_id`, a workspace-relative `artifact` location,
+  Tool output carries `capture_id`, a workspace-relative `artifact` location,
   `media_type`, `width`, `height`, `size`, and `checksum`.
 - Validation happens **before** the file is created: configured byte ceiling,
   allowed media type (`image/png` only), dimension ceiling, and a PNG
@@ -222,12 +201,12 @@ Anthropic or OpenAI SDK; authentication remains the local Claude CLI
 subscription.
 
 - **Startup health check** is deterministic and *total*: `tools/list` must
-  advertise every one of the ten mapped tools. A driver that can capture but not
+  advertise every one of the nine mapped tools. A driver that can capture but not
   click is reported unavailable immediately, rather than failing at the first
   click.
 - **Tool names** are a fixed, reviewable default table (`CuaToolNames`), one slot
   per driver method. Overridable for a differently-named build, but only those
-  ten slots exist, so no override widens what Friday can invoke. There is
+  nine slots exist, so no override widens what Friday can invoke. There is
   deliberately **no** generic `call(action, payload)` above the transport.
 - **Timeouts** are per request; a timeout raises `ComputerDriverTimeout` and is
   reported non-retryable.
@@ -239,9 +218,8 @@ subscription.
 - **The child environment is allowlisted** (`HOME`, `PATH`, locale, `TMPDIR`,
   plus `DISPLAY`/`WAYLAND_DISPLAY`/`XAUTHORITY`). `ANTHROPIC_API_KEY` and
   nested `CLAUDE_CODE_*` variables are dropped.
-- **Telemetry is opted out explicitly** (`CUA_TELEMETRY`,
-  `CUA_TELEMETRY_ENABLED`) rather than by omission, because an unset variable is
-  a default the driver chooses.
+- **Telemetry is configured explicitly** with Cua's
+  `CUA_DRIVER_RS_TELEMETRY_ENABLED` child-process variable.
 - **Driver replies are untrusted input.** Every field is type-checked and handed
   to a bounding value object; a reply that does not fit raises with a constant
   message. Observed `window_id` values are bounded like any other observed
@@ -294,15 +272,13 @@ degraded mode.)
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `FRIDAY_COMPUTER_USE_ENABLED` | `false` | Master switch. |
-| `FRIDAY_CUA_DRIVER_CMD` | `cua-driver` | Driver argv, `shlex`-parsed, never run through a shell. |
+| `FRIDAY_CUA_DRIVER_CMD` | `cua-driver mcp` | Driver argv, `shlex`-parsed, never run through a shell. |
 | `FRIDAY_COMPUTER_TIMEOUT_SECONDS` | `15` | Per-request driver budget. |
 | `FRIDAY_COMPUTER_MAX_CAPTURE_BYTES` | `8000000` | Screenshot ceiling, enforced pre-decode. |
 | `FRIDAY_COMPUTER_MAX_TYPE_CHARS` | `4096` | `computer.type_text` bound. |
-| `FRIDAY_COMPUTER_MAX_SCROLL_DELTA` | `5000` | Operational scroll ceiling (not the ±100000 representable range). |
-| `FRIDAY_COMPUTER_CAPTURE_TTL_SECONDS` | `10` | Snapshot fence lifetime; capped at 300. |
-| `FRIDAY_COMPUTER_MAX_SNAPSHOTS` | `32` | Total live snapshots. |
+| `FRIDAY_COMPUTER_MAX_SCROLL_AMOUNT` | `10` | Operational scroll ceiling in driver notches. |
 | `FRIDAY_COMPUTER_MAX_ELEMENTS` | `500` | Elements per capture. |
-| `FRIDAY_CUA_TELEMETRY_ENABLED` | `false` | Passed to the driver explicitly. |
+| `FRIDAY_CUA_TELEMETRY_ENABLED` | `false` | Maps to `CUA_DRIVER_RS_TELEMETRY_ENABLED`. |
 
 The workspace root comes from `FRIDAY_WORKER_WORKSPACE_ROOT` (RuntimeSettings)
 and is deliberately not re-read here — screenshots must land in the same
@@ -314,11 +290,10 @@ All non-retryable.
 
 | Code | Cause |
 | --- | --- |
-| `computer_snapshot_not_found` | Unknown or malformed `snapshot_id`. |
-| `computer_snapshot_expired` | Past TTL, or dated in the future. |
-| `computer_snapshot_mismatch` | Wrong window, wrong run, or an element not in that snapshot. |
-| `computer_target_invalid` | Both or neither of `element` / `x`+`y`. |
-| `computer_target_out_of_bounds` | Coordinate outside the captured window. |
+| `computer_window_gone` | Named pid/window no longer exists. |
+| `computer_target_not_found` | Approved role/label is absent now. |
+| `computer_target_ambiguous` | More than one current control matches the descriptor. |
+| `computer_target_invalid` | Required semantic element is absent or malformed. |
 | `computer_text_rejected` | Oversized, control-bearing, or secret-shaped text. |
 | `computer_hotkey_rejected` | Deny-listed combination. |
 | `computer_driver_unavailable` | Driver not running or unhealthy. |
@@ -372,12 +347,14 @@ Friday fails closed.
    most Linux desktops but is "focus the address bar" on macOS. One normalized
    keystroke cannot mean both, and refusing a useful shortcut is recoverable in
    a way that locking the user out is not.
-3. **Snapshots do not survive a worker restart.** By design; see above.
+3. **No observation is reused across a worker restart.** The resumed worker
+   captures current state and resolves the approved descriptor again.
 4. **Element truncation is undetectable at the ceiling.** `elements_truncated`
    is derived by requesting one more element than reported, so a `max_elements`
    set exactly to `MAX_ELEMENTS_CEILING` (5000) cannot report truncation. Far
    above any configured limit.
-5. **TOCTOU remains.** A snapshot proves what Friday saw within the TTL, not
-   that the desktop is unchanged at the instant of the click. Phase 13 provides
-   fencing and bounded authority, not a hardened OS sandbox.
+5. **TOCTOU remains.** Fresh descriptor resolution proves only that one
+   role/label match existed immediately before the driver call; the application
+   can still change after that check. Phase 13 provides bounded authority, not
+   a hardened OS sandbox.
 6. **Platform support is unproven** (see above).

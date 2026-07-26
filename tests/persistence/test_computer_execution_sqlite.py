@@ -39,9 +39,15 @@ from friday.domain.json_value import JsonValue
 from friday.domain.run import Run, RunStatus
 from friday.domain.task import Task
 from friday.domain.tool import ToolInvocationStatus
-from friday.infrastructure.computer.models import ScreenPoint
+from friday.infrastructure.computer.models import (
+    ElementDescriptor,
+    ElementTarget,
+    PointerButton,
+    WindowRef,
+)
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
+from tests.infrastructure.computer_fakes import MAIL_PID, MAIL_WINDOW_ID
 from tests.infrastructure.computer_harness import T0, Harness, build_harness
 
 LEASE = timedelta(minutes=1)
@@ -131,13 +137,17 @@ def test_the_full_approved_click_path(
 
     # --- Claude observes the desktop (read-only, no approval) --------------
     capture = harness.capture()
-    snapshot_id = capture["snapshot_id"]
-    assert isinstance(snapshot_id, str)
+    capture_id = capture["capture_id"]
+    assert isinstance(capture_id, str)
     harness.driver.calls.clear()
 
     call = ToolCall(
         tool="computer.click",
-        tool_input={"snapshot_id": snapshot_id, "window_id": "win-mail", "element": 14},
+        tool_input={
+            "pid": MAIL_PID,
+            "window_id": MAIL_WINDOW_ID,
+            "element": {"role": "text_field", "label": "Search"},
+        },
     )
 
     # --- first attempt: parked for approval, nothing touched --------------
@@ -197,13 +207,14 @@ def test_the_full_approved_click_path(
     assert second.kind == "executed"
     assert second.replayed is False
 
-    # exactly one click, at the resolved centre of element 14, in that window
+    # exactly one click, resolved against the Search text field, in that window
     assert len(harness.driver.mutating_calls) == 1
     click = harness.driver.only_call("click")
-    assert click.argument("window_id") == "win-mail"
-    point = click.argument("point")
-    assert isinstance(point, ScreenPoint)
-    assert (point.x, point.y) == (200, 65)
+    target = click.argument("target")
+    assert isinstance(target, ElementTarget)
+    assert target.ref == WindowRef(pid=MAIL_PID, window_id=MAIL_WINDOW_ID)
+    assert target.descriptor == ElementDescriptor(role="text_field", label="Search")
+    assert click.argument("button") == PointerButton.LEFT
     assert click.argument("count") == 1
 
     # everything durable, read back through a fresh session
@@ -215,13 +226,20 @@ def test_the_full_approved_click_path(
         assert invocation.tool_name == "computer.click"
         assert invocation.approval_request_id == approval.approval_id
         assert invocation.requested_input == call.tool_input
-        assert invocation.output == {
-            "window_id": "win-mail",
-            "x": 200,
-            "y": 65,
-            "button": "left",
-            "count": 1,
+        output = invocation.output
+        assert isinstance(output, dict)
+        assert output["pid"] == MAIL_PID
+        assert output["window_id"] == MAIL_WINDOW_ID
+        assert output["window_title"] == "Mail"
+        assert output["target"] == {
+            "kind": "element",
+            "role": "text_field",
+            "label": "Search",
+            "element_index": 14,
         }
+        assert output["button"] == "left"
+        assert output["count"] == 1
+        assert isinstance(output["capture_id"], str)
 
         stored = fresh.approvals.list_for_run(run_id)
         assert len(stored) == 1
@@ -256,10 +274,12 @@ def test_the_approved_click_cannot_be_repurposed_for_a_different_element(
     run_id = harness.run_id
     _seed_claimed_run(uow_factory, run_id)
     executor = ExecuteToolAction(uow_factory, clock, harness.gateway)
-    snapshot_id = harness.capture_snapshot()
     harness.driver.calls.clear()
-    fence: dict[str, JsonValue] = {"snapshot_id": snapshot_id, "window_id": "win-mail"}
-    approved = ToolCall(tool="computer.click", tool_input={**fence, "element": 14})
+    fence: dict[str, JsonValue] = {"pid": MAIL_PID, "window_id": MAIL_WINDOW_ID}
+    approved = ToolCall(
+        tool="computer.click",
+        tool_input={**fence, "element": {"role": "text_field", "label": "Search"}},
+    )
 
     outcome = executor.execute(
         run_id=run_id,
@@ -292,7 +312,10 @@ def test_the_approved_click_cannot_be_repurposed_for_a_different_element(
     diverted = executor.execute(
         run_id=run_id,
         step_id=None,
-        call=ToolCall(tool="computer.click", tool_input={**fence, "element": 15}),
+        call=ToolCall(
+            tool="computer.click",
+            tool_input={**fence, "element": {"role": "button", "label": "Send"}},
+        ),
         worker_id=WORKER,
         claim_token=TOKEN,
         claim_generation=generation,
@@ -313,11 +336,14 @@ def test_a_claim_lost_before_the_side_effect_never_reaches_the_desktop(
     run_id = harness.run_id
     _seed_claimed_run(uow_factory, run_id)
     executor = ExecuteToolAction(uow_factory, clock, harness.gateway)
-    snapshot_id = harness.capture_snapshot()
     harness.driver.calls.clear()
     call = ToolCall(
         tool="computer.click",
-        tool_input={"snapshot_id": snapshot_id, "window_id": "win-mail", "element": 14},
+        tool_input={
+            "pid": MAIL_PID,
+            "window_id": MAIL_WINDOW_ID,
+            "element": {"role": "text_field", "label": "Search"},
+        },
     )
 
     with pytest.raises(ClaimLost):
@@ -346,11 +372,14 @@ def test_a_claim_lost_after_the_side_effect_leaves_an_ambiguous_invocation(
     run_id = harness.run_id
     _seed_claimed_run(uow_factory, run_id)
     executor = ExecuteToolAction(uow_factory, clock, harness.gateway)
-    snapshot_id = harness.capture_snapshot()
     harness.driver.calls.clear()
     call = ToolCall(
         tool="computer.click",
-        tool_input={"snapshot_id": snapshot_id, "window_id": "win-mail", "element": 14},
+        tool_input={
+            "pid": MAIL_PID,
+            "window_id": MAIL_WINDOW_ID,
+            "element": {"role": "text_field", "label": "Search"},
+        },
     )
     outcome = executor.execute(
         run_id=run_id,
@@ -439,7 +468,9 @@ def test_a_capture_persists_its_screenshot_artifact_durably(
     outcome = executor.execute(
         run_id=run_id,
         step_id=None,
-        call=ToolCall(tool="computer.capture", tool_input={}),
+        call=ToolCall(
+            tool="computer.capture", tool_input={"pid": MAIL_PID, "window_id": MAIL_WINDOW_ID}
+        ),
         worker_id=WORKER,
         claim_token=TOKEN,
         claim_generation=_generation(uow_factory, run_id),

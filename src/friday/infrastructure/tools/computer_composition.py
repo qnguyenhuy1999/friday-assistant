@@ -54,7 +54,7 @@ ComputerUseUnavailable = ComputerDriverUnavailable
 """Re-exported so preflight can report a broken configuration without importing
 the computer package itself."""
 
-_TELEMETRY_VARIABLES = ("CUA_TELEMETRY", "CUA_TELEMETRY_ENABLED")
+_TELEMETRY_VARIABLE = "CUA_DRIVER_RS_TELEMETRY_ENABLED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,10 +138,5 @@ def _build_driver(config: ComputerGatewayConfig) -> CuaDriverComputerDriver:
 
 
 def _driver_environment(config: ComputerGatewayConfig) -> dict[str, str]:
-    """Opt the driver out of telemetry explicitly rather than by omission.
-
-    Both spellings are set because an unset variable is a default the driver
-    chooses, and Friday's default here is off.
-    """
-    value = "1" if config.telemetry_enabled else "0"
-    return {name: value for name in _TELEMETRY_VARIABLES}
+    """Map Friday's privacy setting to Cua Driver's actual environment API."""
+    return {_TELEMETRY_VARIABLE: "true" if config.telemetry_enabled else "false"}

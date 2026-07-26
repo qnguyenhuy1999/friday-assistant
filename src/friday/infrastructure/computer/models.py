@@ -572,7 +572,6 @@ class KeyName(StrEnum):
     ESCAPE = "escape"
     SPACE = "space"
     BACKSPACE = "backspace"
-    DELETE = "delete"
     ARROW_UP = "arrow_up"
     ARROW_DOWN = "arrow_down"
     ARROW_LEFT = "arrow_left"

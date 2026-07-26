@@ -6,10 +6,13 @@ function client() {
   const request = vi.fn().mockResolvedValue({});
   return {
     http: {
-      requestJson: ({ validate, ...options }) => (
-        void validate,
-        request(options)
-      ),
+      requestJson: ({
+        validate,
+        ...options
+      }: {
+        validate: unknown;
+        [key: string]: unknown;
+      }) => (void validate, request(options)),
     } as unknown as FridayHttpClient,
     request,
   };

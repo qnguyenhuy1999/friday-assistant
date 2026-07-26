@@ -2,10 +2,10 @@ import { useState, type FormEvent } from "react";
 import { useCreateTask, useStartRun, useTasks } from "../hooks/use-tasks";
 export function TasksPage({
   onRunStarted,
-  onViewSchedules,
+  onViewSchedules = () => undefined,
 }: {
   onRunStarted: (runId: string) => void;
-  onViewSchedules: (taskId: string) => void;
+  onViewSchedules?: (taskId: string) => void;
 }) {
   const { data, isLoading, isError } = useTasks();
   const create = useCreateTask();

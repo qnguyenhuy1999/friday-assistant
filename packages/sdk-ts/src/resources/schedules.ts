@@ -31,7 +31,7 @@ export class SchedulesResource {
     return this.http.requestJson<Page<Schedule>>({
       method: "GET",
       path: `/v1/tasks/${taskId}/schedules`,
-      query: params,
+      query: { limit: params.limit },
       validate: validateSchedulePage,
     });
   }
@@ -59,7 +59,7 @@ export class SchedulesResource {
     return this.http.requestJson<Page<ScheduleFire>>({
       method: "GET",
       path: `/v1/tasks/${taskId}/schedules/${scheduleId}/fires`,
-      query: params,
+      query: { limit: params.limit, cursor: params.cursor },
       validate: validateScheduleFirePage,
     });
   }

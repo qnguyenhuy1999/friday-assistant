@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -59,6 +60,9 @@ def test_two_scheduler_actors_and_restart_materialize_one_durable_fire() -> None
 def test_one_broken_schedule_does_not_starve_other_due_schedules(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    logger = logging.getLogger("friday.application.materialize_due_schedule")
+    monkeypatch.setattr(logger, "disabled", False)
+    caplog.set_level(logging.ERROR, logger=logger.name)
     uow, clock, factory, task = _prepared()
     broken = _schedule(factory, clock, task, T0 + timedelta(minutes=1))
     healthy = _schedule(factory, clock, task, T0 + timedelta(minutes=1))

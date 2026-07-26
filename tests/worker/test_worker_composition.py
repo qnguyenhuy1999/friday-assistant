@@ -159,6 +159,27 @@ def test_run_progresses_to_succeeded_through_brain_finish(tmp_path: Path) -> Non
         worker.engine.dispose()
 
 
+def test_terminal_run_is_not_replayed_after_a_worker_restart(tmp_path: Path) -> None:
+    worker = build_worker(tmp_path, [FINISH])
+    try:
+        run_id = seed_queued_run(worker)
+        assert worker.loop.run_once(worker.processor) is True
+    finally:
+        worker.engine.dispose()
+
+    restarted = build_worker(tmp_path, [FINISH])
+    try:
+        # A fresh process sees no work item for the durable terminal Run.
+        assert restarted.loop.run_once(restarted.processor) is False
+        factory = create_unit_of_work_factory(create_session_factory(restarted.engine))
+        with factory() as uow:
+            run = uow.runs.get(run_id)
+            assert run is not None and run.status is RunStatus.SUCCEEDED
+            assert uow.work_queue.get(run_id) is None
+    finally:
+        restarted.engine.dispose()
+
+
 def test_full_approval_cycle_executes_the_approved_tool(tmp_path: Path) -> None:
     # claim 1: brain proposes a protected write -> approval intercepted
     # human approves -> run resumes with a fresh work item
@@ -207,6 +228,43 @@ def test_full_approval_cycle_executes_the_approved_tool(tmp_path: Path) -> None:
         assert written.read_text() == "hello"
     finally:
         worker.engine.dispose()
+
+
+def test_waiting_approval_survives_worker_restart_and_resumes(tmp_path: Path) -> None:
+    first = build_worker(tmp_path, [WRITE])
+    try:
+        run_id = seed_queued_run(first)
+        assert first.loop.run_once(first.processor) is True
+        factory = create_unit_of_work_factory(create_session_factory(first.engine))
+        with factory() as uow:
+            run = uow.runs.get(run_id)
+            approvals = uow.approvals.list_for_run(run_id)
+            assert run is not None and run.status is RunStatus.WAITING_FOR_APPROVAL
+            assert len(approvals) == 1
+            approval_id = approvals[0].id
+    finally:
+        first.engine.dispose()
+
+    restarted = build_worker(tmp_path, [WRITE, FINISH])
+    try:
+        factory = create_unit_of_work_factory(create_session_factory(restarted.engine))
+        with factory() as uow:
+            persisted = uow.approvals.get(approval_id)
+            assert persisted is not None and persisted.status.value == "pending"
+            assert uow.work_queue.get(run_id) is None
+
+        ApproveRequest(factory, SystemClock()).execute(
+            ApproveRequestCommand(approval_id=approval_id, resolver="restart-proof")
+        )
+        with factory() as uow:
+            assert uow.work_queue.get(run_id) is not None
+
+        assert restarted.loop.run_once(restarted.processor) is True
+        with factory() as uow:
+            run = uow.runs.get(run_id)
+            assert run is not None and run.status is RunStatus.SUCCEEDED
+    finally:
+        restarted.engine.dispose()
 
 
 def test_worker_check_preflight_passes_on_healthy_environment(tmp_path: Path) -> None:

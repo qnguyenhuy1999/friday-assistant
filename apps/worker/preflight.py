@@ -8,7 +8,7 @@ every tool Friday will call."""
 
 from __future__ import annotations
 
-import os
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +55,7 @@ def run_preflight(
     checks.append(_check_claude(runtime))
     checks.append(_check_workspace(runtime))
     checks.append(_check_computer_use(runtime))
+    checks.extend(run_memory_preflight().checks)
     return PreflightReport(checks=tuple(checks))
 
 
@@ -64,21 +65,14 @@ def run_memory_preflight(settings: MemorySettings | None = None) -> PreflightRep
     In particular, an omitted include allow-list is configuration missing, not
     permission to scan an entire human-owned vault.
     """
-    if settings is None and not os.environ.get("FRIDAY_MEMORY_INCLUDE_GLOBS", "").strip():
-        return PreflightReport((("memory_configuration", False, "configuration missing"),))
     try:
         configured = settings or MemorySettings.from_env()
     except ValueError as exc:
         return PreflightReport((("memory_configuration", False, str(exc)),))
     if not configured.memory_enabled:
         return PreflightReport((("memory", True, "disabled"),))
-    if not configured.include_globs:
-        return PreflightReport((("memory_configuration", False, "configuration missing"),))
-    root = configured.vault_root.resolve(strict=False)
-    if not root.is_dir():
-        return PreflightReport((("memory_vault", False, "vault root is unavailable"),))
-    if configured.graphify_index_root.resolve(strict=False).is_relative_to(root):
-        return PreflightReport((("memory_index", False, "index root must be outside vault"),))
+    if configured.graphify_enabled and shutil.which(configured.graphify_executable) is None:
+        return PreflightReport((("graphify", False, "executable is unavailable"),))
     return PreflightReport((("memory", True, "configuration valid"),))
 
 

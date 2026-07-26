@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.errors import ERROR_RESPONSES, register_exception_handlers
+from apps.api.request_size import RequestBodyLimitMiddleware
 from apps.api.routes.approvals import router as approvals_router
 from apps.api.routes.artifacts import router as artifacts_router
 from apps.api.routes.events import router as events_router
@@ -43,6 +44,7 @@ def create_app(settings: ApiSettings) -> FastAPI:
     app.state.engine = engine
     app.state.uow_factory = create_unit_of_work_factory(session_factory)
     app.state.clock = SystemClock()
+    app.add_middleware(RequestBodyLimitMiddleware, max_bytes=settings.max_request_bytes)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_allowed_origins),

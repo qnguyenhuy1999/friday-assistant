@@ -16,6 +16,7 @@ from apps.worker.runtime_settings import RuntimeSettings
 from apps.worker.settings import WorkerSettings
 from apps.worker.worker_loop import WorkerLoop
 from friday.application.agent_run_processor import AgentRunProcessor, RuntimeLimits
+from friday.application.brain_runtime import BrainRuntime
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
 from friday.application.memory.index_coordination import (
     BuildMemoryIndex,
@@ -180,13 +181,8 @@ class _MemoryStack:
 
 def _memory_stack(uow_factory: UnitOfWorkFactory) -> _MemoryStack:
     """Construct opt-in memory dependencies without ever scanning an invalid vault."""
-    try:
-        settings = MemorySettings.from_env()
-    except ValueError:
-        return _disabled_memory_stack()
-    if not settings.memory_enabled or not settings.include_globs:
-        return _disabled_memory_stack()
-    if not settings.vault_root.is_dir():
+    settings = MemorySettings.from_env()
+    if not settings.memory_enabled:
         return _disabled_memory_stack()
 
     policy = MemoryVaultPolicy(
@@ -305,7 +301,12 @@ def _computer_gateway(runtime: RuntimeSettings) -> ComputerToolGateway | None:
     )
 
 
-def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
+def create_worker(
+    settings: WorkerSettings,
+    runtime: RuntimeSettings,
+    *,
+    brain: BrainRuntime | None = None,
+) -> Worker:
     # --- fail-closed environment verification (before anything else) ------
     claude_settings = ClaudeCliSettings(
         executable=runtime.claude_executable,
@@ -314,7 +315,8 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
         max_output_bytes=runtime.claude_max_output_bytes,
         max_stderr_bytes=runtime.claude_max_stderr_bytes,
     )
-    verify_brain_only_support(claude_settings)  # raises BrainUnavailable
+    if brain is None:
+        verify_brain_only_support(claude_settings)  # raises BrainUnavailable
 
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
@@ -347,11 +349,11 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
     # registries could disagree about which tools exist or what they cost.
     gateway = CompositeToolGateway(*gateways)
 
-    brain = ClaudeCliBrainRuntime(claude_settings)
+    runtime_brain = brain or ClaudeCliBrainRuntime(claude_settings)
     processor = AgentRunProcessor(
         uow_factory=uow_factory,
         clock=clock,
-        brain=brain,
+        brain=runtime_brain,
         gateway=gateway,
         verify_claim=VerifyRunClaim(uow_factory, clock),
         request_tool_approval=RequestToolApproval(uow_factory, clock),
@@ -386,6 +388,7 @@ def create_worker(settings: WorkerSettings, runtime: RuntimeSettings) -> Worker:
         expire_due_approvals=ExpireDueApprovals(
             uow_factory, clock, batch_size=settings.maintenance_batch_size
         ),
+        clock=clock,
         refresh_memory_index=memory.refresh_index,
         memory_index_maintenance_interval_seconds=memory.maintenance_interval_seconds,
         heartbeat_interval_seconds=settings.heartbeat_interval_seconds,

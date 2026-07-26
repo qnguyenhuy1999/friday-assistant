@@ -103,6 +103,7 @@ def _run_and_loop(
         apply_waiting=ApplyWaitingOutcome(factory, clock),
         recover_expired_leases=RecoverExpiredLeases(factory, clock, batch_size=10),
         expire_due_approvals=ExpireDueApprovals(factory, clock, batch_size=10),
+        clock=clock,
         heartbeat_interval_seconds=0.001,
         maintenance_interval_seconds=60,
         poll_interval_seconds=0.001,
@@ -179,6 +180,23 @@ def test_run_once_swallow_claim_lost_during_outcome_application() -> None:
     assert run.status is RunStatus.RUNNING
 
 
+def test_shutdown_requeues_claim_without_applying_a_completed_outcome() -> None:
+    uow, run, loop, _ = _run_and_loop(ProcessingOutcome.succeeded())
+    shutdown = Event()
+
+    class ShutdownProcessor:
+        def process(self, context: ClaimContext) -> ProcessingOutcome:
+            shutdown.set()
+            assert context.is_lease_lost()
+            return ProcessingOutcome.succeeded("must not be persisted after shutdown")
+
+    assert loop.run_once(ShutdownProcessor(), shutdown) is True
+    assert run.status is RunStatus.RUNNING
+    item = uow.work_queue_repo.get(run.id)
+    assert item is not None
+    assert item.claimed_by is None
+
+
 def test_run_once_treats_resolved_approval_waiting_outcome_as_stale() -> None:
     outcome = ProcessingOutcome.waiting_for_approval(ApprovalRequestId.new())
     uow, run, loop, processor = _run_and_loop(outcome)
@@ -220,13 +238,13 @@ def test_run_once_does_not_log_processor_traceback_or_message(
     record = next(
         record
         for record in caplog.records
-        if "recording failure code processor_exception" in record.message
+        if getattr(record, "event", None) == "worker.processor_exception"
     )
     assert record.exc_info is None
-    assert record.message == (
-        f"Processor exception class RuntimeError for run {run.id}; "
-        "recording failure code processor_exception"
-    )
+    assert record.message == "worker.processor_exception"
+    assert record.__dict__["run_id"] == str(run.id)
+    assert record.__dict__["worker_id"] == "worker"
+    assert record.__dict__["claim_generation"] == "1"
     assert "secret" not in record.message
     assert "/local/path" not in record.message
 

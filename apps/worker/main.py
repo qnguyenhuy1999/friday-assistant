@@ -10,6 +10,7 @@ import signal
 import threading
 
 from apps.worker.app import Worker, create_worker
+from apps.worker.operational_logging import configure_operational_logging
 from apps.worker.runtime_settings import RuntimeSettings
 from apps.worker.settings import WorkerSettings
 
@@ -19,6 +20,7 @@ def build() -> Worker:
 
 
 def main() -> None:
+    configure_operational_logging()
     worker = build()
     shutdown_event = threading.Event()
 

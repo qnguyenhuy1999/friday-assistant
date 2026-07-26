@@ -52,6 +52,7 @@ class RunRow(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True)
     task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"))
+    execution_id: Mapped[str] = mapped_column(index=True)
     status: Mapped[str]
     created_at: Mapped[datetime]
     started_at: Mapped[datetime | None]
@@ -60,6 +61,51 @@ class RunRow(Base):
     # No DB-level FK to approval_requests: see docs/architecture/persistence.md
     # ("Cross-reference columns without FK constraints").
     approval_request_id: Mapped[str | None] = mapped_column(index=True)
+
+
+class ScheduleRow(Base):
+    __tablename__ = "schedules"
+    __table_args__ = (
+        Index("ix_schedules_due", "status", "next_fire_at"),
+        CheckConstraint(
+            "status IN ('active', 'paused', 'completed', 'cancelled')", name="ck_schedules_status"
+        ),
+        CheckConstraint("kind IN ('once', 'cron')", name="ck_schedules_kind"),
+        CheckConstraint(
+            "(kind = 'once' AND run_at IS NOT NULL AND cron IS NULL) OR "
+            "(kind = 'cron' AND cron IS NOT NULL AND run_at IS NULL)",
+            name="ck_schedules_kind_shape",
+        ),
+        CheckConstraint(
+            "(status = 'active' AND next_fire_at IS NOT NULL) OR (status = 'paused') OR "
+            "(status IN ('completed', 'cancelled') AND next_fire_at IS NULL)",
+            name="ck_schedules_status_next_fire",
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), index=True)
+    kind: Mapped[str]
+    cron: Mapped[str | None]
+    run_at: Mapped[datetime | None]
+    timezone: Mapped[str]
+    status: Mapped[str]
+    next_fire_at: Mapped[datetime | None]
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+
+
+class ScheduleFireRow(Base):
+    __tablename__ = "schedule_fires"
+    __table_args__ = (
+        UniqueConstraint("schedule_id", "scheduled_for", name="uq_schedule_fires_occurrence"),
+        UniqueConstraint("run_id", name="uq_schedule_fires_run_id"),
+        Index("ix_schedule_fires_schedule_id", "schedule_id"),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    schedule_id: Mapped[str] = mapped_column(ForeignKey("schedules.id"))
+    scheduled_for: Mapped[datetime]
+    fired_at: Mapped[datetime]
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
 
 
 class RunWorkItemRow(Base):

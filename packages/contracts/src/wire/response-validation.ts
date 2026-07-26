@@ -18,5 +18,9 @@ export {
   validateRunEventPage,
   validateTaskEventPage,
   validateStartRun,
+  validateSchedule,
+  validateScheduleFire,
+  validateScheduleFirePage,
+  validateSchedulePage,
   type WireValidator,
 } from "./http.generated";

@@ -106,6 +106,18 @@ class _FakeRunRepository:
             ]
         return runs[:limit]
 
+    def has_non_terminal_for_ids(self, run_ids: list[RunId]) -> bool:
+        from friday.domain.run import TERMINAL_RUN_STATUSES
+
+        return any(
+            self._runs[run_id].status not in TERMINAL_RUN_STATUSES
+            for run_id in run_ids
+            if run_id in self._runs
+        )
+
+    def count_for_execution(self, execution_id: RunId) -> int:
+        return sum(run.execution_id == execution_id for run in self._runs.values())
+
 
 @dataclass
 class _FakeRunStepRepository:

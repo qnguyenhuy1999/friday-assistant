@@ -19,7 +19,14 @@ _CORRELATION_FIELDS: Final = (
     "worker_id",
     "claim_generation",
 )
-_SAFE_FIELDS: Final = (*_CORRELATION_FIELDS, "recovered_count", "expired_approval_count")
+_SAFE_FIELDS: Final = (
+    *_CORRELATION_FIELDS,
+    "recovered_count",
+    "expired_approval_count",
+    "run_count",
+    "schedule_id",
+    "scheduled_for",
+)
 
 
 class JsonOperationalFormatter(logging.Formatter):

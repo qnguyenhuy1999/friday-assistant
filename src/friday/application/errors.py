@@ -12,6 +12,7 @@ from friday.domain.identifiers import (
     ArtifactId,
     RunId,
     RunStepId,
+    ScheduleId,
     TaskId,
     ToolInvocationId,
 )
@@ -31,6 +32,12 @@ class RunNotFound(ApplicationError):
     def __init__(self, run_id: RunId) -> None:
         self.run_id = run_id
         super().__init__(f"Run not found: {run_id}")
+
+
+class ScheduleNotFound(ApplicationError):
+    def __init__(self, schedule_id: ScheduleId) -> None:
+        self.schedule_id = schedule_id
+        super().__init__(f"Schedule not found: {schedule_id}")
 
 
 class RunStepNotFound(ApplicationError):

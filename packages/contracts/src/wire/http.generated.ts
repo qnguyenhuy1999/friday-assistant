@@ -155,6 +155,27 @@ export interface TaskEvent {
   payload: JsonValue;
 }
 
+export interface Schedule {
+  id: string;
+  task_id: string;
+  kind: "once" | "cron";
+  cron: string | null;
+  run_at: string | null;
+  timezone: string;
+  status: "active" | "paused" | "completed" | "cancelled";
+  next_fire_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScheduleFire {
+  id: string;
+  schedule_id: string;
+  scheduled_for: string;
+  fired_at: string;
+  run_id: string;
+}
+
 export interface StartRunResponse {
   task_id: string;
   run_id: string;
@@ -178,6 +199,8 @@ export type InvocationPage = Page<ToolInvocation>;
 export type ArtifactPage = Page<Artifact>;
 export type RunEventPage = Page<RunEvent>;
 export type TaskEventPage = Page<TaskEvent>;
+export type SchedulePage = Page<Schedule>;
+export type ScheduleFirePage = Page<ScheduleFire>;
 
 export type WireValidator = (value: unknown, path: string) => void;
 export class WireFormatError extends Error {
@@ -612,6 +635,76 @@ const schema = {
         payload: {},
       },
     },
+    Schedule: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "task_id",
+        "kind",
+        "cron",
+        "run_at",
+        "timezone",
+        "status",
+        "next_fire_at",
+        "created_at",
+        "updated_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        task_id: {
+          type: "string",
+        },
+        kind: {
+          enum: ["once", "cron"],
+        },
+        cron: {
+          type: ["string", "null"],
+        },
+        run_at: {
+          type: ["string", "null"],
+        },
+        timezone: {
+          type: "string",
+        },
+        status: {
+          enum: ["active", "paused", "completed", "cancelled"],
+        },
+        next_fire_at: {
+          type: ["string", "null"],
+        },
+        created_at: {
+          type: "string",
+        },
+        updated_at: {
+          type: "string",
+        },
+      },
+    },
+    ScheduleFire: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "schedule_id", "scheduled_for", "fired_at", "run_id"],
+      properties: {
+        id: {
+          type: "string",
+        },
+        schedule_id: {
+          type: "string",
+        },
+        scheduled_for: {
+          type: "string",
+        },
+        fired_at: {
+          type: "string",
+        },
+        run_id: {
+          type: "string",
+        },
+      },
+    },
     StartRunResponse: {
       type: "object",
       additionalProperties: false,
@@ -650,6 +743,12 @@ const schema = {
     },
     taskEvent: {
       $ref: "#/definitions/TaskEvent",
+    },
+    schedule: {
+      $ref: "#/definitions/Schedule",
+    },
+    scheduleFire: {
+      $ref: "#/definitions/ScheduleFire",
     },
     taskPage: {
       type: "object",
@@ -779,6 +878,38 @@ const schema = {
         },
       },
     },
+    schedulePage: {
+      type: "object",
+      additionalProperties: false,
+      required: ["items", "next_cursor"],
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/Schedule",
+          },
+        },
+        next_cursor: {
+          type: ["string", "null"],
+        },
+      },
+    },
+    scheduleFirePage: {
+      type: "object",
+      additionalProperties: false,
+      required: ["items", "next_cursor"],
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/ScheduleFire",
+          },
+        },
+        next_cursor: {
+          type: ["string", "null"],
+        },
+      },
+    },
     startRun: {
       $ref: "#/definitions/StartRunResponse",
     },
@@ -814,6 +945,10 @@ export const validateRunEvent: WireValidator = (value, path) =>
   assertWire("runEvent", value, path);
 export const validateTaskEvent: WireValidator = (value, path) =>
   assertWire("taskEvent", value, path);
+export const validateSchedule: WireValidator = (value, path) =>
+  assertWire("schedule", value, path);
+export const validateScheduleFire: WireValidator = (value, path) =>
+  assertWire("scheduleFire", value, path);
 export const validateTaskPage: WireValidator = (value, path) =>
   assertWire("taskPage", value, path);
 export const validateRunPage: WireValidator = (value, path) =>
@@ -830,5 +965,9 @@ export const validateRunEventPage: WireValidator = (value, path) =>
   assertWire("runEventPage", value, path);
 export const validateTaskEventPage: WireValidator = (value, path) =>
   assertWire("taskEventPage", value, path);
+export const validateSchedulePage: WireValidator = (value, path) =>
+  assertWire("schedulePage", value, path);
+export const validateScheduleFirePage: WireValidator = (value, path) =>
+  assertWire("scheduleFirePage", value, path);
 export const validateStartRun: WireValidator = (value, path) =>
   assertWire("startRun", value, path);

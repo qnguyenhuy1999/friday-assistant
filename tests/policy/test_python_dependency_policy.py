@@ -25,7 +25,7 @@ FORBIDDEN_SPEC_PATTERNS = (
 PRERELEASE_MARKERS = re.compile(r"\d(a|b|rc)\d|\.dev\d|\.post\d")
 WILDCARD_MARKERS = ("*",)
 ALLOWED_PROJECT_DEPENDENCY_NAMES = frozenset(
-    {"sqlalchemy", "alembic", "fastapi", "uvicorn", "pydantic"}
+    {"sqlalchemy", "alembic", "fastapi", "uvicorn", "pydantic", "croniter"}
 )
 
 

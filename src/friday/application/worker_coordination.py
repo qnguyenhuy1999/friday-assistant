@@ -88,7 +88,7 @@ class ClaimNextRun:
                     worker_id=self._worker_id,
                     claim_token=claim_token,
                     claim_generation=item.claim_generation,
-                    attempt_number=len(uow.runs.list_for_task(run.task_id)),
+                    attempt_number=uow.runs.count_for_execution(run.execution_id),
                     acquired_at=now,
                     lease_expires_at=lease_expires_at,
                 )
@@ -229,9 +229,14 @@ class ApplyFailedOutcome:
             specs = _fail_run_event_specs(uow, run, now, failure)
             LifecycleEvents.append_run_events(uow, run, now, specs)
 
-            attempt_number = len(uow.runs.list_for_task(run.task_id))
+            attempt_number = uow.runs.count_for_execution(run.execution_id)
             if self._retry_policy.is_retry_allowed(attempt_number, failure):
-                retry = Run.new(id=RunId.new(), task_id=run.task_id, created_at=now)
+                retry = Run.new(
+                    id=RunId.new(),
+                    task_id=run.task_id,
+                    created_at=now,
+                    execution_id=run.execution_id,
+                )
                 uow.runs.add(retry)
                 delay = self._retry_policy.compute_delay(attempt_number + 1)
                 uow.work_queue.enqueue(retry.id, available_at=now + delay, enqueued_at=now)

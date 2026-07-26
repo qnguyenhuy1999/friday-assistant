@@ -75,6 +75,7 @@ class CancelTask(_TaskCancellation):
                 raise EntityConflict("task is terminal")
             task.cancel(now)
             uow.tasks.save(task)
+            uow.schedules.complete_for_task(task.id, now, cancelled=True)
             self.append_task_event(
                 uow, task, now, TaskEventType.TASK_CANCELLED, {"task_id": str(task.id)}
             )
@@ -116,6 +117,7 @@ class CompleteTask(LifecycleEvents):
             now = self._clock.now()
             task.complete(now)
             uow.tasks.save(task)
+            uow.schedules.complete_for_task(task.id, now, cancelled=False)
             self.append_task_event(
                 uow, task, now, TaskEventType.TASK_COMPLETED, {"task_id": str(task.id)}
             )
@@ -139,6 +141,7 @@ class FailTask(LifecycleEvents):
             now = self._clock.now()
             task.fail(now, command.failure)
             uow.tasks.save(task)
+            uow.schedules.complete_for_task(task.id, now, cancelled=False)
             self.append_task_event(
                 uow,
                 task,

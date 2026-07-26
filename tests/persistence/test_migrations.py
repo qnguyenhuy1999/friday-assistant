@@ -20,7 +20,8 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
     command.upgrade(_alembic_config(db_path), "head")
     engine = create_engine(f"sqlite:///{db_path}")
     try:
-        assert set(inspect(engine).get_table_names()) == {
+        inspector = inspect(engine)
+        assert set(inspector.get_table_names()) == {
             "tasks",
             "task_events",
             "runs",
@@ -35,8 +36,17 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "memory_index_snapshots",
             "memory_retrieval_records",
             "memory_retrieval_items",
+            "schedules",
+            "schedule_fires",
             "alembic_version",
         }
+        assert "execution_id" in {column["name"] for column in inspector.get_columns("runs")}
+        checks = {check["name"] for check in inspector.get_check_constraints("schedules")}
+        assert {
+            "ck_schedules_kind",
+            "ck_schedules_kind_shape",
+            "ck_schedules_status_next_fire",
+        } <= checks
     finally:
         engine.dispose()
 

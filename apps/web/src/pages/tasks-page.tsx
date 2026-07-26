@@ -2,8 +2,10 @@ import { useState, type FormEvent } from "react";
 import { useCreateTask, useStartRun, useTasks } from "../hooks/use-tasks";
 export function TasksPage({
   onRunStarted,
+  onViewSchedules = () => undefined,
 }: {
   onRunStarted: (runId: string) => void;
+  onViewSchedules?: (taskId: string) => void;
 }) {
   const { data, isLoading, isError } = useTasks();
   const create = useCreateTask();
@@ -47,6 +49,7 @@ export function TasksPage({
             >
               Start run
             </button>
+            <button onClick={() => onViewSchedules(task.id)}>Schedules</button>
           </li>
         ))}
       </ul>

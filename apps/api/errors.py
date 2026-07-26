@@ -23,6 +23,7 @@ from friday.application.errors import (
     EntityConflict,
     RunNotFound,
     RunStepNotFound,
+    ScheduleNotFound,
     TaskNotFound,
     ToolInvocationNotFound,
     TransactionFailure,
@@ -51,6 +52,7 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
 _NOT_FOUND_TYPES: dict[type[ApplicationError], str] = {
     TaskNotFound: "task_not_found",
     RunNotFound: "run_not_found",
+    ScheduleNotFound: "schedule_not_found",
     RunStepNotFound: "run_step_not_found",
     ApprovalNotFound: "approval_not_found",
     ToolInvocationNotFound: "tool_invocation_not_found",

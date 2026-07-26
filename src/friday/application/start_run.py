@@ -35,25 +35,31 @@ class StartRun:
             task = uow.tasks.get(command.task_id)
             if task is None:
                 raise TaskNotFound(command.task_id)
-
             now = self._clock.now()
-            self._ensure_task_can_own_a_run(task, uow, at=now)
-
-            run = Run.new(id=RunId.new(), task_id=task.id, created_at=now)
-            uow.runs.add(run)
-            uow.work_queue.enqueue(run.id, available_at=now, enqueued_at=now)
-
-            event = RunEvent(
-                id=RunEventId.new(),
-                run_id=run.id,
-                type=RunEventType.RUN_CREATED,
-                sequence=uow.events.reserve_sequences(run.id, 1),
-                occurred_at=now,
-                payload={"task_id": str(task.id)},
-            )
-            uow.events.append(event)
-
+            result = self.execute_in_uow(uow, task, now)
             uow.commit()
+        return result
+
+    @classmethod
+    def execute_in_uow(cls, uow: UnitOfWork, task: Task, now: datetime) -> StartRunResult:
+        """Shared materialization path for manual and scheduled Runs.
+
+        It intentionally only creates a queued Run and work item; no action,
+        processor, approval, or tool gateway is invoked here.
+        """
+        cls._ensure_task_can_own_a_run(task, uow, at=now)
+        run = Run.new(id=RunId.new(), task_id=task.id, created_at=now)
+        uow.runs.add(run)
+        uow.work_queue.enqueue(run.id, available_at=now, enqueued_at=now)
+        event = RunEvent(
+            id=RunEventId.new(),
+            run_id=run.id,
+            type=RunEventType.RUN_CREATED,
+            sequence=uow.events.reserve_sequences(run.id, 1),
+            occurred_at=now,
+            payload={"task_id": str(task.id)},
+        )
+        uow.events.append(event)
         return StartRunResult(task_id=task.id, run_id=run.id)
 
     @staticmethod

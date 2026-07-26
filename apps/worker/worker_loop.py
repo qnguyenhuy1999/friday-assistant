@@ -9,6 +9,7 @@ from typing import Protocol
 
 from apps.worker.operational_logging import lifecycle_log
 from friday.application.errors import ClaimLost
+from friday.application.materialize_due_schedule import MaterializeDueSchedules
 from friday.application.ports import Clock
 from friday.application.run_processor import ClaimContext, ProcessingOutcome, RunProcessor
 from friday.application.worker_coordination import (
@@ -47,6 +48,7 @@ class WorkerLoop:
         poll_interval_seconds: float,
         refresh_memory_index: MemoryIndexRefresh | None = None,
         memory_index_maintenance_interval_seconds: float | None = None,
+        materialize_due_schedules: MaterializeDueSchedules | None = None,
     ) -> None:
         self._claim_next_run = claim_next_run
         self._renew_lease = renew_lease
@@ -56,6 +58,7 @@ class WorkerLoop:
         self._apply_waiting = apply_waiting
         self._recover_expired_leases = recover_expired_leases
         self._expire_due_approvals = expire_due_approvals
+        self._materialize_due_schedules = materialize_due_schedules
         self._clock = clock
         self._refresh_memory_index = refresh_memory_index
         self._memory_index_maintenance_interval_seconds = memory_index_maintenance_interval_seconds
@@ -231,11 +234,19 @@ class WorkerLoop:
         return True
 
     def run_maintenance_tick(self) -> None:
+        try:
+            materialized = (
+                self._materialize_due_schedules.execute() if self._materialize_due_schedules else 0
+            )
+        except Exception:  # noqa: BLE001 - one malformed schedule must not stop delivery
+            materialized = 0
+            lifecycle_log(logger, logging.WARNING, "scheduler.materialization_failed")
         recovered = self._recover_expired_leases.execute()
         approvals = self._expire_due_approvals.execute()
         lifecycle_log(
             logger, logging.INFO, "worker.expired_leases_recovered", recovered_count=recovered
         )
+        lifecycle_log(logger, logging.INFO, "scheduler.materialized", run_count=materialized)
         lifecycle_log(
             logger,
             logging.INFO,

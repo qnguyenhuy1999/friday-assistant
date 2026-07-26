@@ -18,6 +18,7 @@ from apps.worker.worker_loop import WorkerLoop
 from friday.application.agent_run_processor import AgentRunProcessor, RuntimeLimits
 from friday.application.brain_runtime import BrainRuntime
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
+from friday.application.materialize_due_schedule import MaterializeDueSchedules
 from friday.application.memory.index_coordination import (
     BuildMemoryIndex,
     InspectMemoryIndex,
@@ -387,6 +388,11 @@ def create_worker(
         ),
         expire_due_approvals=ExpireDueApprovals(
             uow_factory, clock, batch_size=settings.maintenance_batch_size
+        ),
+        materialize_due_schedules=(
+            MaterializeDueSchedules(uow_factory, clock, batch_size=settings.maintenance_batch_size)
+            if settings.scheduler_enabled
+            else None
         ),
         clock=clock,
         refresh_memory_index=memory.refresh_index,

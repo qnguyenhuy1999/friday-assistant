@@ -219,7 +219,9 @@ class RetryFailedRun(LifecycleEvents):
             if task.status is not TaskStatus.ACTIVE:
                 raise EntityConflict("task is not retryable")
             now = self._clock.now()
-            retry = Run.new(id=RunId.new(), task_id=task.id, created_at=now)
+            retry = Run.new(
+                id=RunId.new(), task_id=task.id, created_at=now, execution_id=source.execution_id
+            )
             uow.runs.add(retry)
             uow.work_queue.enqueue(retry.id, available_at=now, enqueued_at=now)
             self.append_run_events(

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-export type View = "tasks" | "run" | "approvals";
+export type View = "tasks" | "run" | "approvals" | "schedules";
 export interface Route {
   view: View;
   id: string | null;
@@ -7,7 +7,7 @@ export interface Route {
 function readRoute(): Route {
   const p = new URLSearchParams(window.location.search);
   const view = p.get("view");
-  return view === "run" || view === "approvals"
+  return view === "run" || view === "approvals" || view === "schedules"
     ? { view, id: p.get("id") }
     : { view: "tasks", id: null };
 }

@@ -17,6 +17,19 @@ _DEFAULT_RETRY_MAX_ATTEMPTS = 3
 _DEFAULT_RETRY_BASE_DELAY_SECONDS = 5.0
 _DEFAULT_RETRY_MULTIPLIER = 2.0
 _DEFAULT_RETRY_MAX_DELAY_SECONDS = 300.0
+_DEFAULT_SCHEDULER_ENABLED = True
+
+
+def _strict_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{name} must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +46,7 @@ class WorkerSettings:
     retry_base_delay: timedelta
     retry_multiplier: float
     retry_max_delay: timedelta
+    scheduler_enabled: bool = _DEFAULT_SCHEDULER_ENABLED
 
     def __post_init__(self) -> None:
         if not self.worker_id.strip():
@@ -120,4 +134,5 @@ class WorkerSettings:
                     )
                 )
             ),
+            scheduler_enabled=_strict_bool("FRIDAY_SCHEDULER_ENABLED", _DEFAULT_SCHEDULER_ENABLED),
         )

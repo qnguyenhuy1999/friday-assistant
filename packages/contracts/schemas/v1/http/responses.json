@@ -284,6 +284,46 @@
         "payload": {}
       }
     },
+    "Schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "task_id",
+        "kind",
+        "cron",
+        "run_at",
+        "timezone",
+        "status",
+        "next_fire_at",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "task_id": { "type": "string" },
+        "kind": { "enum": ["once", "cron"] },
+        "cron": { "type": ["string", "null"] },
+        "run_at": { "type": ["string", "null"] },
+        "timezone": { "type": "string" },
+        "status": { "enum": ["active", "paused", "completed", "cancelled"] },
+        "next_fire_at": { "type": ["string", "null"] },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      }
+    },
+    "ScheduleFire": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "schedule_id", "scheduled_for", "fired_at", "run_id"],
+      "properties": {
+        "id": { "type": "string" },
+        "schedule_id": { "type": "string" },
+        "scheduled_for": { "type": "string" },
+        "fired_at": { "type": "string" },
+        "run_id": { "type": "string" }
+      }
+    },
     "StartRunResponse": {
       "type": "object",
       "additionalProperties": false,
@@ -303,6 +343,8 @@
     "artifact": { "$ref": "#/definitions/Artifact" },
     "runEvent": { "$ref": "#/definitions/RunEvent" },
     "taskEvent": { "$ref": "#/definitions/TaskEvent" },
+    "schedule": { "$ref": "#/definitions/Schedule" },
+    "scheduleFire": { "$ref": "#/definitions/ScheduleFire" },
     "taskPage": {
       "type": "object",
       "additionalProperties": false,
@@ -389,6 +431,30 @@
         "items": {
           "type": "array",
           "items": { "$ref": "#/definitions/TaskEvent" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "schedulePage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Schedule" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "scheduleFirePage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ScheduleFire" }
         },
         "next_cursor": { "type": ["string", "null"] }
       }

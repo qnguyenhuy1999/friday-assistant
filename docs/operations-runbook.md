@@ -26,6 +26,31 @@ database, schema, Claude's brain-only CLI mode, workspace, and enabled
 computer-use driver. `just memory-check` reports memory configuration without
 reading the vault.
 
+## Scheduled automations
+
+Schedules are durable timing records attached to one Task. They only create a
+queued Run; they never execute Claude actions or tools, and every scheduled
+Run follows the ordinary validation and approval path. Use the web control
+plane's **Schedules** action for a Task, or task-scoped API endpoints, to
+create a one-time (`run_at`) or five-field cron schedule. Use an IANA timezone
+such as `Asia/Ho_Chi_Minh`; stored fire timestamps are UTC.
+
+The worker evaluates schedules during its normal maintenance cadence.
+`FRIDAY_SCHEDULER_ENABLED=false` disables materialization without deleting
+schedule state; `FRIDAY_WORKER_MAINTENANCE_BATCH_SIZE` bounds each tick. On
+restart, schedules resume from persisted state. Missed cron occurrences are
+coalesced to the next future occurrence, and a schedule never overlaps its
+own non-terminal Run. Inspect schedule fires to correlate an occurrence to its
+single materialized Run.
+
+For a schedule that should stop creating Runs, use **Pause** (resumable) or
+**Cancel** (terminal). Cancelling a Task cancels its active/paused schedules;
+completing or failing a Task completes them. If a schedule appears due but no
+Run is created, first check that the Task is non-terminal and that an earlier
+schedule Run has reached a terminal state. Scheduler logs use the
+`scheduler.materialized` event and never include prompts, tool input, or
+secrets.
+
 ## Common diagnosis
 
 - `worker-check` reports `claude_brain_only` failed: install/sign in to the

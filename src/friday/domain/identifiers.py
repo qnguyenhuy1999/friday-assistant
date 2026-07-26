@@ -49,6 +49,14 @@ class RunId(_Id):
     pass
 
 
+class ScheduleId(_Id):
+    pass
+
+
+class ScheduleFireId(_Id):
+    pass
+
+
 class RunStepId(_Id):
     pass
 

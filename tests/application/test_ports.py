@@ -106,6 +106,15 @@ class _FakeRunRepository:
             ]
         return runs[:limit]
 
+    def has_non_terminal_for_ids(self, run_ids: list[RunId]) -> bool:
+        from friday.domain.run import TERMINAL_RUN_STATUSES
+
+        return any(
+            self._runs[run_id].status not in TERMINAL_RUN_STATUSES
+            for run_id in run_ids
+            if run_id in self._runs
+        )
+
 
 @dataclass
 class _FakeRunStepRepository:

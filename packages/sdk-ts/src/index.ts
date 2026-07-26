@@ -26,3 +26,9 @@ export type {
 } from "./resources/events";
 export { HealthResource } from "./resources/health";
 export type { HealthStatus } from "./resources/health";
+export { SchedulesResource } from "./resources/schedules";
+export type {
+  CreateScheduleBody,
+  ListScheduleFiresParams,
+  ListSchedulesParams,
+} from "./resources/schedules";

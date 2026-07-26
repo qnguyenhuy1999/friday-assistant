@@ -17,6 +17,7 @@ _DEFAULT_RETRY_MAX_ATTEMPTS = 3
 _DEFAULT_RETRY_BASE_DELAY_SECONDS = 5.0
 _DEFAULT_RETRY_MULTIPLIER = 2.0
 _DEFAULT_RETRY_MAX_DELAY_SECONDS = 300.0
+_DEFAULT_SCHEDULER_ENABLED = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +34,7 @@ class WorkerSettings:
     retry_base_delay: timedelta
     retry_multiplier: float
     retry_max_delay: timedelta
+    scheduler_enabled: bool = _DEFAULT_SCHEDULER_ENABLED
 
     def __post_init__(self) -> None:
         if not self.worker_id.strip():
@@ -120,4 +122,8 @@ class WorkerSettings:
                     )
                 )
             ),
+            scheduler_enabled=os.environ.get(
+                "FRIDAY_SCHEDULER_ENABLED", str(_DEFAULT_SCHEDULER_ENABLED)
+            ).lower()
+            in ("1", "true", "yes", "on"),
         )

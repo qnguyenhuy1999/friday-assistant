@@ -20,12 +20,17 @@ from friday.domain import (
     RunId,
     RunStep,
     RunStepId,
+    Schedule,
+    ScheduleFire,
+    ScheduleId,
     Task,
     TaskEvent,
     TaskId,
     ToolInvocation,
     ToolInvocationId,
 )
+from friday.domain.run import TERMINAL_RUN_STATUSES
+from friday.domain.schedule import ScheduleStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
 from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
 from friday.infrastructure.persistence.mappers import (
@@ -45,6 +50,10 @@ from friday.infrastructure.persistence.mappers import (
     run_step_from_row,
     run_step_to_row,
     run_to_row,
+    schedule_fire_from_row,
+    schedule_fire_to_row,
+    schedule_from_row,
+    schedule_to_row,
     task_event_from_row,
     task_event_to_row,
     task_from_row,
@@ -62,6 +71,8 @@ from friday.infrastructure.persistence.models import (
     RunEventSequenceCounterRow,
     RunRow,
     RunStepRow,
+    ScheduleFireRow,
+    ScheduleRow,
     TaskEventRow,
     TaskEventSequenceCounterRow,
     TaskRow,
@@ -145,6 +156,104 @@ class RunRepository:
                 stmt.order_by(RunRow.created_at, RunRow.id).limit(limit)
             ).scalars()
         ]
+
+    def has_non_terminal_for_ids(self, run_ids: list[RunId]) -> bool:
+        if not run_ids:
+            return False
+        stmt = select(RunRow.id).where(
+            RunRow.id.in_([str(x) for x in run_ids]),
+            RunRow.status.not_in(tuple(x.value for x in TERMINAL_RUN_STATUSES)),
+        )
+        return self._session.execute(stmt.limit(1)).first() is not None
+
+
+class ScheduleRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, schedule: Schedule) -> None:
+        self._session.add(schedule_to_row(schedule))
+
+    def get(self, schedule_id: ScheduleId) -> Schedule | None:
+        row = self._session.get(ScheduleRow, str(schedule_id))
+        return schedule_from_row(row) if row else None
+
+    def save(self, schedule: Schedule) -> None:
+        self._session.merge(schedule_to_row(schedule))
+
+    def list_for_task(self, task_id: TaskId, limit: int) -> list[Schedule]:
+        stmt = (
+            select(ScheduleRow)
+            .where(ScheduleRow.task_id == str(task_id))
+            .order_by(ScheduleRow.created_at, ScheduleRow.id)
+            .limit(limit)
+        )
+        return [schedule_from_row(x) for x in self._session.execute(stmt).scalars()]
+
+    def list_due(self, now: object, limit: int) -> list[Schedule]:
+        stmt = (
+            select(ScheduleRow)
+            .where(
+                ScheduleRow.status == ScheduleStatus.ACTIVE.value,
+                ScheduleRow.next_fire_at <= now,
+            )
+            .order_by(ScheduleRow.next_fire_at, ScheduleRow.id)
+            .limit(limit)
+        )
+        return [schedule_from_row(x) for x in self._session.execute(stmt).scalars()]
+
+    def complete_for_task(self, task_id: TaskId, at: object, *, cancelled: bool) -> None:
+        status = ScheduleStatus.CANCELLED.value if cancelled else ScheduleStatus.COMPLETED.value
+        self._session.execute(
+            update(ScheduleRow)
+            .where(
+                ScheduleRow.task_id == str(task_id),
+                ScheduleRow.status.in_((ScheduleStatus.ACTIVE.value, ScheduleStatus.PAUSED.value)),
+            )
+            .values(status=status, next_fire_at=None, updated_at=at)
+        )
+
+
+class ScheduleFireRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, fire: ScheduleFire) -> None:
+        self._session.add(schedule_fire_to_row(fire))
+
+    def list_for_schedule(self, schedule_id: ScheduleId, limit: int) -> list[ScheduleFire]:
+        stmt = (
+            select(ScheduleFireRow)
+            .where(ScheduleFireRow.schedule_id == str(schedule_id))
+            .order_by(ScheduleFireRow.scheduled_for, ScheduleFireRow.id)
+            .limit(limit)
+        )
+        return [schedule_fire_from_row(x) for x in self._session.execute(stmt).scalars()]
+
+    def list_for_schedule_page(
+        self,
+        schedule_id: ScheduleId,
+        limit: int,
+        after_scheduled_for: object | None,
+        after_id: str | None,  # noqa: E501
+    ) -> list[ScheduleFire]:
+        stmt = select(ScheduleFireRow).where(ScheduleFireRow.schedule_id == str(schedule_id))
+        if after_scheduled_for is not None and after_id is not None:
+            stmt = stmt.where(
+                or_(
+                    ScheduleFireRow.scheduled_for > after_scheduled_for,
+                    and_(
+                        ScheduleFireRow.scheduled_for == after_scheduled_for,
+                        ScheduleFireRow.id > after_id,
+                    ),
+                )
+            )
+        stmt = stmt.order_by(ScheduleFireRow.scheduled_for, ScheduleFireRow.id).limit(limit)
+        return [schedule_fire_from_row(x) for x in self._session.execute(stmt).scalars()]
+
+    def list_run_ids_for_schedule(self, schedule_id: ScheduleId) -> list[RunId]:
+        stmt = select(ScheduleFireRow.run_id).where(ScheduleFireRow.schedule_id == str(schedule_id))
+        return [RunId.parse(value) for value in self._session.execute(stmt).scalars()]
 
 
 class RunStepRepository:

@@ -1,0 +1,77 @@
+"""Atomic, idempotent ScheduleFire -> queued Run materialization."""
+
+from __future__ import annotations
+
+from friday.application.errors import EntityConflict, TaskNotFound
+from friday.application.ports import Clock, UnitOfWorkFactory
+from friday.application.schedule_recurrence import coalesced_next
+from friday.application.start_run import StartRun
+from friday.domain.identifiers import ScheduleFireId, ScheduleId
+from friday.domain.schedule import ScheduleStatus
+from friday.domain.schedule_fire import ScheduleFire
+
+
+class MaterializeDueSchedules:
+    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock, *, batch_size: int) -> None:
+        self._uow_factory = uow_factory
+        self._clock = clock
+        self._batch_size = batch_size
+
+    def execute(self) -> int:
+        with self._uow_factory() as uow:
+            ids = [x.id for x in uow.schedules.list_due(self._clock.now(), self._batch_size)]
+        return sum(1 for schedule_id in ids if self._materialize_one(schedule_id))
+
+    def _materialize_one(self, schedule_id: ScheduleId) -> bool:
+        try:
+            with self._uow_factory() as uow:
+                schedule = uow.schedules.get(schedule_id)
+                now = self._clock.now()
+                if (
+                    schedule is None
+                    or schedule.status is not ScheduleStatus.ACTIVE
+                    or schedule.next_fire_at is None
+                    or schedule.next_fire_at > now
+                ):
+                    return False
+                task = uow.tasks.get(schedule.task_id)
+                if task is None:
+                    raise TaskNotFound(schedule.task_id)
+                if task.status.value not in ("pending", "active"):
+                    schedule.complete(now)
+                    uow.schedules.save(schedule)
+                    uow.commit()
+                    return False
+                run_ids = uow.schedule_fires.list_run_ids_for_schedule(schedule.id)
+                if uow.runs.has_non_terminal_for_ids(run_ids):
+                    schedule.advance_after_fire(
+                        now=now,
+                        next_fire_at=coalesced_next(
+                            schedule, fired_at=schedule.next_fire_at, now=now
+                        ),
+                    )
+                    uow.schedules.save(schedule)
+                    uow.commit()
+                    return False
+                occurrence = schedule.next_fire_at
+                result = StartRun.execute_in_uow(uow, task, now)
+                uow.schedule_fires.add(
+                    ScheduleFire.new(
+                        id=ScheduleFireId.new(),
+                        schedule_id=schedule.id,
+                        scheduled_for=occurrence,
+                        fired_at=now,
+                        run_id=result.run_id,
+                    )
+                )
+                schedule.advance_after_fire(
+                    now=now,
+                    next_fire_at=coalesced_next(schedule, fired_at=occurrence, now=now),
+                )
+                uow.schedules.save(schedule)
+                uow.commit()
+                return True
+        except EntityConflict:
+            # The unique(schedule_id, scheduled_for) fence means another
+            # scheduler won this occurrence. It is an idempotent no-op.
+            return False

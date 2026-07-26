@@ -17,12 +17,16 @@ from friday.domain.identifiers import (
     RunEventId,
     RunId,
     RunStepId,
+    ScheduleFireId,
+    ScheduleId,
     TaskEventId,
     TaskId,
     ToolInvocationId,
 )
 from friday.domain.json_value import JsonScalar, JsonValue, ensure_json_value
 from friday.domain.run import Run, RunStatus
+from friday.domain.schedule import Schedule, ScheduleKind, ScheduleStatus
+from friday.domain.schedule_fire import ScheduleFire
 from friday.domain.step import RunStep, RunStepStatus
 from friday.domain.task import Task, TaskStatus
 from friday.domain.task_event import TaskEvent, TaskEventType
@@ -53,6 +57,12 @@ __all__ = [
     "RunStep",
     "RunStepId",
     "RunStepStatus",
+    "Schedule",
+    "ScheduleFire",
+    "ScheduleFireId",
+    "ScheduleId",
+    "ScheduleKind",
+    "ScheduleStatus",
     "Task",
     "TaskEvent",
     "TaskEventId",

@@ -24,6 +24,8 @@ from friday.application.ports import (
     RunStepRepository,
     RunWorkItemView,
     RunWorkQueue,
+    ScheduleFireRepository,
+    ScheduleRepository,
     TaskEventStore,
     TaskRepository,
     ToolInvocationRepository,
@@ -36,10 +38,13 @@ from friday.domain.identifiers import (
     ArtifactId,
     RunId,
     RunStepId,
+    ScheduleId,
     TaskId,
     ToolInvocationId,
 )
 from friday.domain.run import Run
+from friday.domain.schedule import Schedule, ScheduleStatus
+from friday.domain.schedule_fire import ScheduleFire
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES, RunStep
 from friday.domain.task import Task
 from friday.domain.task_event import TaskEvent
@@ -113,6 +118,89 @@ class FakeRunRepository:
                 run for run in runs if (run.created_at, str(run.id)) > (after_created_at, after_id)
             ]
         return runs[:limit]
+
+    def has_non_terminal_for_ids(self, run_ids: list[RunId]) -> bool:
+        from friday.domain.run import TERMINAL_RUN_STATUSES
+
+        return any(  # noqa: E501
+            self.items[x].status not in TERMINAL_RUN_STATUSES for x in run_ids if x in self.items
+        )
+
+
+class FakeScheduleRepository:
+    def __init__(self) -> None:
+        self.items: dict[ScheduleId, Schedule] = {}
+
+    def add(self, schedule: Schedule) -> None:
+        self.items[schedule.id] = schedule
+
+    def get(self, schedule_id: ScheduleId) -> Schedule | None:
+        return self.items.get(schedule_id)
+
+    def save(self, schedule: Schedule) -> None:
+        self.items[schedule.id] = schedule
+
+    def list_for_task(self, task_id: TaskId, limit: int) -> list[Schedule]:
+        return sorted(  # noqa: E501
+            (x for x in self.items.values() if x.task_id == task_id),
+            key=lambda x: (x.created_at, str(x.id)),
+        )[:limit]
+
+    def list_due(self, now: datetime, limit: int) -> list[Schedule]:
+        values = (  # noqa: E501
+            x
+            for x in self.items.values()
+            if x.status is ScheduleStatus.ACTIVE
+            and x.next_fire_at is not None
+            and x.next_fire_at <= now
+        )
+        return sorted(values, key=lambda x: (x.next_fire_at, str(x.id)))[:limit]
+
+    def complete_for_task(self, task_id: TaskId, at: datetime, *, cancelled: bool) -> None:
+        for schedule in self.items.values():
+            if schedule.task_id == task_id and schedule.status in (  # noqa: E501
+                ScheduleStatus.ACTIVE,
+                ScheduleStatus.PAUSED,
+            ):
+                schedule.cancel(at) if cancelled else schedule.complete(at)
+
+
+class FakeScheduleFireRepository:
+    def __init__(self) -> None:
+        self.items: list[ScheduleFire] = []
+
+    def add(self, fire: ScheduleFire) -> None:
+        if any(  # noqa: E501
+            x.schedule_id == fire.schedule_id and x.scheduled_for == fire.scheduled_for
+            for x in self.items
+        ):
+            from friday.application.errors import EntityConflict
+
+            raise EntityConflict("duplicate schedule occurrence")
+        self.items.append(fire)
+
+    def list_for_schedule(self, schedule_id: ScheduleId, limit: int) -> list[ScheduleFire]:
+        return sorted(  # noqa: E501
+            (x for x in self.items if x.schedule_id == schedule_id),
+            key=lambda x: (x.scheduled_for, str(x.id)),
+        )[:limit]
+
+    def list_for_schedule_page(  # noqa: E501
+        self,
+        schedule_id: ScheduleId,
+        limit: int,
+        after_scheduled_for: datetime | None,
+        after_id: str | None,
+    ) -> list[ScheduleFire]:
+        rows = self.list_for_schedule(schedule_id, len(self.items))
+        if after_scheduled_for is not None and after_id is not None:
+            rows = [
+                x for x in rows if (x.scheduled_for, str(x.id)) > (after_scheduled_for, after_id)
+            ]
+        return rows[:limit]
+
+    def list_run_ids_for_schedule(self, schedule_id: ScheduleId) -> list[RunId]:
+        return [x.run_id for x in self.items if x.schedule_id == schedule_id]
 
 
 class FakeRunEventStore:
@@ -629,6 +717,8 @@ class FakeUnitOfWork:
     def __init__(self) -> None:
         self.task_repo = FakeTaskRepository()
         self.run_repo = FakeRunRepository()
+        self.schedule_repo = FakeScheduleRepository()
+        self.schedule_fire_repo = FakeScheduleFireRepository()
         self.event_store = FakeRunEventStore()
         self.task_event_store = FakeTaskEventStore()
         self.step_repo = FakeRunStepRepository()
@@ -649,6 +739,14 @@ class FakeUnitOfWork:
     @property
     def runs(self) -> RunRepository:
         return self.run_repo
+
+    @property
+    def schedules(self) -> ScheduleRepository:
+        return self.schedule_repo
+
+    @property
+    def schedule_fires(self) -> ScheduleFireRepository:
+        return self.schedule_fire_repo
 
     @property
     def steps(self) -> RunStepRepository:

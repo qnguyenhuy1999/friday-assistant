@@ -35,6 +35,8 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "memory_index_snapshots",
             "memory_retrieval_records",
             "memory_retrieval_items",
+            "schedules",
+            "schedule_fires",
             "alembic_version",
         }
     finally:

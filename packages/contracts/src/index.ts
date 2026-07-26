@@ -27,6 +27,8 @@ export type {
   RunStatus,
   RunStep,
   RunStepStatus,
+  Schedule,
+  ScheduleFire,
   StartRunResponse,
   Task,
   TaskEvent,
@@ -54,6 +56,10 @@ export {
   validateRunEventPage,
   validateTaskEventPage,
   validateStartRun,
+  validateSchedule,
+  validateScheduleFire,
+  validateScheduleFirePage,
+  validateSchedulePage,
   type WireValidator,
 } from "./wire/response-validation";
 

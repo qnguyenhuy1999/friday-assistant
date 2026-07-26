@@ -38,6 +38,12 @@ from friday.domain import (
     RunStep,
     RunStepId,
     RunStepStatus,
+    Schedule,
+    ScheduleFire,
+    ScheduleFireId,
+    ScheduleId,
+    ScheduleKind,
+    ScheduleStatus,
     Task,
     TaskEvent,
     TaskEventId,
@@ -59,6 +65,8 @@ from friday.infrastructure.persistence.models import (
     RunRow,
     RunStepRow,
     RunWorkItemRow,
+    ScheduleFireRow,
+    ScheduleRow,
     TaskEventRow,
     TaskRow,
     ToolInvocationRow,
@@ -165,6 +173,56 @@ def run_from_row(row: RunRow) -> Run:
         _approval_request_id=ApprovalRequestId.parse(row.approval_request_id)
         if row.approval_request_id
         else None,
+    )
+
+
+def schedule_to_row(schedule: Schedule) -> ScheduleRow:
+    return ScheduleRow(
+        id=str(schedule.id),
+        task_id=str(schedule.task_id),
+        kind=schedule.kind.value,
+        cron=schedule.cron,
+        run_at=schedule.run_at,
+        timezone=schedule.timezone,
+        status=schedule.status.value,
+        next_fire_at=schedule.next_fire_at,
+        created_at=schedule.created_at,
+        updated_at=schedule.updated_at,
+    )
+
+
+def schedule_from_row(row: ScheduleRow) -> Schedule:
+    return Schedule(
+        _id=ScheduleId.parse(row.id),
+        _task_id=TaskId.parse(row.task_id),
+        _kind=ScheduleKind(row.kind),
+        _cron=row.cron,
+        _run_at=_read_back_utc(row.run_at) if row.run_at else None,
+        _timezone=row.timezone,
+        _status=ScheduleStatus(row.status),
+        _next_fire_at=_read_back_utc(row.next_fire_at) if row.next_fire_at else None,
+        _created_at=_read_back_utc(row.created_at),
+        _updated_at=_read_back_utc(row.updated_at),
+    )
+
+
+def schedule_fire_to_row(fire: ScheduleFire) -> ScheduleFireRow:
+    return ScheduleFireRow(
+        id=str(fire.id),
+        schedule_id=str(fire.schedule_id),
+        scheduled_for=fire.scheduled_for,
+        fired_at=fire.fired_at,
+        run_id=str(fire.run_id),
+    )
+
+
+def schedule_fire_from_row(row: ScheduleFireRow) -> ScheduleFire:
+    return ScheduleFire(
+        id=ScheduleFireId.parse(row.id),
+        schedule_id=ScheduleId.parse(row.schedule_id),
+        scheduled_for=_read_back_utc(row.scheduled_for),
+        fired_at=_read_back_utc(row.fired_at),
+        run_id=RunId.parse(row.run_id),
     )
 
 

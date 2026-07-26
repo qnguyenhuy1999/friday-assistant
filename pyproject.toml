@@ -14,6 +14,7 @@ dependencies = [
     "fastapi>=0.139.2",
     "uvicorn>=0.51.0",
     "pydantic>=2",
+    "croniter>=6.2.4",
 ]
 
 [dependency-groups]

@@ -12,7 +12,7 @@ import pytest
 from friday.application.errors import BrainResponseInvalid, ToolInputInvalid
 from friday.application.runtime_actions import parse_brain_action
 from friday.infrastructure.tools.process_runner import ProcessRunner, ProcessRunnerSettings
-from friday.infrastructure.tools.workspace_paths import resolve_workspace_root
+from friday.infrastructure.workspace_paths import resolve_workspace_root
 
 
 def _runner(tmp_path: Path) -> ProcessRunner:

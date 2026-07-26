@@ -11,7 +11,7 @@ import pytest
 
 from friday.application.errors import ToolInputInvalid, WorkspaceAccessDenied
 from friday.infrastructure.tools.workspace_files import WorkspaceFiles, WorkspaceFileSettings
-from friday.infrastructure.tools.workspace_paths import (
+from friday.infrastructure.workspace_paths import (
     resolve_workspace_path,
     resolve_workspace_root,
     to_workspace_relative,

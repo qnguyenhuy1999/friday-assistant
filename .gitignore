@@ -19,6 +19,7 @@ data/
 state/
 artifacts/
 workspaces/
+.friday/
 *.db
 *.db-shm
 *.db-wal

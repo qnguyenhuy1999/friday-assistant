@@ -16,7 +16,7 @@ from friday.infrastructure.tools.process_runner import (
     ProcessRunner,
     ProcessRunnerSettings,
 )
-from friday.infrastructure.tools.workspace_paths import resolve_workspace_root
+from friday.infrastructure.workspace_paths import resolve_workspace_root
 
 
 @pytest.fixture

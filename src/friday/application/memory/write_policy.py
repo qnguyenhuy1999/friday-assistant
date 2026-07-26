@@ -1,22 +1,20 @@
 """Pure, conservative policy for proposed Friday-managed memory writes.
 
-The secret detector is defence in depth, not a guarantee that a value is safe
-to persist.  Callers must still obtain an exact-action approval before any
-validated proposal is written.
+Secret-shape detection is shared with desktop text entry (see
+friday.application.secret_shapes): it is defence in depth, not a guarantee that
+a value is safe to persist.  Callers must still obtain an exact-action approval
+before any validated proposal is written.
 """
 
 from __future__ import annotations
 
-import base64
 import json
-import math
-import re
-from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
 
 from friday.application.memory.errors import MemoryWriteDenied
 from friday.application.memory.models import MemoryWriteCandidate, MemoryWriteOperation
+from friday.application.secret_shapes import contains_secret_shape
 from friday.domain.identifiers import RunId, RunStepId
 
 _DEFAULT_MANAGED_ROOT = "Friday"
@@ -24,13 +22,6 @@ _PERMITTED_TARGET_SUFFIXES = ("Inbox", "Preferences", "Projects", "Decisions")
 _REQUIRED_FRONTMATTER_KEYS = frozenset(
     {"friday_managed", "friday_memory_id", "source_run_id", "created_at", "updated_at"}
 )
-_SECRET_PATTERNS = (
-    re.compile(r"(?im)^authorization\s*:\s*(?:bearer|basic)\s+\S+"),
-    re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9_-]{16,}\b"),
-    re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
-    re.compile(r"(?i)\b(?:api[_-]?key|secret|password|access[_-]?token)\s*[:=]\s*\S+"),
-)
-_LONG_TOKEN = re.compile(r"\b[A-Za-z0-9+/_=-]{32,}\b")
 
 
 class MemoryCategory(StrEnum):
@@ -150,25 +141,5 @@ class MemoryWritePolicy:
         material = "\n".join(
             (candidate.payload, *(f"{key}: {value}" for key, value in candidate.frontmatter))
         )
-        if any(pattern.search(material) for pattern in _SECRET_PATTERNS) or _has_high_entropy_token(
-            material
-        ):
+        if contains_secret_shape(material):
             raise MemoryWriteDenied("proposal contains secret-shaped content")
-
-
-def _has_high_entropy_token(text: str) -> bool:
-    """Conservatively identify token-like high-entropy strings, deterministically."""
-    for token in _LONG_TOKEN.findall(text):
-        try:
-            decoded = base64.b64decode(token + "===", validate=False)
-        except ValueError:
-            decoded = token.encode("utf-8")
-        if len(decoded) >= 24 and _shannon_entropy(token) >= 4.0:
-            return True
-    return False
-
-
-def _shannon_entropy(token: str) -> float:
-    length = len(token)
-    frequencies = Counter(token)
-    return -sum((count / length) * math.log2(count / length) for count in frequencies.values())

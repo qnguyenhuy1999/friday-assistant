@@ -23,10 +23,24 @@ SOURCE_ROOTS = (REPO_ROOT / "src", REPO_ROOT / "apps")
 COMPUTER_PACKAGE = "friday.infrastructure.computer"
 COMPUTER_ROOT = REPO_ROOT / "src" / "friday" / "infrastructure" / "computer"
 
-# The single bridge from the generic tool substrate into the desktop.
+# The bridge from the generic tool substrate into the desktop. Exactly two
+# files, with distinct jobs: computer_gateway.py owns policy and execution,
+# computer_composition.py owns production construction. Both live in
+# infrastructure/tools, so `apps.worker.app` can add a computer gateway to its
+# composite while importing nothing from the computer package itself.
+#
+# This list is the review gate for a new desktop consumer, and its value comes
+# from staying short. Appending a file here is a claim that a third place
+# genuinely needs driver internals — not a way to make an import error go away.
 AUTHORIZED_IMPORTERS = (
     REPO_ROOT / "src" / "friday" / "infrastructure" / "tools" / "computer_gateway.py",
+    REPO_ROOT / "src" / "friday" / "infrastructure" / "tools" / "computer_composition.py",
 )
+
+# The composition root may wire computer use in, but only through the factory's
+# public surface — never by reaching past it into driver internals.
+COMPOSITION_ROOT = REPO_ROOT / "apps" / "worker" / "app.py"
+COMPUTER_COMPOSITION_MODULE = "friday.infrastructure.tools.computer_composition"
 
 # Modules that must never gain desktop awareness. The brain proposes actions;
 # it must not be able to perform them.
@@ -95,6 +109,34 @@ def test_the_authorized_bridge_actually_exists() -> None:
     for path in AUTHORIZED_IMPORTERS:
         assert path.is_file(), path
         assert _imports_computer_package(path), path
+
+
+def test_the_composition_root_wires_computer_use_only_through_the_factory() -> None:
+    """The worker adds another ToolGateway; it does not learn what a desktop is.
+
+    Without this, `apps.worker.app` would accumulate driver construction,
+    snapshot settings, and MCP details — and the composition root is precisely
+    where a "just this once" import of driver internals is most tempting.
+    """
+    imports = _imports(COMPOSITION_ROOT)
+
+    assert not _imports_computer_package(COMPOSITION_ROOT)
+    assert COMPUTER_COMPOSITION_MODULE in imports
+
+
+def test_the_production_factory_exposes_a_gateway_without_leaking_the_driver() -> None:
+    """Guards the seam itself: the factory must return a ToolGateway, and the
+    names the composition root imports must stay free of driver vocabulary."""
+    source = (
+        REPO_ROOT / "src" / "friday" / "infrastructure" / "tools" / "computer_composition.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def build_computer_gateway(" in source
+    assert "ComputerToolGateway | None" in source
+
+    composition_root = COMPOSITION_ROOT.read_text(encoding="utf-8")
+    for term in ("CuaDriver", "McpStdio", "SnapshotRegistry", "ComputerDriver"):
+        assert term not in composition_root, term
 
 
 def test_the_brain_and_worker_never_import_the_desktop() -> None:

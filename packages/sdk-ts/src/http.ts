@@ -30,8 +30,10 @@ export interface FridayRequestOptions {
   query?: Record<string, string | number | undefined>;
   body?: unknown;
   signal?: AbortSignal;
+}
+export interface FridayJsonRequestOptions extends FridayRequestOptions {
   /** Chosen by the resource operation; routes never determine response shape. */
-  validate?: WireValidator;
+  validate: WireValidator;
 }
 export class FridayHttpClient {
   private readonly baseUrl: string;
@@ -46,7 +48,7 @@ export class FridayHttpClient {
       options.fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
     this.timeout = options.defaultTimeoutMs ?? 30_000;
   }
-  async request<T>(options: FridayRequestOptions): Promise<T> {
+  async requestJson<T>(options: FridayJsonRequestOptions): Promise<T> {
     const url = new URL(`${this.baseUrl}${options.path}`);
     for (const [key, value] of Object.entries(options.query ?? {}))
       if (value !== undefined) url.searchParams.set(key, String(value));
@@ -90,7 +92,14 @@ export class FridayHttpClient {
     }
     if (response.status === 204) return undefined as T;
     const body: unknown = await response.json();
-    options.validate?.(body, options.path);
+    options.validate(body, options.path);
     return body as T;
+  }
+  async requestVoid(options: FridayRequestOptions): Promise<void> {
+    return this.requestJson<void>({ ...options, validate: () => undefined });
+  }
+  /** Raw JSON escape hatch for endpoints without a versioned wire contract. */
+  async request<T>(options: FridayRequestOptions): Promise<T> {
+    return this.requestJson<T>({ ...options, validate: () => undefined });
   }
 }

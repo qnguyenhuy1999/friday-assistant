@@ -1,14 +1,40 @@
 export * from "./wire/json-value";
-export * from "./wire/failure";
 export * from "./wire/error";
 export * from "./wire/pagination";
-export * from "./wire/task";
-export * from "./wire/run";
-export * from "./wire/step";
-export * from "./wire/approval";
-export * from "./wire/tool-invocation";
-export * from "./wire/artifact";
-export * from "./wire/event";
+export type { CreateTaskBody } from "./wire/task";
+export type { CreateStepBody } from "./wire/step";
+export type {
+  CancelApprovalBody,
+  RequestApprovalBody,
+  ResolveApprovalBody,
+} from "./wire/approval";
+export type {
+  MarkFailedBody,
+  MarkSucceededBody,
+  RequestToolInvocationBody,
+} from "./wire/tool-invocation";
+export type { RecordArtifactBody } from "./wire/artifact";
+export type {
+  ApprovalCategory,
+  ApprovalRequest,
+  ApprovalStatus,
+  Artifact,
+  ArtifactKind,
+  Failure,
+  Run,
+  RunEvent,
+  RunEventType,
+  RunStatus,
+  RunStep,
+  RunStepStatus,
+  StartRunResponse,
+  Task,
+  TaskEvent,
+  TaskEventType,
+  TaskStatus,
+  ToolInvocation,
+  ToolInvocationStatus,
+} from "./wire/http.generated";
 export {
   WireFormatError,
   validateRunEvent,

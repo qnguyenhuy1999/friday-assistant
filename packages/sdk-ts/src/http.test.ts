@@ -55,7 +55,7 @@ describe("FridayHttpClient", () => {
       fetchImpl: vi.fn().mockResolvedValue(response({ id: "t-1" })),
     });
     await expect(
-      client.request({
+      client.requestJson({
         method: "GET",
         path: "/v1/tasks/t-1",
         validate: validateTask,

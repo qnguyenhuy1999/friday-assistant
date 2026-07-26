@@ -78,7 +78,7 @@ export class EventsResource {
     private readonly baseUrl = "",
   ) {}
   listForRun(id: string, p: ListEventsParams = {}) {
-    return this.http.request<Page<RunEvent>>({
+    return this.http.requestJson<Page<RunEvent>>({
       method: "GET",
       path: `/v1/runs/${id}/events`,
       query: { limit: p.limit, cursor: p.cursor },
@@ -86,7 +86,7 @@ export class EventsResource {
     });
   }
   listForTask(id: string, p: ListEventsParams = {}) {
-    return this.http.request<Page<TaskEvent>>({
+    return this.http.requestJson<Page<TaskEvent>>({
       method: "GET",
       path: `/v1/tasks/${id}/events`,
       query: { limit: p.limit, cursor: p.cursor },

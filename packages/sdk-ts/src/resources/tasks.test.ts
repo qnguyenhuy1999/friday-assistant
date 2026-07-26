@@ -12,7 +12,15 @@ const failure = {
 
 function client() {
   const request = vi.fn().mockResolvedValue({});
-  return { http: { request } as unknown as FridayHttpClient, request };
+  return {
+    http: {
+      requestJson: ({ validate, ...options }) => (
+        void validate,
+        request(options)
+      ),
+    } as unknown as FridayHttpClient,
+    request,
+  };
 }
 
 describe("TasksResource", () => {

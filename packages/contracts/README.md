@@ -36,8 +36,9 @@ policy and the domain-to-contract mapping rationale.
 
 ## Current Status
 
-`src/index.ts` exports `CONTRACTS_VERSION` and `schemaPath()` as before. The
-versioned HTTP wire schemas in `src/wire/response-validation.ts` are compiled
-with Ajv and applied by `@friday/sdk` to every HTTP response and SSE run event.
-The SDK therefore rejects a server response that has drifted from the public
-wire shape instead of treating a TypeScript assertion as runtime validation.
+`schemas/v1/http/responses.json` is the canonical v1 HTTP response contract.
+`pnpm generate:contracts` produces `src/wire/http.generated.ts`, which exports
+the SDK's public response types and Ajv validators; CI regenerates it and
+rejects drift. `@friday/sdk` applies those validators to each versioned JSON
+resource operation and to SSE run events. Endpoints without a versioned HTTP
+wire contract (for example health checks) are intentionally outside that set.

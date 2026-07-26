@@ -160,6 +160,16 @@ export interface StartRunResponse {
   run_id: string;
 }
 
+export type TaskStatus = Task["status"];
+export type RunStatus = Run["status"];
+export type RunStepStatus = RunStep["status"];
+export type ApprovalCategory = ApprovalRequest["category"];
+export type ApprovalStatus = ApprovalRequest["status"];
+export type ToolInvocationStatus = ToolInvocation["status"];
+export type ArtifactKind = Artifact["kind"];
+export type RunEventType = RunEvent["type"];
+export type TaskEventType = TaskEvent["type"];
+
 export type TaskPage = Page<Task>;
 export type RunPage = Page<Run>;
 export type StepPage = Page<RunStep>;

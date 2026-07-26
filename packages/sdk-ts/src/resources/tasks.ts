@@ -5,6 +5,11 @@ import type {
   StartRunResponse,
   Task,
 } from "@friday/contracts";
+import {
+  validateStartRun,
+  validateTask,
+  validateTaskPage,
+} from "@friday/contracts";
 import type { FridayHttpClient } from "../http";
 export interface ListTasksParams {
   limit?: number;
@@ -13,48 +18,55 @@ export interface ListTasksParams {
 export class TasksResource {
   constructor(private readonly http: FridayHttpClient) {}
   create(input: CreateTaskBody) {
-    return this.http.request<Task>({
+    return this.http.requestJson<Task>({
       method: "POST",
       path: "/v1/tasks",
       body: input,
+      validate: validateTask,
     });
   }
   list(params: ListTasksParams = {}) {
-    return this.http.request<Page<Task>>({
+    return this.http.requestJson<Page<Task>>({
       method: "GET",
       path: "/v1/tasks",
       query: { limit: params.limit, cursor: params.cursor },
+      validate: validateTaskPage,
     });
   }
   get(taskId: string) {
-    return this.http.request<Task>({
+    return this.http.requestJson<Task>({
       method: "GET",
       path: `/v1/tasks/${taskId}`,
+      validate: validateTask,
     });
   }
   startRun(taskId: string) {
-    return this.http.request<StartRunResponse>({
+    return this.http.requestJson<StartRunResponse>({
       method: "POST",
       path: `/v1/tasks/${taskId}/runs`,
+      validate: validateStartRun,
     });
   }
   cancel(taskId: string) {
-    return this.http.request<Task>({
+    return this.http.requestJson<Task>({
       method: "POST",
       path: `/v1/tasks/${taskId}/cancel`,
+      validate: validateTask,
     });
   }
   complete(taskId: string) {
-    return this.http.request<Task>({
+    return this.http.requestJson<Task>({
       method: "POST",
       path: `/v1/tasks/${taskId}/complete`,
+      validate: validateTask,
     });
   }
   fail(taskId: string, failure: Failure) {
-    return this.http.request<Task>({
+    return this.http.requestJson<Task>({
       method: "POST",
       path: `/v1/tasks/${taskId}/fail`,
       body: failure,
+      validate: validateTask,
     });
   }
 }

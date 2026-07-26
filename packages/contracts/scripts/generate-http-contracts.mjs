@@ -21,7 +21,17 @@ const type = (node) => {
 const declarations = Object.entries(schema.definitions).map(([name, definition]) => {
   const properties = Object.entries(definition.properties ?? {}).map(([property, value]) => `  ${property}: ${type(value)};`).join("\n");
   return `export interface ${name} {\n${properties}\n}`;
-}).join("\n\n");
+}).join("\n\n") + `
+
+export type TaskStatus = Task["status"];
+export type RunStatus = Run["status"];
+export type RunStepStatus = RunStep["status"];
+export type ApprovalCategory = ApprovalRequest["category"];
+export type ApprovalStatus = ApprovalRequest["status"];
+export type ToolInvocationStatus = ToolInvocation["status"];
+export type ArtifactKind = Artifact["kind"];
+export type RunEventType = RunEvent["type"];
+export type TaskEventType = TaskEvent["type"];`;
 const pages = Object.entries(schema.responses).filter(([name]) => name.endsWith("Page")).map(([name, definition]) => {
   const item = definition.properties.items.items.$ref.split("/").at(-1);
   return `export type ${name[0].toUpperCase()}${name.slice(1)} = Page<${item}>;`;

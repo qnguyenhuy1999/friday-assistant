@@ -85,7 +85,7 @@ describe("EventsResource", () => {
   it("lists run and task events with paging params", async () => {
     const request = vi.fn().mockResolvedValue({});
     const events = new EventsResource(
-      { request } as unknown as FridayHttpClient,
+      { requestJson: request } as unknown as FridayHttpClient,
       "http://api.test",
     );
     await events.listForRun("r-1", { limit: 10 });

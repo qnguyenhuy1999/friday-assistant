@@ -11,6 +11,7 @@ export type CreateScheduleBody =
   | { kind: "cron"; cron: string; timezone?: string; run_at?: never };
 export interface ListSchedulesParams {
   limit?: number;
+  cursor?: string;
 }
 export interface ListScheduleFiresParams {
   limit?: number;
@@ -31,7 +32,7 @@ export class SchedulesResource {
     return this.http.requestJson<Page<Schedule>>({
       method: "GET",
       path: `/v1/tasks/${taskId}/schedules`,
-      query: { limit: params.limit },
+      query: { limit: params.limit, cursor: params.cursor },
       validate: validateSchedulePage,
     });
   }

@@ -28,6 +28,7 @@ TERMINAL_RUN_STATUSES = frozenset({RunStatus.SUCCEEDED, RunStatus.FAILED, RunSta
 class Run:
     _id: RunId
     _task_id: TaskId
+    _execution_id: RunId
     _status: RunStatus
     _created_at: datetime
     _started_at: datetime | None = field(default=None)
@@ -36,10 +37,13 @@ class Run:
     _approval_request_id: ApprovalRequestId | None = field(default=None)
 
     @classmethod
-    def new(cls, *, id: RunId, task_id: TaskId, created_at: datetime) -> Run:
+    def new(
+        cls, *, id: RunId, task_id: TaskId, created_at: datetime, execution_id: RunId | None = None
+    ) -> Run:
         return cls(
             _id=id,
             _task_id=task_id,
+            _execution_id=execution_id or id,
             _status=RunStatus.QUEUED,
             _created_at=ensure_utc(created_at),
         )
@@ -51,6 +55,11 @@ class Run:
     @property
     def task_id(self) -> TaskId:
         return self._task_id
+
+    @property
+    def execution_id(self) -> RunId:
+        """Stable root id shared by all attempts of one execution."""
+        return self._execution_id
 
     @property
     def status(self) -> RunStatus:

@@ -90,8 +90,18 @@ def list_schedules(
     task_id: UUID,
     uow_factory: UowDependency,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    cursor: str | None = None,
 ) -> SchedulePageResponse:
-    items = GetSchedule(uow_factory).list_for_task(TaskId.parse(str(task_id)), limit + 1)
+    after = decode_cursor(
+        cursor, collection="schedules", parent_id=str(task_id), order="created_at_id_asc", parts=2
+    )
+    with uow_factory() as uow:
+        items = uow.schedules.list_for_task_page(
+            TaskId.parse(str(task_id)),
+            limit + 1,
+            cursor_datetime(after.after[0]) if after else None,
+            after.after[1] if after else None,
+        )
     page, next_cursor = page_from_query(
         items,
         limit=limit,
@@ -105,9 +115,9 @@ def list_schedules(
 
 @router.get("/{schedule_id}", response_model=ScheduleResponse, operation_id="getSchedule")
 def get_schedule(task_id: UUID, schedule_id: UUID, uow_factory: UowDependency) -> ScheduleResponse:
-    result = GetSchedule(uow_factory).execute(ScheduleId.parse(str(schedule_id)))
-    if result.task_id != TaskId.parse(str(task_id)):
-        raise ValueError("schedule does not belong to task")
+    result = GetSchedule(uow_factory).execute(
+        ScheduleId.parse(str(schedule_id)), task_id=TaskId.parse(str(task_id))
+    )
     return _schedule(result)
 
 
@@ -162,9 +172,9 @@ def list_fires(
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: str | None = None,
 ) -> ScheduleFirePageResponse:
-    schedule = GetSchedule(uow_factory).execute(ScheduleId.parse(str(schedule_id)))
-    if schedule.task_id != TaskId.parse(str(task_id)):
-        raise ValueError("schedule does not belong to task")
+    schedule = GetSchedule(uow_factory).execute(
+        ScheduleId.parse(str(schedule_id)), task_id=TaskId.parse(str(task_id))
+    )
     after = decode_cursor(
         cursor,
         collection="schedule_fires",

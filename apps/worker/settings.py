@@ -20,6 +20,18 @@ _DEFAULT_RETRY_MAX_DELAY_SECONDS = 300.0
 _DEFAULT_SCHEDULER_ENABLED = True
 
 
+def _strict_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{name} must be a boolean")
+
+
 @dataclass(frozen=True, slots=True)
 class WorkerSettings:
     database_url: str
@@ -122,8 +134,5 @@ class WorkerSettings:
                     )
                 )
             ),
-            scheduler_enabled=os.environ.get(
-                "FRIDAY_SCHEDULER_ENABLED", str(_DEFAULT_SCHEDULER_ENABLED)
-            ).lower()
-            in ("1", "true", "yes", "on"),
+            scheduler_enabled=_strict_bool("FRIDAY_SCHEDULER_ENABLED", _DEFAULT_SCHEDULER_ENABLED),
         )

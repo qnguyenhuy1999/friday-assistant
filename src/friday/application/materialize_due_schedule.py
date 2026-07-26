@@ -42,15 +42,10 @@ class MaterializeDueSchedules:
                     uow.schedules.save(schedule)
                     uow.commit()
                     return False
-                run_ids = uow.schedule_fires.list_run_ids_for_schedule(schedule.id)
-                if uow.runs.has_non_terminal_for_ids(run_ids):
-                    schedule.advance_after_fire(
-                        now=now,
-                        next_fire_at=coalesced_next(
-                            schedule, fired_at=schedule.next_fire_at, now=now
-                        ),
-                    )
-                    uow.schedules.save(schedule)
+                if uow.schedule_fires.has_non_terminal_execution_for_schedule(schedule.id):
+                    # Keep the due occurrence durable.  Once the prior
+                    # execution (including retries) becomes terminal, this
+                    # exact overdue occurrence is materialized once.
                     uow.commit()
                     return False
                 occurrence = schedule.next_fire_at

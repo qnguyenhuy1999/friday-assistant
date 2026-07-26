@@ -234,9 +234,13 @@ class WorkerLoop:
         return True
 
     def run_maintenance_tick(self) -> None:
-        materialized = (
-            self._materialize_due_schedules.execute() if self._materialize_due_schedules else 0
-        )
+        try:
+            materialized = (
+                self._materialize_due_schedules.execute() if self._materialize_due_schedules else 0
+            )
+        except Exception:  # noqa: BLE001 - one malformed schedule must not stop delivery
+            materialized = 0
+            lifecycle_log(logger, logging.WARNING, "scheduler.materialization_failed")
         recovered = self._recover_expired_leases.execute()
         approvals = self._expire_due_approvals.execute()
         lifecycle_log(

@@ -49,9 +49,11 @@ function ScheduleRow({
 export function SchedulesPage({
   taskId,
   onBack,
+  onViewRun,
 }: {
   taskId: string;
   onBack: () => void;
+  onViewRun: (runId: string) => void;
 }) {
   const schedules = useSchedules(taskId);
   const create = useCreateSchedule(taskId);
@@ -64,7 +66,9 @@ export function SchedulesPage({
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (kind === "once" && runAt)
-      create.mutate({ kind, run_at: new Date(runAt).toISOString(), timezone });
+      // datetime-local is wall time. Keep it raw; the API interprets it in
+      // the selected IANA zone instead of accidentally applying browser TZ.
+      create.mutate({ kind, run_at: runAt, timezone });
     if (kind === "cron" && cron.trim())
       create.mutate({ kind, cron: cron.trim(), timezone });
   }
@@ -141,7 +145,10 @@ export function SchedulesPage({
           <ul>
             {fires.data?.items.map((fire) => (
               <li key={fire.id}>
-                {fire.scheduled_for} → run {fire.run_id}
+                {fire.scheduled_for} →{" "}
+                <button onClick={() => onViewRun(fire.run_id)}>
+                  run {fire.run_id}
+                </button>
               </li>
             ))}
           </ul>

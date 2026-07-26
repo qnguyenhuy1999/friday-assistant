@@ -115,6 +115,9 @@ class _FakeRunRepository:
             if run_id in self._runs
         )
 
+    def count_for_execution(self, execution_id: RunId) -> int:
+        return sum(run.execution_id == execution_id for run in self._runs.values())
+
 
 @dataclass
 class _FakeRunStepRepository:

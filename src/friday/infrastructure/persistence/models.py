@@ -52,6 +52,7 @@ class RunRow(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True)
     task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"))
+    execution_id: Mapped[str] = mapped_column(index=True)
     status: Mapped[str]
     created_at: Mapped[datetime]
     started_at: Mapped[datetime | None]
@@ -68,6 +69,17 @@ class ScheduleRow(Base):
         Index("ix_schedules_due", "status", "next_fire_at"),
         CheckConstraint(
             "status IN ('active', 'paused', 'completed', 'cancelled')", name="ck_schedules_status"
+        ),
+        CheckConstraint("kind IN ('once', 'cron')", name="ck_schedules_kind"),
+        CheckConstraint(
+            "(kind = 'once' AND run_at IS NOT NULL AND cron IS NULL) OR "
+            "(kind = 'cron' AND cron IS NOT NULL AND run_at IS NULL)",
+            name="ck_schedules_kind_shape",
+        ),
+        CheckConstraint(
+            "(status = 'active' AND next_fire_at IS NOT NULL) OR (status = 'paused') OR "
+            "(status IN ('completed', 'cancelled') AND next_fire_at IS NULL)",
+            name="ck_schedules_status_next_fire",
         ),
     )
     id: Mapped[str] = mapped_column(primary_key=True)

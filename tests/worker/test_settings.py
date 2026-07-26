@@ -144,3 +144,9 @@ def test_retry_max_delay_below_base_delay_raises() -> None:
     kwargs["retry_max_delay"] = timedelta(seconds=5)
     with pytest.raises(ValueError):
         WorkerSettings(**kwargs)
+
+
+def test_invalid_scheduler_boolean_fails_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FRIDAY_SCHEDULER_ENABLED", "treu")
+    with pytest.raises(ValueError, match="FRIDAY_SCHEDULER_ENABLED"):
+        WorkerSettings.from_env()

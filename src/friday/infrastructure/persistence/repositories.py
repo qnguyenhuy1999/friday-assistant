@@ -3,7 +3,7 @@ from __future__ import annotations
 import builtins
 from typing import Any, cast
 
-from sqlalchemy import Select, and_, or_, select, update
+from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
@@ -166,6 +166,16 @@ class RunRepository:
         )
         return self._session.execute(stmt.limit(1)).first() is not None
 
+    def count_for_execution(self, execution_id: RunId) -> int:
+        return int(
+            self._session.scalar(
+                select(func.count())
+                .select_from(RunRow)
+                .where(RunRow.execution_id == str(execution_id))
+            )
+            or 0
+        )
+
 
 class ScheduleRepository:
     def __init__(self, session: Session) -> None:
@@ -189,6 +199,22 @@ class ScheduleRepository:
             .limit(limit)
         )
         return [schedule_from_row(x) for x in self._session.execute(stmt).scalars()]
+
+    def list_for_task_page(
+        self, task_id: TaskId, limit: int, after_created_at: object | None, after_id: str | None
+    ) -> list[Schedule]:
+        stmt = select(ScheduleRow).where(ScheduleRow.task_id == str(task_id))
+        if after_created_at is not None and after_id is not None:
+            stmt = stmt.where(
+                or_(
+                    ScheduleRow.created_at > after_created_at,
+                    and_(ScheduleRow.created_at == after_created_at, ScheduleRow.id > after_id),
+                )
+            )
+        rows = self._session.execute(
+            stmt.order_by(ScheduleRow.created_at, ScheduleRow.id).limit(limit)
+        ).scalars()
+        return [schedule_from_row(x) for x in rows]
 
     def list_due(self, now: object, limit: int) -> list[Schedule]:
         stmt = (
@@ -251,9 +277,19 @@ class ScheduleFireRepository:
         stmt = stmt.order_by(ScheduleFireRow.scheduled_for, ScheduleFireRow.id).limit(limit)
         return [schedule_fire_from_row(x) for x in self._session.execute(stmt).scalars()]
 
-    def list_run_ids_for_schedule(self, schedule_id: ScheduleId) -> list[RunId]:
-        stmt = select(ScheduleFireRow.run_id).where(ScheduleFireRow.schedule_id == str(schedule_id))
-        return [RunId.parse(value) for value in self._session.execute(stmt).scalars()]
+    def has_non_terminal_execution_for_schedule(self, schedule_id: ScheduleId) -> bool:
+        # A fire points to the root attempt. All retry descendants share its
+        # execution_id, so this remains bounded regardless of fire history.
+        stmt = (
+            select(RunRow.id)
+            .join(ScheduleFireRow, RunRow.execution_id == ScheduleFireRow.run_id)
+            .where(
+                ScheduleFireRow.schedule_id == str(schedule_id),
+                RunRow.status.not_in(tuple(x.value for x in TERMINAL_RUN_STATUSES)),
+            )
+            .limit(1)
+        )
+        return self._session.execute(stmt).first() is not None
 
 
 class RunStepRepository:

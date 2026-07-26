@@ -152,6 +152,7 @@ def run_to_row(run: Run) -> RunRow:
     return RunRow(
         id=str(run.id),
         task_id=str(run.task_id),
+        execution_id=str(run.execution_id),
         status=run.status.value,
         created_at=run.created_at,
         started_at=run.started_at,
@@ -165,6 +166,7 @@ def run_from_row(row: RunRow) -> Run:
     return Run(
         _id=RunId.parse(row.id),
         _task_id=TaskId.parse(row.task_id),
+        _execution_id=RunId.parse(row.execution_id),
         _status=RunStatus(row.status),
         _created_at=_read_back_utc(row.created_at),
         _started_at=_read_back_utc(row.started_at) if row.started_at is not None else None,

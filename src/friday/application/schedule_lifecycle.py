@@ -7,9 +7,13 @@ from datetime import datetime
 
 from friday.application.errors import ScheduleNotFound, TaskNotFound
 from friday.application.ports import Clock, UnitOfWorkFactory
-from friday.application.schedule_recurrence import first_occurrence, next_occurrence
+from friday.application.schedule_recurrence import (
+    _resolve_run_at,
+    first_occurrence,
+    next_occurrence,
+)
 from friday.domain.identifiers import ScheduleId, TaskId
-from friday.domain.schedule import Schedule, ScheduleKind
+from friday.domain.schedule import Schedule, ScheduleKind, validate_timezone
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,16 +36,22 @@ class CreateSchedule:
             if task is None:
                 raise TaskNotFound(command.task_id)
             now = self._clock.now()
+            validate_timezone(command.timezone)
+            run_at = (
+                _resolve_run_at(command.run_at, command.timezone)
+                if command.kind is ScheduleKind.ONCE and command.run_at is not None
+                else command.run_at
+            )
             schedule = Schedule.new(
                 id=ScheduleId.new(),
                 task_id=task.id,
                 kind=command.kind,
                 cron=command.cron,
-                run_at=command.run_at,
+                run_at=run_at,
                 timezone=command.timezone,
                 now=now,
                 next_fire_at=first_occurrence(
-                    command.kind, command.cron, command.run_at, command.timezone, now
+                    command.kind, command.cron, run_at, command.timezone, now
                 ),
             )
             uow.schedules.add(schedule)
@@ -86,10 +96,10 @@ class GetSchedule:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
 
-    def execute(self, schedule_id: ScheduleId) -> Schedule:
+    def execute(self, schedule_id: ScheduleId, *, task_id: TaskId | None = None) -> Schedule:
         with self._uow_factory() as uow:
             result = uow.schedules.get(schedule_id)
-            if result is None:
+            if result is None or (task_id is not None and result.task_id != task_id):
                 raise ScheduleNotFound(schedule_id)
             return result
 

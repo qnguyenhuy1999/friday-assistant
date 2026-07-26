@@ -35,13 +35,21 @@ plane's **Schedules** action for a Task, or task-scoped API endpoints, to
 create a one-time (`run_at`) or five-field cron schedule. Use an IANA timezone
 such as `Asia/Ho_Chi_Minh`; stored fire timestamps are UTC.
 
+For a one-time schedule, submit wall time together with its IANA timezone
+(the web UI does this automatically); a past time is rejected rather than
+silently completing the schedule. At DST fall-back, an ambiguous wall time
+uses the earlier instant (`fold=0`); a nonexistent spring-forward wall time
+is rejected. Cron calculations follow the same IANA timezone policy.
+
 The worker evaluates schedules during its normal maintenance cadence.
 `FRIDAY_SCHEDULER_ENABLED=false` disables materialization without deleting
 schedule state; `FRIDAY_WORKER_MAINTENANCE_BATCH_SIZE` bounds each tick. On
 restart, schedules resume from persisted state. Missed cron occurrences are
 coalesced to the next future occurrence, and a schedule never overlaps its
-own non-terminal Run. Inspect schedule fires to correlate an occurrence to its
-single materialized Run.
+own non-terminal execution, including its retry descendants. An occurrence
+blocked by that execution stays due (it is deferred, not dropped) and creates
+exactly one overdue Run when the prior execution is terminal. Inspect schedule
+fires to correlate an occurrence to its single materialized Run.
 
 For a schedule that should stop creating Runs, use **Pause** (resumable) or
 **Cancel** (terminal). Cancelling a Task cancels its active/paused schedules;
@@ -49,7 +57,8 @@ completing or failing a Task completes them. If a schedule appears due but no
 Run is created, first check that the Task is non-terminal and that an earlier
 schedule Run has reached a terminal state. Scheduler logs use the
 `scheduler.materialized` event and never include prompts, tool input, or
-secrets.
+secrets. `FRIDAY_SCHEDULER_ENABLED` is strict: set it to a recognized boolean
+(`true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off`) or worker startup fails.
 
 ## Common diagnosis
 

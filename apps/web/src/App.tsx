@@ -30,6 +30,7 @@ export function App() {
         <SchedulesPage
           taskId={route.id}
           onBack={() => navigate({ view: "tasks", id: null })}
+          onViewRun={(id) => navigate({ view: "run", id })}
         />
       )}
     </main>

@@ -126,6 +126,9 @@ class FakeRunRepository:
             self.items[x].status not in TERMINAL_RUN_STATUSES for x in run_ids if x in self.items
         )
 
+    def count_for_execution(self, execution_id: RunId) -> int:
+        return sum(run.execution_id == execution_id for run in self.items.values())
+
 
 class FakeScheduleRepository:
     def __init__(self) -> None:
@@ -145,6 +148,14 @@ class FakeScheduleRepository:
             (x for x in self.items.values() if x.task_id == task_id),
             key=lambda x: (x.created_at, str(x.id)),
         )[:limit]
+
+    def list_for_task_page(
+        self, task_id: TaskId, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> list[Schedule]:
+        rows = self.list_for_task(task_id, len(self.items))
+        if after_created_at is not None and after_id is not None:
+            rows = [x for x in rows if (x.created_at, str(x.id)) > (after_created_at, after_id)]
+        return rows[:limit]
 
     def list_due(self, now: datetime, limit: int) -> list[Schedule]:
         values = (  # noqa: E501
@@ -168,6 +179,7 @@ class FakeScheduleRepository:
 class FakeScheduleFireRepository:
     def __init__(self) -> None:
         self.items: list[ScheduleFire] = []
+        self._runs: FakeRunRepository | None = None
 
     def add(self, fire: ScheduleFire) -> None:
         if any(  # noqa: E501
@@ -199,8 +211,15 @@ class FakeScheduleFireRepository:
             ]
         return rows[:limit]
 
-    def list_run_ids_for_schedule(self, schedule_id: ScheduleId) -> list[RunId]:
-        return [x.run_id for x in self.items if x.schedule_id == schedule_id]
+    def has_non_terminal_execution_for_schedule(self, schedule_id: ScheduleId) -> bool:
+        from friday.domain.run import TERMINAL_RUN_STATUSES
+
+        roots = {x.run_id for x in self.items if x.schedule_id == schedule_id}
+        assert self._runs is not None
+        return any(
+            run.execution_id in roots and run.status not in TERMINAL_RUN_STATUSES
+            for run in self._runs.items.values()
+        )
 
 
 class FakeRunEventStore:
@@ -719,6 +738,7 @@ class FakeUnitOfWork:
         self.run_repo = FakeRunRepository()
         self.schedule_repo = FakeScheduleRepository()
         self.schedule_fire_repo = FakeScheduleFireRepository()
+        self.schedule_fire_repo._runs = self.run_repo
         self.event_store = FakeRunEventStore()
         self.task_event_store = FakeTaskEventStore()
         self.step_repo = FakeRunStepRepository()

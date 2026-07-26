@@ -14,6 +14,9 @@ class RequestBodyLimitMiddleware:
         if scope["type"] != "http":
             await self._app(scope, receive, send)
             return
+        if scope["method"] in {"GET", "HEAD", "OPTIONS"}:
+            await self._app(scope, receive, send)
+            return
         headers = dict(scope["headers"])
         length = headers.get(b"content-length")
         if length is not None:
@@ -28,6 +31,8 @@ class RequestBodyLimitMiddleware:
         total = 0
         while True:
             message = await receive()
+            if message["type"] == "http.disconnect":
+                break
             if message["type"] != "http.request":
                 continue
             body = message.get("body", b"")

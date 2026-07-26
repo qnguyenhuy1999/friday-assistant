@@ -154,6 +154,22 @@ describe("useRunEventStream", () => {
     expect(result.current.events).toEqual([]);
   });
 
+  it("clears degraded after a recovered SSE event", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      jsonResponse({ items: [], next_cursor: null }),
+    );
+    const { result } = renderHook(() => useRunEventStream("r-1"), { wrapper });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0]!;
+    act(() => {
+      for (const listener of source.listeners.get("error") ?? [])
+        listener(new Event("error"));
+    });
+    await waitFor(() => expect(result.current.isDegraded).toBe(true));
+    act(() => source.emit("run_started", event("recovered", 1)));
+    await waitFor(() => expect(result.current.isDegraded).toBe(false));
+  });
+
   it("invalidates the query that matches each event kind", async () => {
     vi.spyOn(global, "fetch").mockResolvedValue(
       jsonResponse({ items: [], next_cursor: null }),

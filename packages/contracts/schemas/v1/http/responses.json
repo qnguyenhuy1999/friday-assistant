@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.friday-agent-os.dev/v1/http/responses.json",
+  "title": "Friday v1 HTTP responses",
+  "definitions": {
+    "Failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable", "cause", "details"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "cause": {
+          "enum": [
+            "validation",
+            "tool",
+            "runtime",
+            "approval",
+            "cancelled",
+            "timeout",
+            "internal"
+          ]
+        },
+        "details": {}
+      }
+    },
+    "Task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "description",
+        "status",
+        "created_at",
+        "failure"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "status": {
+          "enum": ["pending", "active", "completed", "failed", "cancelled"]
+        },
+        "created_at": { "type": "string" },
+        "failure": {
+          "anyOf": [{ "$ref": "#/definitions/Failure" }, { "type": "null" }]
+        }
+      }
+    },
+    "Run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "task_id", "status", "created_at", "failure"],
+      "properties": {
+        "id": { "type": "string" },
+        "task_id": { "type": "string" },
+        "status": {
+          "enum": [
+            "queued",
+            "running",
+            "waiting_for_approval",
+            "succeeded",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "created_at": { "type": "string" },
+        "failure": {
+          "anyOf": [{ "$ref": "#/definitions/Failure" }, { "type": "null" }]
+        }
+      }
+    },
+    "RunStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "run_id", "name", "position", "status", "failure"],
+      "properties": {
+        "id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "name": { "type": "string" },
+        "position": { "type": "integer" },
+        "status": {
+          "enum": [
+            "pending",
+            "running",
+            "waiting_for_approval",
+            "succeeded",
+            "failed",
+            "skipped",
+            "cancelled"
+          ]
+        },
+        "failure": {
+          "anyOf": [{ "$ref": "#/definitions/Failure" }, { "type": "null" }]
+        }
+      }
+    },
+    "ApprovalRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval_id",
+        "run_id",
+        "step_id",
+        "category",
+        "summary",
+        "reason",
+        "requested_action",
+        "requested_input",
+        "status",
+        "requested_at",
+        "expires_at",
+        "resolved_at",
+        "resolution_note",
+        "resolver",
+        "authorization_fingerprint",
+        "consumed_at"
+      ],
+      "properties": {
+        "approval_id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "step_id": { "type": ["string", "null"] },
+        "category": {
+          "enum": [
+            "tool_execution",
+            "filesystem_write",
+            "network_access",
+            "computer_use",
+            "other"
+          ]
+        },
+        "summary": { "type": "string" },
+        "reason": { "type": "string" },
+        "requested_action": { "type": "string" },
+        "requested_input": {},
+        "status": {
+          "enum": ["pending", "approved", "rejected", "cancelled", "expired"]
+        },
+        "requested_at": { "type": "string" },
+        "expires_at": { "type": ["string", "null"] },
+        "resolved_at": { "type": ["string", "null"] },
+        "resolution_note": { "type": ["string", "null"] },
+        "resolver": { "type": ["string", "null"] },
+        "authorization_fingerprint": { "type": ["string", "null"] },
+        "consumed_at": { "type": ["string", "null"] }
+      }
+    },
+    "ToolInvocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "invocation_id",
+        "run_id",
+        "step_id",
+        "tool_name",
+        "status",
+        "requested_at",
+        "approval_request_id",
+        "output",
+        "output_set",
+        "failure"
+      ],
+      "properties": {
+        "invocation_id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "step_id": { "type": ["string", "null"] },
+        "tool_name": { "type": "string" },
+        "status": {
+          "enum": ["requested", "running", "succeeded", "failed", "cancelled"]
+        },
+        "requested_at": { "type": "string" },
+        "approval_request_id": { "type": ["string", "null"] },
+        "output": {},
+        "output_set": { "type": "boolean" },
+        "failure": {
+          "anyOf": [{ "$ref": "#/definitions/Failure" }, { "type": "null" }]
+        }
+      }
+    },
+    "Artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "run_id",
+        "step_id",
+        "kind",
+        "name",
+        "media_type",
+        "location",
+        "created_at",
+        "size",
+        "checksum",
+        "metadata"
+      ],
+      "properties": {
+        "artifact_id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "step_id": { "type": ["string", "null"] },
+        "kind": {
+          "enum": ["text", "file", "directory", "url", "json", "image", "other"]
+        },
+        "name": { "type": "string" },
+        "media_type": { "type": "string" },
+        "location": { "type": "string" },
+        "created_at": { "type": "string" },
+        "size": { "type": ["integer", "null"] },
+        "checksum": { "type": ["string", "null"] },
+        "metadata": {}
+      }
+    },
+    "RunEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "run_id",
+        "step_id",
+        "type",
+        "sequence",
+        "occurred_at",
+        "payload"
+      ],
+      "properties": {
+        "event_id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "step_id": { "type": ["string", "null"] },
+        "type": {
+          "enum": [
+            "run_created",
+            "run_started",
+            "run_waiting_for_approval",
+            "run_resumed",
+            "run_succeeded",
+            "run_failed",
+            "run_cancelled",
+            "step_created",
+            "step_started",
+            "step_succeeded",
+            "step_failed",
+            "step_skipped",
+            "step_cancelled",
+            "approval_requested",
+            "approval_resolved",
+            "tool_invocation_requested",
+            "tool_invocation_started",
+            "tool_invocation_succeeded",
+            "tool_invocation_failed",
+            "tool_invocation_cancelled",
+            "artifact_created",
+            "agent_finished",
+            "memory_context_attached",
+            "memory_retrieval_degraded",
+            "memory_write_requested",
+            "memory_write_committed",
+            "memory_write_conflicted",
+            "memory_index_marked_stale"
+          ]
+        },
+        "sequence": { "type": "integer" },
+        "occurred_at": { "type": "string" },
+        "payload": {}
+      }
+    },
+    "TaskEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "task_id",
+        "type",
+        "sequence",
+        "occurred_at",
+        "payload"
+      ],
+      "properties": {
+        "event_id": { "type": "string" },
+        "task_id": { "type": "string" },
+        "type": { "enum": ["task_completed", "task_failed", "task_cancelled"] },
+        "sequence": { "type": "integer" },
+        "occurred_at": { "type": "string" },
+        "payload": {}
+      }
+    },
+    "StartRunResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "run_id"],
+      "properties": {
+        "task_id": { "type": "string" },
+        "run_id": { "type": "string" }
+      }
+    }
+  },
+  "responses": {
+    "task": { "$ref": "#/definitions/Task" },
+    "run": { "$ref": "#/definitions/Run" },
+    "step": { "$ref": "#/definitions/RunStep" },
+    "approval": { "$ref": "#/definitions/ApprovalRequest" },
+    "invocation": { "$ref": "#/definitions/ToolInvocation" },
+    "artifact": { "$ref": "#/definitions/Artifact" },
+    "runEvent": { "$ref": "#/definitions/RunEvent" },
+    "taskEvent": { "$ref": "#/definitions/TaskEvent" },
+    "taskPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": { "type": "array", "items": { "$ref": "#/definitions/Task" } },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "runPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": { "type": "array", "items": { "$ref": "#/definitions/Run" } },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "stepPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/RunStep" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "approvalPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ApprovalRequest" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "invocationPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ToolInvocation" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "artifactPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Artifact" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "runEventPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/RunEvent" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "taskEventPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/TaskEvent" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "startRun": { "$ref": "#/definitions/StartRunResponse" }
+  }
+}

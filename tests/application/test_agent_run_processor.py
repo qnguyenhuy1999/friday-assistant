@@ -36,8 +36,9 @@ from friday.application.tool_gateway import (
     ToolExecutionResult,
     ToolRiskAssessment,
 )
-from friday.application.worker_coordination import VerifyRunClaim
+from friday.application.worker_coordination import ApplySucceededOutcome, VerifyRunClaim
 from friday.domain.approval import ApprovalCategory, ApprovalRequest, ApprovalStatus
+from friday.domain.event import RunEventType
 from friday.domain.identifiers import ApprovalRequestId, RunId, TaskId
 from friday.domain.run import Run, RunStatus
 from friday.domain.task import Task
@@ -165,6 +166,24 @@ class Harness:
         approval.approve(T0, resolver="patrick")
         self.uow.approval_repo.add(approval)
         return approval
+
+
+def test_agent_finished_payload_flows_from_real_processor_to_durable_events() -> None:
+    """Do not synthesize `runs.complete`: preserve the agent's final payload."""
+    harness = Harness(FinishAction(summary="ship it", details={"files": ["a.ts"]}))
+    outcome = harness.processor.process(harness.context())
+    assert outcome.kind == "succeeded"
+    assert outcome.final_response == ("ship it", {"files": ["a.ts"]})
+
+    ApplySucceededOutcome(harness.factory, harness.clock).execute(
+        harness.run.id, "w1", "tok", harness.generation, outcome.final_response
+    )
+    finished = next(
+        event
+        for event in harness.uow.event_store.appended
+        if event.type is RunEventType.AGENT_FINISHED
+    )
+    assert finished.payload == {"summary": "ship it", "details": {"files": ["a.ts"]}}
 
 
 # --- terminal actions -------------------------------------------------------

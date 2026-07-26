@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { FridayApiError, FridayHttpClient, FridayNetworkError } from "./http";
-import { WireFormatError } from "@friday/contracts";
+import { WireFormatError, validateTask } from "@friday/contracts";
 
 const response = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -55,7 +55,11 @@ describe("FridayHttpClient", () => {
       fetchImpl: vi.fn().mockResolvedValue(response({ id: "t-1" })),
     });
     await expect(
-      client.request({ method: "GET", path: "/v1/tasks/t-1" }),
+      client.request({
+        method: "GET",
+        path: "/v1/tasks/t-1",
+        validate: validateTask,
+      }),
     ).rejects.toBeInstanceOf(WireFormatError);
   });
   it("wraps transport failures but preserves caller cancellations", async () => {

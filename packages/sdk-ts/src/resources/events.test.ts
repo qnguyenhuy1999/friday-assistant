@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { EventsResource } from "./events";
-import type { FridayHttpClient } from "../http";
+import { FridayHttpClient } from "../http";
+import {
+  WireFormatError,
+  validateRunEventPage,
+  validateTaskEventPage,
+} from "@friday/contracts";
 class Source {
   static latest: Source;
   listeners = new Map<string, EventListener>();
@@ -89,11 +94,54 @@ describe("EventsResource", () => {
       method: "GET",
       path: "/v1/runs/r-1/events",
       query: { limit: 10, cursor: undefined },
+      validate: validateRunEventPage,
     });
     expect(request).toHaveBeenNthCalledWith(2, {
       method: "GET",
       path: "/v1/tasks/t-1/events",
       query: { limit: undefined, cursor: undefined },
+      validate: validateTaskEventPage,
     });
+  });
+
+  it("validates a task event page through the real HTTP client", async () => {
+    const response = (body: unknown) => new Response(JSON.stringify(body));
+    const events = new EventsResource(
+      new FridayHttpClient({
+        baseUrl: "http://api.test",
+        fetchImpl: vi.fn().mockResolvedValue(
+          response({
+            items: [
+              {
+                event_id: "e-1",
+                task_id: "t-1",
+                type: "task_completed",
+                sequence: 1,
+                occurred_at: "now",
+                payload: null,
+              },
+            ],
+            next_cursor: null,
+          }),
+        ),
+      }),
+    );
+    await expect(events.listForTask("t-1")).resolves.toMatchObject({
+      items: [{ task_id: "t-1" }],
+    });
+    const invalid = new EventsResource(
+      new FridayHttpClient({
+        baseUrl: "http://api.test",
+        fetchImpl: vi.fn().mockResolvedValue(
+          response({
+            items: [{ event_id: "e-1", task_id: "t-1", type: "run_started" }],
+            next_cursor: null,
+          }),
+        ),
+      }),
+    );
+    await expect(invalid.listForTask("t-1")).rejects.toBeInstanceOf(
+      WireFormatError,
+    );
   });
 });

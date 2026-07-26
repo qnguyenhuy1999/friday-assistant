@@ -36,6 +36,7 @@ export function useRunEventStream(runId: string): RunEventStreamState {
           if (!cancelled) {
             setEvents((old) => merge(old, page.items));
             setIsLoading(false);
+            setIsDegraded(false);
           }
         })
         .catch(() => {
@@ -47,6 +48,7 @@ export function useRunEventStream(runId: string): RunEventStreamState {
     void backfill();
     const stream = friday.events.streamForRun(runId);
     const off = stream.onEvent((event) => {
+      setIsDegraded(false);
       setEvents((old) => merge(old, [event]));
       q.invalidateQueries({ queryKey: runQueryKey(runId) });
       if (event.type.startsWith("step_"))

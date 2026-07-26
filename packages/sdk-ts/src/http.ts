@@ -1,4 +1,4 @@
-import { validateWireResponse, type ApiErrorBody } from "@friday/contracts";
+import type { ApiErrorBody, WireValidator } from "@friday/contracts";
 export interface FridayHttpClientOptions {
   baseUrl: string;
   fetchImpl?: typeof fetch;
@@ -30,6 +30,8 @@ export interface FridayRequestOptions {
   query?: Record<string, string | number | undefined>;
   body?: unknown;
   signal?: AbortSignal;
+  /** Chosen by the resource operation; routes never determine response shape. */
+  validate?: WireValidator;
 }
 export class FridayHttpClient {
   private readonly baseUrl: string;
@@ -88,7 +90,7 @@ export class FridayHttpClient {
     }
     if (response.status === 204) return undefined as T;
     const body: unknown = await response.json();
-    validateWireResponse(options.path, body);
+    options.validate?.(body, options.path);
     return body as T;
   }
 }

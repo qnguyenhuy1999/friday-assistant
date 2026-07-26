@@ -50,6 +50,11 @@ jobs:
       - name: Frozen install + lockfile drift check
         run: just lock-check
 
+      - name: Verify generated HTTP contracts are current
+        run: |
+          pnpm generate:contracts
+          git diff --exit-code
+
       - name: Fast local gate (format, lint, typecheck, tests, architecture, policy)
         run: just check
 

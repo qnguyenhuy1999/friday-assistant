@@ -4,7 +4,11 @@ import type {
   RunEventType,
   TaskEvent,
 } from "@friday/contracts";
-import { validateRunEvent } from "@friday/contracts";
+import {
+  validateRunEvent,
+  validateRunEventPage,
+  validateTaskEventPage,
+} from "@friday/contracts";
 import type { FridayHttpClient } from "../http";
 export interface ListEventsParams {
   limit?: number;
@@ -78,6 +82,7 @@ export class EventsResource {
       method: "GET",
       path: `/v1/runs/${id}/events`,
       query: { limit: p.limit, cursor: p.cursor },
+      validate: validateRunEventPage,
     });
   }
   listForTask(id: string, p: ListEventsParams = {}) {
@@ -85,6 +90,7 @@ export class EventsResource {
       method: "GET",
       path: `/v1/tasks/${id}/events`,
       query: { limit: p.limit, cursor: p.cursor },
+      validate: validateTaskEventPage,
     });
   }
   streamForRun(id: string, options: RunEventStreamOptions = {}) {

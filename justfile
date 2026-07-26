@@ -59,6 +59,9 @@ persistence-check:
 lock-check:
     uv run python scripts/lock_check.py
 
+generate-contracts:
+    pnpm generate:contracts
+
 worker:
     uv run python -m apps.worker.main
 
@@ -82,7 +85,7 @@ pre-commit:
 # they're re-run here individually so a contributor gets an explicit,
 # fast-failing signal naming exactly which dimension broke, at negligible
 # cost (each subset runs in well under a second).
-check: format-check lint typecheck test test-ts architecture-check policy-check domain-check schema-check schema-parity-check migration-check persistence-check
+check: generate-contracts format-check lint typecheck test test-ts architecture-check policy-check domain-check schema-check schema-parity-check migration-check persistence-check
 
 # Full CI-equivalent gate. test-cov and lock-check are not part of `check`
 # because test-cov needs coverage instrumentation (slower, and duplicates

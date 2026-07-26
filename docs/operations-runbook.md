@@ -85,9 +85,9 @@ secrets. `FRIDAY_SCHEDULER_ENABLED` is strict: set it to a recognized boolean
 
 ## Safe configuration and restart
 
-`FRIDAY_API_HOST` accepts loopback binding by default. Binding a non-loopback
-host requires `FRIDAY_API_ALLOW_REMOTE_BIND=true`; wildcard CORS origins are
-rejected. Use exact `http(s)` origins in `FRIDAY_API_CORS_ORIGINS`.
+`FRIDAY_API_HOST` accepts loopback addresses only. Remote binding is rejected
+because the API has no authenticated transport; CORS is not an authentication
+boundary. Use exact `http(s)` origins in `FRIDAY_API_CORS_ORIGINS`.
 `FRIDAY_API_MAX_REQUEST_BYTES` defaults to 1 MiB and rejects oversized request
 bodies with HTTP 413 before route parsing.
 

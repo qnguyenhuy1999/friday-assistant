@@ -133,4 +133,17 @@ describe("ApprovalDetail", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByText(/can no longer be acted on/)).toBeInTheDocument();
   });
+
+  it("disables both decisions while a resolution is pending", () => {
+    render(
+      <ApprovalDetail
+        approval={approval}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        isPending
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
+  });
 });

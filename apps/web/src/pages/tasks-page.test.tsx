@@ -44,6 +44,28 @@ describe("TasksPage", () => {
     expect(await screen.findByText(/Ship it/)).toBeInTheDocument();
   });
 
+  it("loads later task pages on demand", async () => {
+    const fetchMock = vi
+      .spyOn(global, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({ items: [task], next_cursor: "page-2" }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [{ ...task, id: "t-2", title: "Later task" }],
+          next_cursor: null,
+        }),
+      );
+    renderPage();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Load more" }));
+
+    expect(await screen.findByText(/Later task/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("cursor=page-2");
+  });
+
   it("creates a task and clears the input", async () => {
     const fetchMock = vi.spyOn(global, "fetch");
     fetchMock.mockResolvedValueOnce(

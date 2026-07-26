@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from ipaddress import ip_address
+from math import isfinite
 from urllib.parse import urlparse
 
 _DEFAULT_DATABASE_URL = "sqlite:///./friday.db"
@@ -88,14 +89,17 @@ class ApiSettings:
             raise ValueError("host must not be empty")
         if not 1 <= self.port <= 65535:
             raise ValueError("port must be between 1 and 65535")
-        if self.sse_poll_interval_seconds <= 0:
-            raise ValueError("sse_poll_interval_seconds must be positive")
+        if not isfinite(self.sse_poll_interval_seconds) or self.sse_poll_interval_seconds <= 0:
+            raise ValueError("sse_poll_interval_seconds must be positive and finite")
         if self.max_request_bytes <= 0:
             raise ValueError("max_request_bytes must be positive")
-        if not self.allow_remote_bind and not _is_loopback_host(self.host):
+        if self.allow_remote_bind:
             raise ValueError(
-                "FRIDAY_API_HOST must be loopback unless FRIDAY_API_ALLOW_REMOTE_BIND=true"
+                "FRIDAY_API_ALLOW_REMOTE_BIND is no longer supported; "
+                "authenticated remote access has not been implemented"
             )
+        if not _is_loopback_host(self.host):
+            raise ValueError("FRIDAY_API_HOST must be a loopback address")
         for origin in self.cors_allowed_origins:
             _validate_origin(origin)
 

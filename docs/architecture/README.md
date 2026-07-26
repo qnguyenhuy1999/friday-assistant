@@ -1,10 +1,9 @@
 # Architecture Overview
 
-This document describes the source organization established through
-Phases 4 and 5. It covers structure and dependency boundaries — the domain
-model, application ports, contracts, and SQLite persistence adapter are
-implemented; no API routes, worker, AI integration, or frontend behavior
-exists yet.
+This document describes the implemented source organization through Phase 16:
+domain and application logic, SQLite persistence, API and worker delivery,
+Claude runtime, memory, computer use, contracts, SDK, web control plane, and
+durable scheduled automations.
 
 ## Source Tree
 
@@ -30,12 +29,12 @@ exists yet.
   `infrastructure/tools/computer_gateway.py` and
   `infrastructure/tools/computer_composition.py`; the brain runtime,
   application layer, domain layer, and worker loop must never import it.
-- **`apps/web`** — browser control-plane delivery. A thin TypeScript
-  package shell (no React/Vite yet).
+- **`apps/web`** — React/Vite browser control plane for tasks, runs,
+  approvals, artifacts, events, final results, and schedules.
 - **`packages/contracts`** — language-neutral schemas and cross-process
   protocol definitions (see [contracts.md](contracts.md)).
-- **`packages/sdk-ts`** — TypeScript client SDK surface. No generated
-  client exists yet.
+- **`packages/sdk-ts`** — validated TypeScript client SDK for the HTTP and
+  event-stream contract.
 - **`tests/domain`** — domain entity/value-object unit and state-machine
   tests (see [domain-model.md](domain-model.md)).
 - **`tests/application`** — application port structural-typing tests.
@@ -101,8 +100,6 @@ Phase 5 adds a SQLite persistence adapter (see
 ports via SQLAlchemy, with Alembic migrations as schema source of truth.
 The adapter and migration behavior are covered by `tests/persistence`.
 
-Phase 9 adds the FastAPI/Uvicorn/Pydantic API delivery boundary (see
-[api-delivery.md](api-delivery.md)): a composition root, centralized
-error mapping, cursor pagination, and a Run-event SSE stream over the
-Phase 6–8 use cases. The worker, AI/runtime integration, and the
-frontend still do not exist.
+Later phases add the FastAPI delivery boundary, leased worker coordination,
+Claude/tool execution, curated memory, computer use, TypeScript SDK and React
+control plane, operational hardening, and durable scheduled automations.

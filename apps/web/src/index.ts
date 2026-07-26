@@ -1,4 +1,4 @@
 export const appMetadata = {
   name: "Friday Agent OS Web",
-  status: "shell",
+  status: "control-plane",
 } as const;

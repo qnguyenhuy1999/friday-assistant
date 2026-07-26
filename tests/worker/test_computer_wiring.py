@@ -175,6 +175,14 @@ def test_every_limit_must_be_positive(monkeypatch: pytest.MonkeyPatch, name: str
         ComputerSettings.from_env()
 
 
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_timeout_must_be_finite(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("FRIDAY_COMPUTER_TIMEOUT_SECONDS", value)
+
+    with pytest.raises(ValueError, match="finite"):
+        ComputerSettings.from_env()
+
+
 def test_the_scroll_ceiling_cannot_exceed_the_representable_range(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

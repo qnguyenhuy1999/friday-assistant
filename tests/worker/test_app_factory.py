@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 
-from apps.worker.app import create_worker
+import pytest
+
+from apps.worker.app import Worker, create_worker
 from apps.worker.settings import WorkerSettings
 from tests.worker.fake_claude import make_fake_claude
 from tests.worker.test_worker_composition import runtime_settings
@@ -34,4 +36,30 @@ def test_create_worker_wires_real_infrastructure(tmp_path: Path) -> None:
         with worker.engine.connect() as connection:
             connection.exec_driver_sql("SELECT 1")
     finally:
-        worker.engine.dispose()
+        worker.close()
+
+
+def test_worker_disposes_engine_when_computer_close_fails() -> None:
+    class Engine:
+        disposed = False
+
+        def dispose(self) -> None:
+            self.disposed = True
+
+    class Gateway:
+        def close(self) -> None:
+            raise RuntimeError("driver close failed")
+
+    engine = Engine()
+    worker = Worker(
+        engine=engine,  # type: ignore[arg-type]
+        settings=None,  # type: ignore[arg-type]
+        loop=None,  # type: ignore[arg-type]
+        processor=None,  # type: ignore[arg-type]
+        computer_gateway=Gateway(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(RuntimeError, match="driver close failed"):
+        worker.close()
+
+    assert engine.disposed is True

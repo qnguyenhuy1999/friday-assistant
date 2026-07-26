@@ -150,3 +150,20 @@ def test_invalid_scheduler_boolean_fails_startup(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("FRIDAY_SCHEDULER_ENABLED", "treu")
     with pytest.raises(ValueError, match="FRIDAY_SCHEDULER_ENABLED"):
         WorkerSettings.from_env()
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "poll_interval_seconds",
+        "heartbeat_interval_seconds",
+        "maintenance_interval_seconds",
+        "retry_multiplier",
+    ),
+)
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_float_settings_must_be_finite(field: str, value: float) -> None:
+    kwargs = _valid_kwargs()
+    kwargs[field] = value  # type: ignore[literal-required]
+    with pytest.raises(ValueError, match="finite"):
+        WorkerSettings(**kwargs)

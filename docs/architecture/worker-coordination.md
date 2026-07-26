@@ -162,9 +162,9 @@ computes `max(sequence) + 1` anymore.
 ## Worker loop
 
 `WorkerLoop.run_once(processor)` (`apps/worker/worker_loop.py:52`) returns
-`False` immediately if `processor is None` (Phase 10 passes `None` because a
-concrete `RunProcessor` does not exist yet) or if no work is due. Otherwise it
-claims one Run, starts the
+`False` immediately if `processor is None` or if no work is due. Production
+wiring supplies `AgentRunProcessor`; accepting `None` keeps the coordination
+loop independently testable. Otherwise it claims one Run, starts the
 heartbeat thread, calls `processor.process(context)`, joins the heartbeat
 thread, and dispatches the `ProcessingOutcome` to the matching coordination
 use case (`succeeded` → `ApplySucceededOutcome`, `failed` →
@@ -173,23 +173,23 @@ use case (`succeeded` → `ApplySucceededOutcome`, `failed` →
 outcome is logged and swallowed — the claim was already lost to another
 worker or recovery, so there is nothing left to do.
 
-`run_maintenance_tick()` calls `RecoverExpiredLeases.execute()` and
-`ExpireDueApprovals.execute()` and logs the counts. `serve_forever(
-shutdown_event, processor=None)` drives both on independent intervals: a
+`run_maintenance_tick()` materializes due schedules, recovers expired leases,
+expires due approvals, and refreshes memory indexes. Each job is isolated so a
+transient failure cannot skip unrelated maintenance. `serve_forever(
+shutdown_event, processor=None)` drives maintenance and execution on independent intervals: a
 monotonic-clock-gated maintenance tick, and `run_once` on every iteration,
 falling back to `shutdown_event.wait(poll_interval_seconds)` (an
 interruptible sleep, not a blocking `time.sleep`) whenever there was
-nothing to claim. Phase 10 passes `processor=None` because a concrete
-`RunProcessor` does not exist yet — this is not a configurable deployment
-mode, just a temporary wiring artifact until Phase 11.
+nothing to claim.
 
 ## Graceful shutdown
 
 `apps/worker/main.py` installs `SIGTERM`/`SIGINT` handlers that set a
 `threading.Event` (`shutdown_event`); `serve_forever` checks it every
 iteration and every wait, so shutdown lands within one poll interval, and
-`worker.engine.dispose()` runs in a `finally` block regardless of how the
-loop exits.
+`Worker.close()` runs in a `finally` block regardless of how the loop exits;
+it closes the optional computer driver and always disposes the engine even if
+driver cleanup fails.
 
 ## SQLite concurrency strategy
 
@@ -203,13 +203,9 @@ single-writer model without needing explicit application-level locking:
 two connections racing the same `UPDATE` are serialized by SQLite itself,
 and exactly one sees its `WHERE` clause match.
 
-## Explicit non-goals
+## Execution boundary
 
-Phase 10 does not implement Claude, BrainRuntime, ToolGateway, MCP,
-browser control, subprocess execution, or any real tool/model execution.
-A claim does not guarantee exactly-once execution — see at-least-once
-delivery above. `RunProcessor` is a `Protocol` with no concrete
-implementation; Phase 11 must supply one, and Phase 11's side effects must
-be idempotent because recovery can redeliver a claim. Phase 11's worker
-application operations must go through the claim-aware coordination use
-cases documented here, not around them.
+A claim does not guarantee exactly-once execution — see at-least-once delivery
+above. The concrete processor therefore routes protected side effects through
+claim-aware authorization and ambiguity fencing; worker operations must go
+through the coordination use cases documented here, not around them.

@@ -95,9 +95,11 @@ class Worker:
         released here so `main` has one shutdown call rather than a list that
         silently falls behind.
         """
-        if self.computer_gateway is not None:
-            self.computer_gateway.close()
-        self.engine.dispose()
+        try:
+            if self.computer_gateway is not None:
+                self.computer_gateway.close()
+        finally:
+            self.engine.dispose()
 
 
 class _DisabledMemoryRetriever:

@@ -22,6 +22,7 @@ dev = [
     "httpx2>=2.9.0",
     "jsonschema>=4.26.0",
     "mypy>=2.3.0",
+    "pip-audit>=2.10.1",
     "pre-commit>=4.6.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",

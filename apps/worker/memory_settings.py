@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
 from typing import Final
 
@@ -129,8 +130,8 @@ class MemorySettings:
             "index_max_files_per_scan": self.index_max_files_per_scan,
         }
         for name, value in positives.items():
-            if value <= 0:
-                raise ValueError(f"{name} must be positive")
+            if not isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be positive and finite")
         if self.max_total_context_chars > _DEFAULT_MAX_CONTEXT_CHARS:
             raise ValueError("max_total_context_chars exceeds the RuntimeSettings default")
         if self.max_excerpt_chars * self.max_excerpts > self.max_total_context_chars:

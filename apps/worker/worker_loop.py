@@ -241,8 +241,16 @@ class WorkerLoop:
         except Exception:  # noqa: BLE001 - one malformed schedule must not stop delivery
             materialized = 0
             lifecycle_log(logger, logging.WARNING, "scheduler.materialization_failed")
-        recovered = self._recover_expired_leases.execute()
-        approvals = self._expire_due_approvals.execute()
+        try:
+            recovered = self._recover_expired_leases.execute()
+        except Exception:  # noqa: BLE001 - maintenance jobs are isolated from one another
+            recovered = 0
+            lifecycle_log(logger, logging.WARNING, "worker.lease_recovery_failed")
+        try:
+            approvals = self._expire_due_approvals.execute()
+        except Exception:  # noqa: BLE001 - maintenance jobs are isolated from one another
+            approvals = []
+            lifecycle_log(logger, logging.WARNING, "worker.approval_expiry_failed")
         lifecycle_log(
             logger, logging.INFO, "worker.expired_leases_recovered", recovered_count=recovered
         )

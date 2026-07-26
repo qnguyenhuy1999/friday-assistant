@@ -33,13 +33,28 @@ function ScheduleRow({
         : ` (${schedule.run_at})`}
       <button onClick={() => onInspect(schedule.id)}>Inspect fires</button>
       {schedule.status === "active" && (
-        <button onClick={() => control.mutate("pause")}>Pause</button>
+        <button
+          disabled={control.isPending}
+          onClick={() => control.mutate("pause")}
+        >
+          Pause
+        </button>
       )}
       {schedule.status === "paused" && (
-        <button onClick={() => control.mutate("resume")}>Resume</button>
+        <button
+          disabled={control.isPending}
+          onClick={() => control.mutate("resume")}
+        >
+          Resume
+        </button>
       )}
       {(schedule.status === "active" || schedule.status === "paused") && (
-        <button onClick={() => control.mutate("cancel")}>Cancel</button>
+        <button
+          disabled={control.isPending}
+          onClick={() => control.mutate("cancel")}
+        >
+          Cancel
+        </button>
       )}
       {control.isError && <span role="alert"> Failed to update schedule.</span>}
     </li>

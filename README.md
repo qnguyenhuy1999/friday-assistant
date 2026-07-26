@@ -1,163 +1,223 @@
 # Friday Agent OS
 
-Local-first engineering agent operating system.
+**Local-first personal AI operating layer with durable execution, explicit approval, structural memory, computer use, and scheduled automation.**
 
-## Status
+Friday combines ideas from agent systems such as [Javis OS](https://github.com/blogminhquy/javis-os) and [Hermes Agent](https://github.com/NousResearch/hermes-agent), while keeping execution authority inside a Friday-owned runtime.
 
-**Phase 4 — domain and contract freeze.** The repository now has a
-framework-independent domain model (`src/friday/domain`), application
-ports (`src/friday/application/ports.py`), and canonical JSON Schema
-contracts (`packages/contracts/schemas/v1`) — still with no persistence,
-worker, AI integration, or frontend behavior. All Phase 3 quality gates
-(formatting, linting, typing, tests, coverage, dependency/repository/
-provenance policy, lockfile reproducibility, shell/Markdown hygiene)
-continue to apply. See
-[docs/architecture/domain-model.md](docs/architecture/domain-model.md) and
-[docs/architecture/contracts.md](docs/architecture/contracts.md).
+Friday is a greenfield implementation, not a fork of either project.
 
-## Repository Structure
+## Core principle
+
+```text
+Claude proposes actions.
+Friday validates, authorizes, executes, persists and fences actions.
+```
+
+Claude CLI is used as a subscription-backed reasoning engine.
+
+Claude does not directly execute shell commands, write files, invoke MCP servers, or control the desktop. All side effects pass through Friday's application/runtime boundaries and `ToolGateway`.
+
+## Current architecture
+
+```text
+                        Human
+                          │
+                    Web control plane
+                          │
+                       TS SDK
+                          │
+                         API
+                          │
+              ┌──────── Friday ────────┐
+              │                        │
+          Application               Worker
+              │                        │
+              │                  AgentRunProcessor
+              │                        │
+              └──────────┬─────────────┘
+                         │
+                    Claude CLI
+                   reasoning only
+                         │
+                   proposes action
+                         │
+                  ExecuteToolAction
+                         │
+                    ToolGateway
+                  ┌──────┼────────┐
+                  │      │        │
+             Workspace Memory  Computer
+                       │          │
+                    Obsidian   cua-driver
+                       ↕
+                    Graphify
+```
+
+Scheduled automation adds:
+
+```text
+Schedule
+↓
+ScheduleFire
+↓
+Run
+↓
+existing Worker/runtime
+```
+
+## Implemented
+
+### Durable runtime
+
+- Task / Run / RunStep lifecycle
+- SQL persistence and Alembic migrations
+- durable work queue
+- worker claims and leases
+- retries and restart recovery
+- durable events
+- artifact lifecycle
+
+### Safety and approvals
+
+- risk assessment
+- exact approval fingerprints
+- one-shot `ApprovalRequest` lifecycle
+- durable `ToolInvocation` records
+- worker claim fencing
+- ambiguous non-idempotent execution protection
+
+### Claude subscription brain
+
+Friday uses locally authenticated Claude CLI credentials.
+
+The Claude process is intentionally brain-only and cannot directly use filesystem, shell, MCP, or computer tools. Friday owns action validation, authorization, durable execution, and side-effect fencing.
+
+### Memory
+
+```text
+Obsidian = canonical human-owned memory
+Graphify = derived/rebuildable structural index
+Friday   = retrieval, provenance, budgeting and write policy
+```
+
+Memory retrieval is bounded and structural results are re-read from the canonical vault before being inserted into context. Graphify remains disposable derived state rather than a source of truth.
+
+### Computer use
+
+Friday integrates `cua-driver` behind a `ComputerDriver` abstraction and `ComputerToolGateway`.
+
+Claude cannot reach the driver directly. Desktop mutations use the same approval, claim-fencing, and durable execution path as other protected tools.
+
+### API, SDK and Web
+
+- FastAPI control plane
+- generated versioned HTTP contracts
+- TypeScript SDK
+- React Web UI
+- runtime response validation
+- browser E2E coverage
+
+The browser reaches Friday through the SDK and API; it does not directly reach persistence, worker internals, Claude, memory, or the computer driver.
+
+### Durable scheduled automations
+
+- one-shot schedules
+- cron schedules
+- IANA timezone support
+- pause / resume / cancel
+- `ScheduleFire` history
+- durable occurrence idempotency
+- overlap prevention across retry execution lineage
+- downtime coalescing
+- restart recovery
+- normal approval semantics for scheduled Runs
+
+A schedule decides when a Run exists; scheduled automation never executes tools directly.
+
+## Repository structure
 
 ```text
 apps/
-├── api/        Python API delivery process (composition root)
-├── worker/     Python worker delivery process (composition root)
-└── web/        TypeScript browser control-plane shell (@friday/web)
+├── api/
+├── worker/
+└── web/
+
 src/friday/
-├── domain/         business types and rules — no outward dependency
-├── application/     use cases — may depend on domain only
-└── infrastructure/  adapters — may depend on application and domain
+├── domain/
+├── application/
+└── infrastructure/
+
 packages/
-├── contracts/  language-neutral protocol definitions (@friday/contracts)
-└── sdk-ts/     TypeScript client SDK surface (@friday/sdk)
+├── contracts/
+└── sdk-ts/
+
 tests/
-├── domain/        domain entity/value-object unit and state-machine tests
-├── application/   application port structural-typing tests
-├── contracts/     JSON Schema validity, reference, example, and compatibility tests
-├── architecture/  import-boundary and repository-layout checks
-├── policy/        dependency/repository/provenance/sensitive-file/link policy checks
-└── toolchain/     Phase 1 toolchain smoke test
 ```
 
-Dependency direction: `apps/*` and `infrastructure` may depend on
-`application`, which may depend on `domain`; the arrow never points the
-other way. `packages/sdk-ts` consumes `packages/contracts`, never
-`apps/web` internals. See
-[docs/architecture/README.md](docs/architecture/README.md) for the full
-diagram and enforcement mechanism.
+Dependency direction remains:
 
-## Greenfield Implementation
+```text
+delivery/infrastructure
+        ↓
+application
+        ↓
+domain
+```
 
-Friday Agent OS is a clean-room, greenfield implementation. It is not a fork,
-copy, or migration of any other repository. Where other systems (e.g. Javis
-OS, Hermes Agent) are referenced during design, they are used only as
-behavioral or product references — see
-[docs/governance/provenance.md](docs/governance/provenance.md) for the exact
-rules governing that.
+Domain never depends outward. See [docs/architecture/README.md](docs/architecture/README.md) for architecture documentation and [docs/governance/provenance.md](docs/governance/provenance.md) for the project's clean-room reference policy.
 
-## High-Level Product Goals
+## Current roadmap
 
-- Provide a local-first operating system for an engineering agent that can
-  plan, execute, and verify software work.
-- Keep a clear separation between domain logic, application use cases, and
-  infrastructure/delivery concerns.
-- Support tool and computer-use execution under explicit, reviewable policy
-  controls.
-- Favor structural code/knowledge retrieval and curated memory over ad hoc
-  context stuffing.
+Completed core foundations through:
 
-## Phase 0 Scope
+```text
+Phase 16 — Durable Scheduled Automations
+```
 
-This phase establishes only the repository foundation:
+Remaining v1 phases:
 
-- Git initialization on `main`
-- Repository metadata (`README.md`, `CONTRIBUTING.md`, `SECURITY.md`)
-- Editor and line-ending configuration (`.editorconfig`, `.gitattributes`)
-- `.gitignore` for the anticipated Python/Node/local-first stack
-- Governance documentation (provenance and repository rules)
-- Architecture documentation describing future boundaries only
+```text
+Phase 17 — Conversational Voice Interface
+Phase 18 — Friday-owned MCP & External Integrations
+Phase 19 — Messaging Gateway & Scheduled Delivery
+Phase 20 — Skills & Self-Improvement Loop
+Phase 21 — Agents, Workflows & Delegation
+```
 
-## Intentionally Not Implemented Yet
-
-- No persistence, worker, or AI/Claude runtime integration
-- No frameworks (FastAPI, React, or similar)
-- No frontend or computer-use sidecar behavior
-- No infrastructure adapters implementing the application ports
-
-## Planned Architecture Areas
-
-See [docs/architecture/README.md](docs/architecture/README.md) for the
-planned high-level architectural boundaries (domain, application,
-infrastructure, contracts, SDK, worker, web control plane, tool gateway,
-Claude runtime, structural retrieval, curated memory, and a computer-use
-sidecar). Only domain, application ports, and contracts are implemented so
-far.
-
-## Documentation
-
-- [docs/architecture/README.md](docs/architecture/README.md) — source
-  organization and architectural boundaries
-- [docs/architecture/domain-model.md](docs/architecture/domain-model.md) —
-  domain entities, value objects, and lifecycle rules
-- [docs/architecture/contracts.md](docs/architecture/contracts.md) — JSON
-  Schema contract set and versioning policy
-- [docs/governance/provenance.md](docs/governance/provenance.md) — rules on
-  referencing or reusing external code
-- [docs/governance/repository-rules.md](docs/governance/repository-rules.md)
-  — cross-phase contribution rules
-- [LICENSE](LICENSE) — MIT License
-- [CONTRIBUTING.md](CONTRIBUTING.md) — how to contribute
-- [SECURITY.md](SECURITY.md) — security policy
+After Phase 21, additional work is considered product expansion rather than core architecture.
 
 ## Development
 
-**Phase status:** Phase 4 — domain and contract freeze. No application
-runtime exists yet (no API, no frontend, no database, no AI integration)
-— only the domain model, application ports, JSON Schema contracts, and the
-quality gates described below.
+Required runtimes and tooling include Python 3.13+, Node.js >=22 <25, Corepack-managed pnpm, `uv`, and `just`.
 
-Required runtimes:
-
-- Python 3.13+ (managed via [uv](https://docs.astral.sh/uv/))
-- Node.js >=22 <25 (installed via Corepack-managed pnpm; developed against 22.23.1 "Jod" LTS)
-- pnpm 11.16.0 (activated via Corepack from `packageManager` in
-  `package.json`)
-- [`just`](https://just.systems) as the local command runner
-
-Bootstrap the toolchain:
+Bootstrap:
 
 ```bash
 just bootstrap
 ```
 
-Run the full validation suite (format check, lint, typecheck, tests):
+Fast validation:
 
 ```bash
 just check
 ```
 
-See `justfile` for the complete list of available commands.
-
-## Quality Gates
-
-Formatting, linting, typing, tests, coverage, architecture/dependency/
-repository/provenance policy, lockfile reproducibility, and shell/Markdown
-hygiene are all enforced through the same small set of `just` recipes,
-invoked identically by pre-commit hooks and CI. See
-[docs/governance/quality-gates.md](docs/governance/quality-gates.md) for the
-full gate-by-gate breakdown.
+Full CI-equivalent validation:
 
 ```bash
-# Install git hooks (default stage + pre-push stage)
-uv run pre-commit install
-uv run pre-commit install --hook-type pre-push
-
-just check       # fast, non-mutating local gate
-just ci          # full CI-equivalent gate
-just pre-commit  # run every configured hook against all files
+just ci
 ```
 
-## Development Status Disclaimer
+Pre-commit:
 
-This project is in an early, pre-release state. Interfaces, structure, and
-scope are expected to change significantly between phases. Nothing in this
-repository should be treated as stable or production-ready.
+```bash
+just pre-commit
+```
+
+See `justfile` for the complete command set and `docs/` for architecture, governance, and operational documentation.
+
+## Project status
+
+Friday is actively developed and should still be treated as pre-release software.
+
+The core execution/runtime foundations are implemented through Phase 16; voice, external MCP integrations, messaging, skills/self-improvement, and multi-agent workflows remain upcoming work.

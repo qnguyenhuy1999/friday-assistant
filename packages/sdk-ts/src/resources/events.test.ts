@@ -21,8 +21,9 @@ class Source {
     this.closed = true;
   }
   emit(type: string) {
-    this.listeners.get(type)?.({
-      data: JSON.stringify({
+    this.emitData(
+      type,
+      JSON.stringify({
         event_id: "e",
         run_id: "r",
         step_id: null,
@@ -31,7 +32,10 @@ class Source {
         occurred_at: "x",
         payload: null,
       }),
-    } as unknown as Event);
+    );
+  }
+  emitData(type: string, data: string) {
+    this.listeners.get(type)?.({ data } as unknown as Event);
   }
 }
 describe("EventsResource", () => {
@@ -80,6 +84,24 @@ describe("EventsResource", () => {
     off();
     Source.latest.emit("run_started");
     expect(received).toEqual([]);
+    stream.close();
+  });
+  it("reports malformed SSE frames without throwing", () => {
+    const http = { request: vi.fn() } as unknown as FridayHttpClient;
+    const stream = new EventsResource(http, "http://api.test").streamForRun(
+      "r",
+      { EventSourceImpl: Source as unknown as typeof EventSource },
+    );
+    const received = vi.fn();
+    const errors = vi.fn();
+    stream.onEvent(received);
+    stream.onError(errors);
+
+    expect(() =>
+      Source.latest.emitData("run_started", "{bad json"),
+    ).not.toThrow();
+    expect(received).not.toHaveBeenCalled();
+    expect(errors).toHaveBeenCalledOnce();
     stream.close();
   });
   it("lists run and task events with paging params", async () => {

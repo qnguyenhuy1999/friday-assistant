@@ -50,12 +50,7 @@ jobs:
       - name: Frozen install + lockfile drift check
         run: just lock-check
 
-      - name: Verify generated HTTP contracts are current
-        run: |
-          pnpm generate:contracts
-          git diff --exit-code
-
-      - name: Fast local gate (format, lint, typecheck, tests, architecture, policy)
+      - name: Fast local gate (contracts, format, lint, shell, types, tests)
         run: just check
 
       - name: Coverage
@@ -67,6 +62,9 @@ jobs:
       - name: Browser E2E
         run: just e2e
 
+      - name: Dependency vulnerability audit
+        run: just dependency-audit
+
       - name: Upload browser diagnostics
         if: failure()
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
@@ -74,9 +72,6 @@ jobs:
           name: browser-e2e-diagnostics
           path: apps/web/test-results
           if-no-files-found: ignore
-
-      - name: Pre-commit (all hooks, all stages)
-        run: just pre-commit
 
       - name: Verify working tree is clean
         run: |

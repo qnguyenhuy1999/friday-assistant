@@ -47,6 +47,7 @@ export function ApprovalsPage({
               input: { resolver, resolution_note },
             });
           }}
+          isPending={approve.isPending || reject.isPending}
         />
       )}
     </section>

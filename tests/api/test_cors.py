@@ -116,19 +116,20 @@ def test_wildcard_or_path_cors_origin_fails_early(origin: str) -> None:
         )
 
 
-def test_non_loopback_bind_requires_explicit_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_non_loopback_bind_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FRIDAY_API_HOST", "0.0.0.0")
     monkeypatch.delenv("FRIDAY_API_ALLOW_REMOTE_BIND", raising=False)
 
-    with pytest.raises(ValueError, match="ALLOW_REMOTE_BIND"):
+    with pytest.raises(ValueError, match="loopback"):
         ApiSettings.from_env()
 
 
-def test_remote_bind_can_be_explicitly_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FRIDAY_API_HOST", "0.0.0.0")
+def test_legacy_remote_bind_opt_in_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FRIDAY_API_HOST", "127.0.0.1")
     monkeypatch.setenv("FRIDAY_API_ALLOW_REMOTE_BIND", "true")
 
-    assert ApiSettings.from_env().allow_remote_bind is True
+    with pytest.raises(ValueError, match="no longer supported"):
+        ApiSettings.from_env()
 
 
 def test_invalid_api_environment_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,4 +143,12 @@ def test_invalid_request_size_setting_fails_early(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("FRIDAY_API_MAX_REQUEST_BYTES", "0")
 
     with pytest.raises(ValueError, match="max_request_bytes must be positive"):
+        ApiSettings.from_env()
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_sse_poll_interval_must_be_finite(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("FRIDAY_API_SSE_POLL_INTERVAL_SECONDS", value)
+
+    with pytest.raises(ValueError, match="finite"):
         ApiSettings.from_env()

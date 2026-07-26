@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
 
 _DEFAULT_BRAIN_BACKEND = "claude_cli"
@@ -69,15 +70,17 @@ class RuntimeSettings:
             "max_tool_calls_per_claim": self.max_tool_calls_per_claim,
             "max_context_chars": self.max_context_chars,
             "max_response_bytes": self.max_response_bytes,
+            "max_processing_seconds": self.max_processing_seconds,
             "tool_timeout_seconds": self.tool_timeout_seconds,
+            "tool_max_timeout_seconds": self.tool_max_timeout_seconds,
             "tool_max_stdout_bytes": self.tool_max_stdout_bytes,
             "tool_max_stderr_bytes": self.tool_max_stderr_bytes,
             "tool_max_file_bytes": self.tool_max_file_bytes,
             "tool_max_list_entries": self.tool_max_list_entries,
         }
         for name, value in positives.items():
-            if value <= 0:
-                raise ValueError(f"{name} must be positive")
+            if not isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be positive and finite")
         if self.max_yield_seconds < 0:
             raise ValueError("max_yield_seconds must be >= 0")
         if self.tool_max_timeout_seconds < self.tool_timeout_seconds:

@@ -192,6 +192,10 @@ class ApprovalRequest:
         resolution_note: str | None,
     ) -> None:
         self._require_status(ApprovalStatus.PENDING, target=target)
+        if resolver is not None:
+            resolver = resolver.strip()
+            if not resolver:
+                raise DomainValidationError("ApprovalRequest.resolver must not be empty")
         self._resolved_at = ensure_utc(at)
         self._resolver = resolver
         self._resolution_note = resolution_note

@@ -7,7 +7,14 @@ export function TasksPage({
   onRunStarted: (runId: string) => void;
   onViewSchedules?: (taskId: string) => void;
 }) {
-  const { data, isLoading, isError } = useTasks();
+  const {
+    data,
+    isLoading,
+    isError,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useTasks();
   const create = useCreateTask();
   const start = useStartRun();
   const [title, setTitle] = useState("");
@@ -36,23 +43,36 @@ export function TasksPage({
       {isLoading && <p>Loading tasks…</p>}
       {isError && <p role="alert">Failed to load tasks.</p>}
       <ul>
-        {data?.items.map((task) => (
-          <li key={task.id}>
-            {task.title} — {task.status}{" "}
-            <button
-              disabled={start.isPending}
-              onClick={() =>
-                start.mutate(task.id, {
-                  onSuccess: (r) => onRunStarted(r.run_id),
-                })
-              }
-            >
-              Start run
-            </button>
-            <button onClick={() => onViewSchedules(task.id)}>Schedules</button>
-          </li>
-        ))}
+        {data?.pages
+          .flatMap((page) => page.items)
+          .map((task) => (
+            <li key={task.id}>
+              {task.title} — {task.status}{" "}
+              <button
+                disabled={start.isPending}
+                onClick={() =>
+                  start.mutate(task.id, {
+                    onSuccess: (r) => onRunStarted(r.run_id),
+                  })
+                }
+              >
+                Start run
+              </button>
+              <button onClick={() => onViewSchedules(task.id)}>
+                Schedules
+              </button>
+            </li>
+          ))}
       </ul>
+      {hasNextPage && (
+        <button
+          type="button"
+          disabled={isFetchingNextPage}
+          onClick={() => void fetchNextPage()}
+        >
+          {isFetchingNextPage ? "Loading more…" : "Load more"}
+        </button>
+      )}
     </section>
   );
 }

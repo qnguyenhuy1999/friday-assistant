@@ -5,13 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from friday.application.errors import ScheduleNotFound, TaskNotFound
+from friday.application.errors import EntityConflict, ScheduleNotFound, TaskNotFound
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.schedule_recurrence import (
     _resolve_run_at,
     first_occurrence,
     next_occurrence,
 )
+from friday.domain.errors import InvalidStateTransition
 from friday.domain.identifiers import ScheduleId, TaskId
 from friday.domain.schedule import Schedule, ScheduleKind, validate_timezone
 
@@ -74,10 +75,13 @@ class ScheduleControl:
             if task_id is not None and schedule.task_id != task_id:
                 raise ScheduleNotFound(schedule_id)
             now = self._clock.now()
-            if action == "resume":
-                schedule.resume(now, next_occurrence(schedule, now))
-            else:
-                getattr(schedule, action)(now)
+            try:
+                if action == "resume":
+                    schedule.resume(now, next_occurrence(schedule, now))
+                else:
+                    getattr(schedule, action)(now)
+            except InvalidStateTransition as exc:
+                raise EntityConflict(str(exc)) from exc
             uow.schedules.save(schedule)
             uow.commit()
             return schedule

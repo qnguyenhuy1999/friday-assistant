@@ -50,10 +50,16 @@ const eventTypes: RunEventType[] = [
 export class RunEventStream {
   private readonly source: EventSource;
   private readonly listeners = new Set<(event: RunEvent) => void>();
+  private readonly errorListeners = new Set<(event: Event) => void>();
   private readonly handler = (message: MessageEvent<string>) => {
-    const event: unknown = JSON.parse(message.data);
-    validateRunEvent(event, "SSE run event");
-    for (const listener of this.listeners) listener(event as RunEvent);
+    try {
+      const event: unknown = JSON.parse(message.data);
+      validateRunEvent(event, "SSE run event");
+      for (const listener of this.listeners) listener(event as RunEvent);
+    } catch {
+      const error = new Event("error");
+      for (const listener of this.errorListeners) listener(error);
+    }
   };
   constructor(url: string, Source: typeof EventSource) {
     this.source = new Source(url);
@@ -65,8 +71,12 @@ export class RunEventStream {
     return () => this.listeners.delete(listener);
   }
   onError(listener: (event: Event) => void) {
+    this.errorListeners.add(listener);
     this.source.addEventListener("error", listener);
-    return () => this.source.removeEventListener("error", listener);
+    return () => {
+      this.errorListeners.delete(listener);
+      this.source.removeEventListener("error", listener);
+    };
   }
   close() {
     this.source.close();

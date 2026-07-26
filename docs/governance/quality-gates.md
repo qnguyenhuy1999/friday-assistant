@@ -1,8 +1,8 @@
 # Quality Gates
 
-This document describes the repository quality gates through Phase 5: what each one checks, the
-exact command that runs it, where it runs (local/pre-commit/pre-push/CI), and
-how to change it safely. It complements
+This document describes the repository quality gates through Phase 16: what
+each one checks, the exact command that runs it, where it runs
+(local/pre-commit/pre-push/CI), and how to change it safely. It complements
 [repository-rules.md](repository-rules.md) and
 [provenance.md](provenance.md), which describe the policies these gates
 enforce; this document describes the enforcement mechanism itself.
@@ -38,7 +38,7 @@ implemented.
   (bundles the real ShellCheck binary, pinned through `uv.lock` — no system
   install required).
 - **Command:** `just shellcheck`.
-- **Runs:** local, pre-commit (default stage), CI through `just pre-commit`.
+- **Runs:** local, pre-commit (default stage), CI through `just check`.
 
 ## Static Typing
 
@@ -70,10 +70,10 @@ implemented.
 
 - **Purpose:** give a contributor a fast, explicit signal that the real
   Alembic migration (not just the test-only `create_all()` schema) still
-  produces the correct seven-table schema.
+  produces the complete current schema.
 - **Implementation:** `tests/persistence/test_migrations.py` — runs
   `alembic upgrade head` against a throwaway SQLite file and asserts all
-  seven domain tables (plus `alembic_version`) exist, then proves
+  application tables (plus `alembic_version`) exist, then proves
   downgrade-then-upgrade is idempotent.
 - **Command:** `just migration-check`.
 - **Runs:** local, CI (`just check`); a subset already exercised by
@@ -96,7 +96,7 @@ implemented.
 
 - **Purpose:** verify the SQLite adapter (`src/friday/infrastructure/persistence`)
   — repositories, mappers, engine/PRAGMA setup, and migrations — covering
-  all seven application ports (see
+  every current application persistence port (see
   [../architecture/persistence.md](../architecture/persistence.md)).
 - **Implementation:** `pytest`, covering all of `tests/persistence`
   (repository, mapper, database, and migration tests).
@@ -226,6 +226,15 @@ implemented.
 - **Runs:** local (manual), pre-commit (**pre-push** stage, since it
   performs real installs), CI (also serves as CI's actual frozen-install
   step).
+
+## Dependency Vulnerability Audit
+
+- **Purpose:** detect published vulnerabilities in locked Python and
+  production Node dependencies.
+- **Implementation:** `pip-audit --local` and `pnpm audit --prod`.
+- **Command:** `just dependency-audit`.
+- **Runs:** the full `just ci` release gate and CI, because advisory databases
+  require network access.
 
 ## Changing a Policy Safely
 

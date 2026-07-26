@@ -85,6 +85,17 @@ def test_approval_errors_are_mapped_to_404_409_and_422(app: FastAPI) -> None:
     assert conflict.status_code == 409
 
 
+def test_approval_resolution_requires_a_non_blank_resolver(app: FastAPI) -> None:
+    seeded = seed_active_run(app)
+    with TestClient(app) as client:
+        approval_id = _request(client, str(seeded.run_id))
+        empty = client.post(f"/v1/approvals/{approval_id}/approve", json={"resolver": ""})
+        blank = client.post(f"/v1/approvals/{approval_id}/approve", json={"resolver": "   "})
+
+    assert empty.status_code == 422
+    assert blank.status_code == 422
+
+
 class _StaticClock:
     def __init__(self, value: datetime) -> None:
         self._value = value

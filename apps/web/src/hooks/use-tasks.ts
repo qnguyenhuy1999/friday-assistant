@@ -1,11 +1,18 @@
 import type { CreateTaskBody } from "@friday/contracts";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { friday } from "../friday-client";
 export const tasksQueryKey = ["tasks"] as const;
 export function useTasks() {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: tasksQueryKey,
-    queryFn: () => friday.tasks.list({ limit: 25 }),
+    queryFn: ({ pageParam }) =>
+      friday.tasks.list({ limit: 25, cursor: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
   });
 }
 export function useCreateTask() {

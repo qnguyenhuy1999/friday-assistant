@@ -4,15 +4,18 @@ export function ApprovalDetail({
   approval,
   onApprove,
   onReject,
+  isPending = false,
 }: {
   approval: ApprovalRequest;
   onApprove: (resolver: string, note?: string) => Promise<void>;
   onReject: (resolver: string, note?: string) => Promise<void>;
+  isPending?: boolean;
 }) {
   const [resolver, setResolver] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const decide = async (fn: (name: string, note?: string) => Promise<void>) => {
+    if (isPending) return;
     setError(null);
     const name = resolver.trim();
     if (!name) {
@@ -68,10 +71,18 @@ export function ApprovalDetail({
             onChange={(e) => setNote(e.target.value)}
           />
           {error && <p role="alert">{error}</p>}
-          <button type="button" onClick={() => decide(onApprove)}>
+          <button
+            type="button"
+            disabled={isPending}
+            onClick={() => decide(onApprove)}
+          >
             Approve
           </button>
-          <button type="button" onClick={() => decide(onReject)}>
+          <button
+            type="button"
+            disabled={isPending}
+            onClick={() => decide(onReject)}
+          >
             Reject
           </button>
         </form>

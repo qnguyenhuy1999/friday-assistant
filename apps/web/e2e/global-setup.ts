@@ -1,11 +1,10 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 
 const root = join(import.meta.dirname, "../../..");
-const apiUrl = "http://127.0.0.1:8015";
-const webUrl = "http://127.0.0.1:5175";
 
 function command(
   name: string,
@@ -30,14 +29,56 @@ async function waitFor(url: string, process: ChildProcess): Promise<void> {
   throw new Error(`Timed out waiting for ${url}`);
 }
 
+async function reservePort(): Promise<{ server: Server; port: number }> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string")
+    throw new Error("Failed to reserve an E2E port");
+  return { server, port: address.port };
+}
+
+async function dynamicPorts(): Promise<[number, number]> {
+  const first = await reservePort();
+  const second = await reservePort();
+  await Promise.all(
+    [first.server, second.server].map(
+      (server) =>
+        new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        ),
+    ),
+  );
+  return [first.port, second.port];
+}
+
+async function stop(processes: ChildProcess[]): Promise<void> {
+  for (const process of processes)
+    if (process.exitCode === null) process.kill("SIGTERM");
+  await Promise.all(
+    processes.map((process) =>
+      process.exitCode !== null
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => process.once("exit", () => resolve())),
+    ),
+  );
+}
+
 export default async function globalSetup() {
   const directory = mkdtempSync(join(tmpdir(), "friday-e2e-"));
+  const [apiPort, webPort] = await dynamicPorts();
+  const apiUrl = `http://127.0.0.1:${apiPort}`;
+  const webUrl = `http://127.0.0.1:${webPort}`;
+  process.env.FRIDAY_E2E_WEB_URL = webUrl;
   const databaseUrl = `sqlite:///${join(directory, "friday.db")}`;
   const env = {
     ...process.env,
     FRIDAY_API_DATABASE_URL: databaseUrl,
     FRIDAY_API_HOST: "127.0.0.1",
-    FRIDAY_API_PORT: "8015",
+    FRIDAY_API_PORT: String(apiPort),
     FRIDAY_API_CORS_ORIGINS: webUrl,
     FRIDAY_WORKER_DATABASE_URL: databaseUrl,
     FRIDAY_WORKER_ID: "browser-e2e-worker",
@@ -74,7 +115,7 @@ export default async function globalSetup() {
       "--host",
       "127.0.0.1",
       "--port",
-      "8015",
+      String(apiPort),
     ],
     env,
   );
@@ -93,19 +134,21 @@ export default async function globalSetup() {
       "--host",
       "127.0.0.1",
       "--port",
-      "5175",
+      String(webPort),
     ],
     env,
   );
-  await Promise.all([waitFor(`${apiUrl}/ready`, api), waitFor(webUrl, web)]);
+  const processes = [web, worker, api];
+  try {
+    await Promise.all([waitFor(`${apiUrl}/ready`, api), waitFor(webUrl, web)]);
+  } catch (error) {
+    await stop(processes);
+    rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
 
   return async () => {
-    for (const process of [web, worker, api]) process.kill("SIGTERM");
-    await Promise.all(
-      [web, worker, api].map(
-        (process) =>
-          new Promise<void>((resolve) => process.once("exit", () => resolve())),
-      ),
-    );
+    await stop(processes);
+    rmSync(directory, { recursive: true, force: true });
   };
 }

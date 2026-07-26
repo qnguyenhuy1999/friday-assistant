@@ -65,6 +65,13 @@ lock-check:
 generate-contracts:
     pnpm generate:contracts
 
+contracts-check:
+    pnpm check:contracts
+
+dependency-audit:
+    uv run pip-audit --local
+    pnpm audit:dependencies
+
 worker:
     uv run python -m apps.worker.main
 
@@ -85,23 +92,19 @@ pre-commit:
     uv run pre-commit run --all-files
     uv run pre-commit run --all-files --hook-stage pre-push
 
-# Fast, non-mutating local gate. architecture-check, policy-check,
-# domain-check, schema-check, migration-check, and persistence-check are
-# subsets already exercised by `test` (tests/architecture, tests/policy,
-# tests/domain, tests/application, tests/contracts, tests/persistence);
-# they're re-run here individually so a contributor gets an explicit,
-# fast-failing signal naming exactly which dimension broke, at negligible
-# cost (each subset runs in well under a second).
-check: generate-contracts format-check lint typecheck test test-ts architecture-check policy-check domain-check schema-check schema-parity-check migration-check persistence-check
+# Fast, non-mutating local gate. The full Python test run already includes
+# architecture, policy, domain, contract, migration, and persistence tests;
+# their named recipes remain available for focused diagnosis without making
+# every normal check run those same tests twice.
+check: contracts-check format-check lint shellcheck typecheck test test-ts
 
 # Full CI-equivalent gate. test-cov and lock-check are not part of `check`
 # because test-cov needs coverage instrumentation (slower, and duplicates
 # `test`'s pass/fail signal) and lock-check performs real package-manager
 # installs (mutates the local environment, not appropriate for a fast local
-# loop). pre-commit's pre-push stage re-runs typecheck/test-cov/lock-check
-# again as an end-to-end proof that the hook wiring itself works — this is
-# intentional overlap, not a bug.
-ci: check test-cov e2e lock-check pre-commit
+# loop). Dependency audits need network access, so they run only in the full
+# release-equivalent gate.
+ci: check test-cov e2e lock-check dependency-audit
     git diff --exit-code
     test -z "$(git status --porcelain)"
 

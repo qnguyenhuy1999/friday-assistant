@@ -36,6 +36,7 @@ from __future__ import annotations
 import os
 import shlex
 from dataclasses import dataclass
+from math import isfinite
 
 _DEFAULT_COMPUTER_USE_ENABLED = False
 _DEFAULT_CUA_DRIVER_CMD = "cua-driver mcp"
@@ -95,8 +96,8 @@ class ComputerSettings:
             "max_elements": self.max_elements,
         }
         for name, value in positives.items():
-            if value <= 0:
-                raise ValueError(f"{name} must be positive")
+            if not isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be positive and finite")
         if self.max_scroll_amount > _MAX_SCROLL_AMOUNT_CEILING:
             raise ValueError(
                 f"max_scroll_amount must not exceed {_MAX_SCROLL_AMOUNT_CEILING} notches"

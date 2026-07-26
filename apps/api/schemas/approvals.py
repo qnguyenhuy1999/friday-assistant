@@ -4,10 +4,10 @@ application layer. Never reused as commands or results themselves."""
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, StringConstraints
 
 from friday.application.commands import (
     ApproveRequestCommand,
@@ -43,7 +43,7 @@ class RequestApprovalBody(BaseModel):
 
 
 class ResolveApprovalBody(BaseModel):
-    resolver: str
+    resolver: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     resolution_note: str | None = None
 
     def to_approve_command(self, approval_id: ApprovalRequestId) -> ApproveRequestCommand:

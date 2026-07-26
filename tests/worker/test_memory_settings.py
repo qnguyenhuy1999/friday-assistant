@@ -131,6 +131,17 @@ def test_each_numeric_limit_must_be_positive(
         MemorySettings.from_env()
 
 
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_float_limits_must_be_finite(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str
+) -> None:
+    _configure_valid_environment(monkeypatch, tmp_path)
+    monkeypatch.setenv("FRIDAY_GRAPHIFY_BUILD_TIMEOUT_SECONDS", value)
+
+    with pytest.raises(ValueError, match="finite"):
+        MemorySettings.from_env()
+
+
 def test_total_context_budget_cannot_exceed_runtime_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

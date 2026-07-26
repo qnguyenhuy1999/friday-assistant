@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import timedelta
+from math import isfinite
 
 _DEFAULT_DATABASE_URL = "sqlite:///./friday.db"
 _DEFAULT_LEASE_SECONDS = 60.0
@@ -53,17 +54,20 @@ class WorkerSettings:
             raise ValueError("worker_id must not be empty or whitespace-only")
         if self.lease_duration <= timedelta(0):
             raise ValueError("lease_duration must be positive")
-        if self.heartbeat_interval_seconds <= 0:
-            raise ValueError("heartbeat_interval_seconds must be positive")
+        if not isfinite(self.heartbeat_interval_seconds) or self.heartbeat_interval_seconds <= 0:
+            raise ValueError("heartbeat_interval_seconds must be positive and finite")
         if self.heartbeat_interval_seconds >= self.lease_duration.total_seconds():
             raise ValueError(
                 "heartbeat_interval_seconds must be less than lease_duration "
                 "so the heartbeat leaves real margin under the lease"
             )
-        if self.poll_interval_seconds <= 0:
-            raise ValueError("poll_interval_seconds must be positive")
-        if self.maintenance_interval_seconds <= 0:
-            raise ValueError("maintenance_interval_seconds must be positive")
+        if not isfinite(self.poll_interval_seconds) or self.poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be positive and finite")
+        if (
+            not isfinite(self.maintenance_interval_seconds)
+            or self.maintenance_interval_seconds <= 0
+        ):
+            raise ValueError("maintenance_interval_seconds must be positive and finite")
         if self.candidate_limit <= 0:
             raise ValueError("candidate_limit must be positive")
         if self.maintenance_batch_size <= 0:
@@ -72,8 +76,8 @@ class WorkerSettings:
             raise ValueError("retry_max_attempts must be positive")
         if self.retry_base_delay <= timedelta(0):
             raise ValueError("retry_base_delay must be positive")
-        if self.retry_multiplier <= 0:
-            raise ValueError("retry_multiplier must be positive")
+        if not isfinite(self.retry_multiplier) or self.retry_multiplier <= 0:
+            raise ValueError("retry_multiplier must be positive and finite")
         if self.retry_max_delay <= timedelta(0):
             raise ValueError("retry_max_delay must be positive")
         if self.retry_max_delay < self.retry_base_delay:

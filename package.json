@@ -8,6 +8,8 @@
   },
   "scripts": {
     "generate:contracts": "node packages/contracts/scripts/generate-http-contracts.mjs",
+    "check:contracts": "node packages/contracts/scripts/generate-http-contracts.mjs --check",
+    "audit:dependencies": "pnpm audit --prod --audit-level moderate",
     "format": "prettier --write \"**/*.{json,yaml,yml}\" \"apps/**/*.{ts,tsx}\" \"packages/**/*.{ts,tsx}\" eslint.config.mjs",
     "format:check": "prettier --check \"**/*.{json,yaml,yml}\" \"apps/**/*.{ts,tsx}\" \"packages/**/*.{ts,tsx}\" eslint.config.mjs",
     "lint": "eslint .",

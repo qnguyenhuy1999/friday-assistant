@@ -111,6 +111,20 @@ def test_expire_from_pending_succeeds() -> None:
     assert request.status is ApprovalStatus.EXPIRED
 
 
+def test_resolver_is_trimmed() -> None:
+    request = _new_request()
+    request.approve(T1, resolver="  alice  ")
+    assert request.resolver == "alice"
+
+
+@pytest.mark.parametrize("resolver", ["", "   "])
+def test_approve_and_reject_refuse_blank_resolvers(resolver: str) -> None:
+    with pytest.raises(DomainValidationError, match="resolver"):
+        _new_request().approve(T1, resolver=resolver)
+    with pytest.raises(DomainValidationError, match="resolver"):
+        _new_request().reject(T1, resolver=resolver)
+
+
 @pytest.mark.parametrize("status", sorted(TERMINAL_APPROVAL_STATUSES, key=str))
 def test_terminal_statuses_reject_further_resolution(status: ApprovalStatus) -> None:
     request = _request_in(status)

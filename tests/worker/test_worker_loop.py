@@ -321,6 +321,40 @@ def test_run_maintenance_tick_recovers_expired_lease() -> None:
     assert item is not None and item.claimed_by is None
 
 
+@pytest.mark.parametrize("failing_job", ["recover", "expire"])
+def test_maintenance_jobs_are_isolated(failing_job: str, caplog: pytest.LogCaptureFixture) -> None:
+    _, _, loop, _ = _run_and_loop(ProcessingOutcome.succeeded())
+    calls: list[str] = []
+
+    class Recover:
+        def execute(self) -> int:
+            calls.append("recover")
+            if failing_job == "recover":
+                raise TransactionFailure("database unavailable")
+            return 1
+
+    class Expire:
+        def execute(self) -> list[object]:
+            calls.append("expire")
+            if failing_job == "expire":
+                raise TransactionFailure("database unavailable")
+            return [object()]
+
+    loop._recover_expired_leases = Recover()  # type: ignore[assignment]
+    loop._expire_due_approvals = Expire()  # type: ignore[assignment]
+    caplog.set_level(logging.WARNING, logger="apps.worker.worker_loop")
+
+    loop.run_maintenance_tick()
+
+    assert calls == ["recover", "expire"]
+    expected = (
+        "worker.lease_recovery_failed"
+        if failing_job == "recover"
+        else "worker.approval_expiry_failed"
+    )
+    assert any(getattr(record, "event", None) == expected for record in caplog.records)
+
+
 def test_serve_forever_stops_when_shutdown_is_already_set() -> None:
     _, _, loop, _ = _run_and_loop(ProcessingOutcome.succeeded())
     shutdown = Event()

@@ -70,10 +70,14 @@ class ComputerToolPolicy:
 _IDENTITY = "Requires {pid, window_id} from computer.window_list."
 
 _TARGET = (
-    "Address the target as element: {role, label} — the role and label survive the "
-    "re-capture Friday performs before acting. Use x/y (window-local screenshot "
-    "pixels, from an element's frame) only for surfaces with no label or when two "
-    "controls share one. Never both."
+    "Address the target only as element: {role, label} — the role and label survive "
+    "the re-capture Friday performs before acting. If no unique semantic element can "
+    "be identified, Friday cannot perform that delayed mutation in Phase 13. Do not "
+    "use coordinates."
+)
+
+_OPTIONAL_TARGET = (
+    "When a target is supplied, address it only as element: {role, label}; do not use coordinates."
 )
 
 _REVALIDATED = (
@@ -118,7 +122,7 @@ COMPUTER_TOOL_POLICY: dict[str, ComputerToolPolicy] = {
     "computer.click": ComputerToolPolicy(
         description=(
             f"Click a control. {_IDENTITY} {_TARGET} "
-            "Input: {pid, window_id, element?: {role, label}, x?: integer, y?: integer, "
+            "Input: {pid, window_id, element: {role, label}, "
             "button?: 'left'|'right'|'middle', count?: 1|2}. "
             f"{_REVALIDATED}"
         ),
@@ -129,11 +133,10 @@ COMPUTER_TOOL_POLICY: dict[str, ComputerToolPolicy] = {
         description=(
             f"Scroll a window, or a specific region of it. {_IDENTITY} "
             "Input: {pid, window_id, direction: 'up'|'down'|'left'|'right', "
-            "amount?: integer, by?: 'line'|'page', element?: {role, label}, "
-            "x?: integer, y?: integer}. "
+            "amount?: integer, by?: 'line'|'page', element?: {role, label}}. "
             "Omit the target to scroll the window's focused scroller; supply one to "
             "scroll a specific region, which is the only way to reach a nested "
-            "scrollable area. "
+            f"scrollable area. {_OPTIONAL_TARGET} "
             f"{_REVALIDATED}"
         ),
         read_only=False,
@@ -144,7 +147,7 @@ COMPUTER_TOOL_POLICY: dict[str, ComputerToolPolicy] = {
             f"Type literal text into one control. {_IDENTITY} {_TARGET} "
             "A target is required — text goes into a named field, not wherever focus "
             "happens to be. "
-            "Input: {pid, window_id, element?: {role, label}, x?: integer, y?: integer, "
+            "Input: {pid, window_id, element: {role, label}, "
             "text: string}. "
             "Literal characters only: no newline, no tab. Use computer.press_key for "
             "'enter' or 'tab', which are actions rather than content. "
@@ -157,10 +160,11 @@ COMPUTER_TOOL_POLICY: dict[str, ComputerToolPolicy] = {
     "computer.press_key": ComputerToolPolicy(
         description=(
             f"Press one named key. {_IDENTITY} "
-            "Input: {pid, window_id, key: string, element?: {role, label}, "
-            "x?: integer, y?: integer} where `key` is a named key such as 'enter' or "
+            "Input: {pid, window_id, key: string, element?: {role, label}} where `key` "
+            "is a named key such as 'enter' or "
             "'escape', or a single character. "
             "The target is optional: omit it to send the key to the window. "
+            f"{_OPTIONAL_TARGET} "
             f"{_REVALIDATED}"
         ),
         read_only=False,
@@ -170,9 +174,9 @@ COMPUTER_TOOL_POLICY: dict[str, ComputerToolPolicy] = {
         description=(
             f"Press one key with modifiers. {_IDENTITY} "
             "Input: {pid, window_id, key: string, "
-            "modifiers: ['meta'|'ctrl'|'alt'|'shift', ...], element?: {role, label}, "
-            "x?: integer, y?: integer}. "
+            "modifiers: ['meta'|'ctrl'|'alt'|'shift', ...], element?: {role, label}}. "
             "The target is optional: omit it to send the combination to the window. "
+            f"{_OPTIONAL_TARGET} "
             "Combinations that log out, lock, or force-quit are refused. "
             f"{_REVALIDATED}"
         ),

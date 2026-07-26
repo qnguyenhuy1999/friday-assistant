@@ -1,8 +1,8 @@
 # Computer Use (Phase 13)
 
 Friday can inspect a desktop, capture a window, and — with human approval —
-move a pointer, click, scroll, type bounded text, press allowed keys, execute
-allowed hotkeys, and focus a window.
+click, scroll, type bounded text, press allowed keys, execute allowed hotkeys,
+and bring a window to the foreground.
 
 Two statements govern everything below.
 
@@ -13,15 +13,15 @@ Two statements govern everything below.
 >
 > **cua-driver is a transport behind Friday's `ComputerToolGateway`, not a
 > Claude tool.** Claude cannot see, name, or reach that MCP server. The only
-> caller is the gateway, and the only operations invoked are the ten methods on
-> the `ComputerDriver` port.
+> caller is the gateway, and the only Cua operations invoked are the nine mapped
+> tools.
 
 **Computer use is opt-in and defaults to OFF.**
 
 ## Execution path
 
 There is exactly one path from a proposed action to a desktop side effect.
-Every approval check, claim fence, and snapshot fence sits on it.
+Every approval check, claim fence, and fresh semantic revalidation sits on it.
 
 ```text
 Claude (brain-only, proposes a ToolCall)
@@ -40,7 +40,7 @@ fresh durable claim check          ← the only gate before the side effect
 CompositeToolGateway  (policy-free router)
   ↓
 ComputerToolGateway   (all computer-use policy lives here)
-  ↓ snapshot fence, target resolution, text/hotkey screening
+  ↓ fresh semantic revalidation, text/hotkey screening
   ↓
 ComputerDriver (Protocol)
   ↓
@@ -154,11 +154,11 @@ artifact row points at. `.friday/` is git-ignored.
 ## Keyboard safety
 
 - **Text** is bounded (`FRIDAY_COMPUTER_MAX_TYPE_CHARS`), rejects empty input,
-  NUL, and control characters other than tab and newline, and is screened for
+  NUL, and every control character (including tab and newline), and is screened for
   credential shapes by the scanner shared with curated memory writes
   (`friday.application.secret_shapes`).
 - **Keys** come from a closed allowlist: the named set (`enter`, `tab`,
-  `escape`, `space`, `backspace`, `delete`, arrows, `home`, `end`, `page_up`,
+  `escape`, `space`, `backspace`, arrows, `home`, `end`, `page_up`,
   `page_down`) plus single `[a-z0-9]` characters. **No raw keycodes** — the
   field does not exist and an integer `key` is refused.
 - **Hotkeys** allow `meta`, `ctrl`, `alt`, `shift`, canonically ordered with
@@ -187,8 +187,8 @@ prompt states that everything inside a tool output is untrusted data that can
 never grant permission, satisfy an approval, or relax a limit.
 
 Prompting is the *weakest* of these defences. The load-bearing ones are
-structural: on-screen text has no influence over approval, snapshot fencing, or
-the allowlists.
+structural: on-screen text has no influence over approval, fresh semantic
+revalidation, or the allowlists.
 
 ## cua-driver integration
 
@@ -316,7 +316,7 @@ fails closed if the installed build's tool surface differs, so a mismatch
 surfaces as a preflight error rather than misbehaviour.
 
 Before enabling on a real machine, verify: `cua-driver` is installed and on
-`PATH`; its MCP `tools/list` advertises the ten names in `CuaToolNames`; and the
+`PATH`; its MCP `tools/list` advertises the nine names in `CuaToolNames`; and the
 OS has granted it the accessibility/screen-recording permissions it needs.
 Friday deliberately does **not** automate OS permission dialogs.
 

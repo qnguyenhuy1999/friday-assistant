@@ -178,6 +178,25 @@ def test_every_policy_row_documents_its_input_contract() -> None:
     assert undocumented == []
 
 
+def test_claude_facing_mutation_descriptions_never_advertise_pixel_addressing() -> None:
+    """The manifest is Claude's only schema, so it must match the semantic-only
+    execution fence rather than suggest an input Friday rejects."""
+    descriptions = [
+        policy.description.lower()
+        for policy in COMPUTER_TOOL_POLICY.values()
+        if not policy.read_only
+    ]
+
+    assert all("x/y" not in description for description in descriptions)
+    assert all("x?: integer" not in description for description in descriptions)
+    assert all("y?: integer" not in description for description in descriptions)
+    assert all(
+        "do not use coordinates" in description
+        for description in descriptions
+        if "element" in description
+    )
+
+
 # --- registry -------------------------------------------------------------
 
 

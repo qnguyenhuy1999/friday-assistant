@@ -16,9 +16,9 @@ Three invariants shape almost everything here:
   context. Titles, labels, and roles are therefore stripped of control
   characters, whitespace-collapsed, and length-bounded on the way in.
 * **Two coordinate spaces never mix.** A window's `bounds` are desktop points
-  (where the window sits on the desktop); an element's `frame` and every
-  actionable x/y are *window-local screenshot pixels* (where something sits
-  inside the image Friday was handed). Different origin, and on a Retina
+  (where the window sits on the desktop); an element's `frame` is in
+  *window-local screenshot pixels* (where something sits inside the image
+  Friday was handed). Different origin, and on a Retina
   display a different scale. They are separate types here so that "is this
   point inside that window?" cannot be asked of two values that were never in
   the same space — that mistake produces a click which lands somewhere

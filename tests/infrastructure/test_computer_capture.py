@@ -106,6 +106,19 @@ def test_capture_reports_no_truncation_when_everything_fits(harness: Harness) ->
     assert len(output["elements"]) == 2
 
 
+def test_capture_addressing_guidance_never_advertises_pixel_addressing(harness: Harness) -> None:
+    """Capture speaks to Claude directly, so its guidance must agree with the
+    semantic-only approval fence used by every delayed mutation."""
+    addressing = harness.capture()["addressing"]
+
+    assert isinstance(addressing, str)
+    lowered = addressing.lower()
+    assert "{pid, window_id, element: {role, label}}" in addressing
+    assert "coordinates" in lowered
+    assert "do not fall back" in lowered
+    assert "x/y" not in lowered
+
+
 # --- input strictness -----------------------------------------------------
 
 

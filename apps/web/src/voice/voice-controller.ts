@@ -37,6 +37,7 @@ export class VoiceController {
   #listeners = new Set<(value: VoiceSnapshot) => void>();
   #session = 0;
   #active: number | null = null;
+  #failedAttempt: number | null = null;
   #pending: { session: number; mode: "push_to_talk" | "hands_free" } | null =
     null;
   #text = "";
@@ -47,10 +48,10 @@ export class VoiceController {
   #disposed = false;
   constructor(private readonly deps: VoiceControllerDeps) {
     deps.recognition?.onResult((result) =>
-      this.result(result.transcript, result.isFinal),
+      this.result(result.attempt, result.transcript, result.isFinal),
     );
-    deps.recognition?.onEnd(() => this.ended());
-    deps.recognition?.onError((code) => this.error(code));
+    deps.recognition?.onEnd((attempt) => this.ended(attempt));
+    deps.recognition?.onError((attempt, code) => this.error(attempt, code));
     deps.audioLevel?.onSustainedSpeech(() => this.bargeIn());
   }
   snapshot(): VoiceSnapshot {
@@ -153,6 +154,7 @@ export class VoiceController {
   private begin(mode: "push_to_talk" | "hands_free"): void {
     if (this.#disposed || !this.deps.recognition) return;
     this.#active = ++this.#session;
+    this.#failedAttempt = null;
     this.#text = "";
     if (!this.#permissionRequested) {
       this.#permissionRequested = true;
@@ -160,6 +162,7 @@ export class VoiceController {
     }
     this.patch({ state: "listening", interimTranscript: "", error: null });
     this.deps.recognition.start({
+      attempt: this.#active,
       language: this.deps.language(),
       continuous: mode === "hands_free",
     });
@@ -184,11 +187,17 @@ export class VoiceController {
     this.deps.audioLevel?.stop();
     this.deps.recognition?.abort();
     this.#active = null;
+    this.#failedAttempt = null;
     this.#pending = null;
     this.patch({ state: "idle", interimTranscript: "" });
   }
-  private result(transcript: string, final: boolean): void {
-    if (this.#active === null || this.#disposed) return;
+  private result(attempt: number, transcript: string, final: boolean): void {
+    if (
+      this.#active !== attempt ||
+      this.#failedAttempt === attempt ||
+      this.#disposed
+    )
+      return;
     // Speech reaching us proves the recognizer is alive.
     this.#rearms = 0;
     if (final) this.#text = `${this.#text} ${transcript}`.trim();
@@ -202,16 +211,24 @@ export class VoiceController {
         : `${this.#text} ${transcript}`.trim(),
     });
   }
-  private ended(): void {
+  private ended(attempt: number): void {
     if (this.#disposed) return;
     const pending = this.#pending;
-    if (pending) {
+    if (pending?.session === attempt) {
       this.#pending = null;
       void this.submit({
         text: this.#text,
         inputMode: pending.mode,
         language: this.deps.language(),
       });
+      return;
+    }
+    if (attempt !== this.#active) return;
+    if (this.#failedAttempt === attempt) {
+      this.#active = null;
+      this.#failedAttempt = null;
+      if (this.#snapshot.handsFree) this.rearm();
+      else this.idle();
       return;
     }
     // No pending stop means the recognizer ended on its own while we still
@@ -265,19 +282,24 @@ export class VoiceController {
       this.patch({ state: "error", error: "network" });
     }
   }
-  private error(code: VoiceErrorCode): void {
+  private error(attempt: number, code: VoiceErrorCode): void {
+    if (attempt !== this.#active || this.#disposed) return;
     // Captured before idle() clears it: an error against a live session ends
     // the recognizer, while one against an already-dropped session is the
     // echo of an abort we asked for (and must not restart recognition).
     const wasListening = this.#active !== null;
     this.clearSilence();
     if (isBenignVoiceError(code)) {
-      this.idle();
-      if (wasListening && this.#snapshot.handsFree) this.rearm();
+      // Web Speech reports the error before the terminal `end`. Keep this
+      // attempt active until its end arrives; rearming here would let that
+      // delayed end tear down the new attempt.
+      if (wasListening) this.#failedAttempt = attempt;
+      this.patch({ state: "idle", interimTranscript: "" });
       return;
     }
     if (isPermissionVoiceError(code)) this.patch({ handsFree: false });
     this.#active = null;
+    this.#failedAttempt = null;
     this.#pending = null;
     this.patch({ state: "error", error: code });
   }
@@ -307,6 +329,7 @@ export class VoiceController {
   }
   private idle(): void {
     this.#active = null;
+    this.#failedAttempt = null;
     this.#pending = null;
     this.patch({ state: "idle", interimTranscript: "" });
   }

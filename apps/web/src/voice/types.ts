@@ -33,10 +33,12 @@ export interface VoiceSnapshot {
   error: VoiceErrorCode | null;
 }
 export interface RecognitionResult {
+  attempt: number;
   transcript: string;
   isFinal: boolean;
 }
 export interface RecognitionStartOptions {
+  attempt: number;
   language: string;
   continuous: boolean;
 }
@@ -45,8 +47,10 @@ export interface SpeechRecognitionAdapter {
   stop(): void;
   abort(): void;
   onResult(listener: (result: RecognitionResult) => void): () => void;
-  onEnd(listener: () => void): () => void;
-  onError(listener: (code: VoiceErrorCode) => void): () => void;
+  onEnd(listener: (attempt: number) => void): () => void;
+  onError(
+    listener: (attempt: number, code: VoiceErrorCode) => void,
+  ): () => void;
   dispose(): void;
 }
 export interface SpeechSynthesisVoiceInfo {

@@ -92,6 +92,31 @@ test("hands-free resumes listening after the answer is spoken", async ({
   await expect.poll(() => recognitionStarts(page)).toBeGreaterThan(first);
 });
 
+test("stale terminal callbacks do not disturb a rearmed hands-free attempt", async ({
+  page,
+}) => {
+  await open(page);
+  await page.getByLabel("Hands-free").check();
+  await expect.poll(() => recognitionStarts(page)).toBe(1);
+
+  // A benign error is terminal, but the controller must wait for this
+  // attempt's end before it starts its replacement.
+  await page.evaluate(() => window.__fakeSpeech.error("no-speech"));
+  expect(await recognitionStarts(page)).toBe(1);
+  await page.evaluate(() => window.__fakeSpeech.end());
+  await expect.poll(() => recognitionStarts(page)).toBe(2);
+
+  // Browser callbacks from A can arrive after B is live. They must be fenced
+  // by the attempt that created the BrowserRecognition instance.
+  await page.evaluate(() => {
+    window.__fakeSpeech.staleResult("late speech");
+    window.__fakeSpeech.staleError("aborted");
+    window.__fakeSpeech.staleEnd();
+  });
+  await page.waitForTimeout(50);
+  expect(await recognitionStarts(page)).toBe(2);
+});
+
 test("sustained speech during playback barges in and returns to listening", async ({
   page,
 }) => {

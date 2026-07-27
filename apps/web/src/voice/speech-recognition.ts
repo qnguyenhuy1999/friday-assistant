@@ -71,55 +71,66 @@ export function createSpeechRecognitionAdapter(
 ): SpeechRecognitionAdapter | null {
   const Recognition = ctor(win);
   if (!Recognition) return null;
-  const recognition = new Recognition();
-  const results = createEmitter<{ transcript: string; isFinal: boolean }>();
-  const ends = createEmitter<void>();
-  const errors = createEmitter<VoiceErrorCode>();
+  const results = createEmitter<{
+    attempt: number;
+    transcript: string;
+    isFinal: boolean;
+  }>();
+  const ends = createEmitter<number>();
+  const errors = createEmitter<{ attempt: number; code: VoiceErrorCode }>();
+  let active: BrowserRecognition | null = null;
   let disposed = false;
-  recognition.interimResults = true;
-  recognition.maxAlternatives = 1;
-  recognition.onresult = (event) => {
-    if (!disposed)
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const result = event.results[i];
-        if (!result) continue;
-        results.emit({
-          transcript: result[0]?.transcript ?? "",
-          isFinal: Boolean(result.isFinal),
-        });
-      }
-  };
-  recognition.onend = () => {
-    if (!disposed) ends.emit();
-  };
-  recognition.onerror = (event) => {
-    if (!disposed)
-      errors.emit(
-        KNOWN.includes(event.error as VoiceErrorCode)
-          ? (event.error as VoiceErrorCode)
-          : "unknown",
-      );
-  };
   return {
     start(options: RecognitionStartOptions) {
       if (!disposed) {
+        const recognition = new Recognition();
+        active = recognition;
         recognition.lang = options.language;
         recognition.continuous = options.continuous;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
+        recognition.onresult = (event) => {
+          if (!disposed)
+            for (let i = event.resultIndex; i < event.results.length; i += 1) {
+              const result = event.results[i];
+              if (!result) continue;
+              results.emit({
+                attempt: options.attempt,
+                transcript: result[0]?.transcript ?? "",
+                isFinal: Boolean(result.isFinal),
+              });
+            }
+        };
+        recognition.onend = () => {
+          if (active === recognition) active = null;
+          if (!disposed) ends.emit(options.attempt);
+        };
+        recognition.onerror = (event) => {
+          if (!disposed)
+            errors.emit({
+              attempt: options.attempt,
+              code: KNOWN.includes(event.error as VoiceErrorCode)
+                ? (event.error as VoiceErrorCode)
+                : "unknown",
+            });
+        };
         recognition.start();
       }
     },
     stop() {
-      if (!disposed) recognition.stop();
+      if (!disposed) active?.stop();
     },
     abort() {
-      if (!disposed) recognition.abort();
+      if (!disposed) active?.abort();
     },
     onResult: results.add,
     onEnd: (listener) => ends.add(listener),
-    onError: errors.add,
+    onError: (listener) =>
+      errors.add((event) => listener(event.attempt, event.code)),
     dispose() {
       disposed = true;
-      recognition.abort();
+      active?.abort();
+      active = null;
       results.clear();
       ends.clear();
       errors.clear();

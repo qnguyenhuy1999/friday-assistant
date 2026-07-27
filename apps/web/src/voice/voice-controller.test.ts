@@ -5,9 +5,15 @@ import type { SpeechRecognitionAdapter, VoiceErrorCode } from "./types";
 
 function recognition() {
   let result:
-    ((value: { transcript: string; isFinal: boolean }) => void) | undefined;
-  let end: (() => void) | undefined;
-  let error: ((value: VoiceErrorCode) => void) | undefined;
+    | ((value: {
+        attempt: number;
+        transcript: string;
+        isFinal: boolean;
+      }) => void)
+    | undefined;
+  let end: ((attempt: number) => void) | undefined;
+  let error: ((attempt: number, value: VoiceErrorCode) => void) | undefined;
+  let latestAttempt = 0;
   const adapter: SpeechRecognitionAdapter & {
     emit(text: string, final: boolean): void;
     finish(): void;
@@ -16,10 +22,11 @@ function recognition() {
   } = {
     starts: 0,
     aborts: 0,
-    start: () => {
+    start: ({ attempt }) => {
       adapter.starts += 1;
+      latestAttempt = attempt;
     },
-    stop: () => end?.(),
+    stop: () => end?.(latestAttempt),
     abort: () => {
       adapter.aborts += 1;
     },
@@ -36,10 +43,18 @@ function recognition() {
       return () => undefined;
     },
     dispose: () => undefined,
-    emit: (text, final) => result?.({ transcript: text, isFinal: final }),
-    finish: () => end?.(),
+    emit: (text, final) =>
+      result?.({ attempt: latestAttempt, transcript: text, isFinal: final }),
+    finish: () => end?.(latestAttempt),
   };
-  return { adapter, fail: (code: VoiceErrorCode) => error?.(code) };
+  return {
+    adapter,
+    emit: (text: string, final: boolean, attempt = latestAttempt) =>
+      result?.({ attempt, transcript: text, isFinal: final }),
+    fail: (code: VoiceErrorCode, attempt = latestAttempt) =>
+      error?.(attempt, code),
+    finish: (attempt = latestAttempt) => end?.(attempt),
+  };
 }
 
 /** Controllable stand-in for setTimeout, so silence-window behaviour is
@@ -215,6 +230,42 @@ describe("VoiceController", () => {
     expect(h.rec.adapter.starts).toBe(1);
 
     h.rec.adapter.finish();
+
+    expect(h.rec.adapter.starts).toBe(2);
+    expect(h.controller.snapshot()).toMatchObject({
+      handsFree: true,
+      state: "listening",
+    });
+  });
+  it("waits for an errored attempt to end before rearming exactly once", () => {
+    const h = harness();
+    h.controller.setHandsFree(true);
+    expect(h.rec.adapter.starts).toBe(1);
+
+    h.rec.fail("no-speech", 1);
+    expect(h.rec.adapter.starts).toBe(1);
+
+    h.rec.finish(1);
+    expect(h.rec.adapter.starts).toBe(2);
+
+    // A duplicate/late terminal callback for A must not churn B.
+    h.rec.finish(1);
+    expect(h.rec.adapter.starts).toBe(2);
+    expect(h.controller.snapshot()).toMatchObject({
+      handsFree: true,
+      state: "listening",
+    });
+  });
+  it("ignores stale error and end callbacks after aborting A and starting B", () => {
+    const h = harness();
+    h.controller.setHandsFree(true);
+    h.controller.speakingStarted(); // aborts attempt A
+    h.controller.bargeIn(); // starts attempt B
+    expect(h.rec.adapter.starts).toBe(2);
+
+    h.rec.emit("late speech", true, 1);
+    h.rec.fail("aborted", 1);
+    h.rec.finish(1);
 
     expect(h.rec.adapter.starts).toBe(2);
     expect(h.controller.snapshot()).toMatchObject({

@@ -8,6 +8,12 @@ export interface FakeSpeechDriver {
   result(text: string, isFinal?: boolean): void;
   /** End the live recognition session, as the browser does after `stop()`. */
   end(): void;
+  /** Error the live recognition attempt before its terminal end callback. */
+  error(code: string): void;
+  /** Deliver callbacks from the prior attempt after a newer one has started. */
+  staleResult(text: string, isFinal?: boolean): void;
+  staleError(code: string): void;
+  staleEnd(): void;
   /** Text passed to `speechSynthesis.speak`, oldest first. */
   spoken(): string[];
   /** Times `getUserMedia` was called — the microphone-privacy assertion. */
@@ -44,6 +50,11 @@ export async function installFakeSpeech(
     let cancels = 0;
     let microphoneRequests = 0;
     let recognitionStarts = 0;
+    const recognitions: Array<{
+      onresult?: (value: unknown) => void;
+      onend?: () => void;
+      onerror?: (value: { error: string }) => void;
+    }> = [];
     let recognition: {
       onresult?: (value: unknown) => void;
       onend?: () => void;
@@ -62,6 +73,7 @@ export async function installFakeSpeech(
         // The fake must retain this exact mutable instance for later callbacks.
         // eslint-disable-next-line @typescript-eslint/no-this-alias
         recognition = this;
+        recognitions.push(this);
         if (deny) setTimeout(() => this.onerror?.({ error: "not-allowed" }), 0);
       }
       stop() {
@@ -140,6 +152,23 @@ export async function installFakeSpeech(
       },
       end() {
         recognition?.onend?.();
+      },
+      error(code: string) {
+        recognition?.onerror?.({ error: code });
+      },
+      staleError(code: string) {
+        recognitions.at(-2)?.onerror?.({ error: code });
+      },
+      staleResult(text: string, isFinal = true) {
+        recognitions.at(-2)?.onresult?.({
+          resultIndex: 0,
+          results: [
+            Object.assign([{ transcript: text }], { isFinal, length: 1 }),
+          ],
+        });
+      },
+      staleEnd() {
+        recognitions.at(-2)?.onend?.();
       },
       spoken: () => [...spoken],
       cancels: () => cancels,

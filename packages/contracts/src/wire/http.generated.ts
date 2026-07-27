@@ -39,6 +39,7 @@ export interface Run {
     | "cancelled";
   created_at: string;
   failure: Failure | null;
+  execution_id: string;
 }
 
 export interface RunStep {
@@ -314,7 +315,14 @@ const schema = {
     Run: {
       type: "object",
       additionalProperties: false,
-      required: ["id", "task_id", "status", "created_at", "failure"],
+      required: [
+        "id",
+        "task_id",
+        "status",
+        "created_at",
+        "failure",
+        "execution_id",
+      ],
       properties: {
         id: {
           type: "string",
@@ -344,6 +352,9 @@ const schema = {
               type: "null",
             },
           ],
+        },
+        execution_id: {
+          type: "string",
         },
       },
     },

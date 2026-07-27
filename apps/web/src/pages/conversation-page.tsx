@@ -7,10 +7,14 @@ import {
   useConversationTurns,
   useSubmitConversationTurn,
 } from "../hooks/use-conversation";
-import { useConversationAnswers } from "../hooks/use-conversation-answers";
+import {
+  resolveEffectiveRun,
+  useConversationAnswers,
+} from "../hooks/use-conversation-answers";
 import type { TurnAnswer } from "../hooks/use-turn-answer";
 import { useVoice } from "../hooks/use-voice";
 import { friday } from "../friday-client";
+
 export function ConversationPage({
   onReviewApproval,
 }: {
@@ -24,17 +28,21 @@ export function ConversationPage({
   const [cancelError, setCancelError] = useState<string | null>(null);
   const activeRunId = useRef<string | null>(null);
   const speakableRunIds = useRef(new Set<string>());
+  const answersRef = useRef(answers);
+  answersRef.current = answers;
   /** Bumped by every interruption. A submission that resolves against a stale
    * generation started before the user pressed Escape, so its run must be
    * cancelled rather than adopted — otherwise an interrupted turn keeps
    * running and still speaks its answer. */
   const submitGeneration = useRef(0);
-  const cancelRun = useCallback((runId: string) => {
-    void friday.runs.cancel(runId).catch(() => {
-      // Local suppression remains authoritative, but durable cancellation
-      // failure needs to be visible so the user can make an informed retry.
-      setCancelError("Could not cancel the run on the server.");
-    });
+  const cancelRun = useCallback((rootRunId: string) => {
+    void resolveEffectiveRun(rootRunId)
+      .then(({ effectiveRunId }) => friday.runs.cancel(effectiveRunId))
+      .catch(() => {
+        // Local suppression remains authoritative, but durable cancellation
+        // failure needs to be visible so the user can make an informed retry.
+        setCancelError("Could not cancel the run on the server.");
+      });
   }, []);
   const adoptRun = useCallback(
     (runId: string, generation: number) => {
@@ -44,6 +52,11 @@ export function ConversationPage({
       }
       activeRunId.current = runId;
       speakableRunIds.current.add(runId);
+      // Handle fast completion before adoption — answer already settled.
+      const existing = answersRef.current.get(runId);
+      if (existing && existing.state !== "pending") {
+        handleAnswerStateRef.current(runId, existing);
+      }
     },
     [cancelRun],
   );
@@ -58,6 +71,27 @@ export function ConversationPage({
     adoptRun(turn.run_id, generation);
   });
   const { deliverAnswer } = voice;
+
+  // Conversation state is durable. On reload (and when a query update wins a
+  // mutation race), recover the newest non-terminal turn instead of relying on
+  // a transition callback from a freshly mounted transcript row.
+  useEffect(() => {
+    const active = [...turns.items].reverse().find((turn) => {
+      const answer = answers.get(turn.run_id);
+      return (
+        !answer ||
+        answer.state === "pending" ||
+        answer.state === "awaiting_approval"
+      );
+    });
+    if (!active) return;
+    const answer = answers.get(active.run_id);
+    activeRunId.current = active.run_id;
+    if (answer?.state === "awaiting_approval")
+      voice.controller.notifyAwaitingApproval();
+    else voice.controller.notifyProcessing();
+  }, [answers, turns.items, voice.controller]);
+
   const cancelActiveRun = useCallback(() => {
     const runId = activeRunId.current;
     // Commit the local interruption before the durable cancellation request:
@@ -88,29 +122,39 @@ export function ConversationPage({
     },
     [deliverAnswer, voice.controller],
   );
+  const handleAnswerStateRef = useRef(handleAnswerState);
+  handleAnswerStateRef.current = handleAnswerState;
+  // Keyboard PTT: start eligibility
+  const keyboardPttActive = useRef(false);
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
       if (isPushToTalkKey(event)) {
         event.preventDefault();
+        keyboardPttActive.current = true;
         voice.controller.pressToTalk();
       }
+      if (event.key === "Escape") cancelActiveRun();
     };
     const up = (event: KeyboardEvent) => {
-      if (isPushToTalkKey(event)) {
+      if (event.code === "Space" && keyboardPttActive.current) {
         event.preventDefault();
+        keyboardPttActive.current = false;
         voice.controller.releaseToTalk();
       }
     };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") cancelActiveRun();
+    const windowBlur = () => {
+      if (keyboardPttActive.current) {
+        keyboardPttActive.current = false;
+        voice.controller.releaseToTalk();
+      }
     };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
-    window.addEventListener("keydown", escape);
+    window.addEventListener("blur", windowBlur);
     return () => {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
-      window.removeEventListener("keydown", escape);
+      window.removeEventListener("blur", windowBlur);
     };
   }, [voice.controller, cancelActiveRun]);
   const inputBlocked = [

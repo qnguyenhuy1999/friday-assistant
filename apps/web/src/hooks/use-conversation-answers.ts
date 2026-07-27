@@ -1,4 +1,4 @@
-import type { ConversationTurn } from "@friday/contracts";
+import type { ConversationTurn, Run } from "@friday/contracts";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useMemo, useRef } from "react";
 import { friday } from "../friday-client";
@@ -22,10 +22,36 @@ export const conversationAnswersQueryKey = (
   runIds: readonly string[],
 ) => ["conversation-answers", conversationId, runIds] as const;
 
-async function loadAnswer(runId: string): Promise<TurnAnswer> {
+/** Given a run id, resolve the effective run by walking the execution chain.
+ * If the root run is terminal with a retryable failure, follow retries to the
+ * latest live or terminal run. Returns the effective run id + its status. */
+export async function resolveEffectiveRun(
+  runId: string,
+): Promise<{ effectiveRunId: string; run: Run }> {
   const run = await friday.runs.get(runId);
+  if (run.status === "failed" && run.failure?.retryable && run.execution_id) {
+    const chain = await friday.runs.listByExecution(runId);
+    if (chain.items.length > 1) {
+      for (const candidate of [...chain.items].reverse()) {
+        if (candidate.status !== "failed" && candidate.status !== "cancelled") {
+          return { effectiveRunId: candidate.id, run: candidate };
+        }
+      }
+      return {
+        effectiveRunId: chain.items.at(-1)!.id,
+        run: chain.items.at(-1)!,
+      };
+    }
+  }
+  return { effectiveRunId: runId, run };
+}
+
+async function loadAnswer(runId: string): Promise<TurnAnswer> {
+  const { run } = await resolveEffectiveRun(runId);
   const result =
-    run.status === "succeeded" ? await friday.runs.getResult(runId) : undefined;
+    run.status === "succeeded"
+      ? await friday.runs.getResult(run.id)
+      : undefined;
   return answerFromRun(run, result);
 }
 

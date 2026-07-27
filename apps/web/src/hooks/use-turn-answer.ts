@@ -1,10 +1,13 @@
 import type { JsonValue, Run, RunResult } from "@friday/contracts";
 export interface TurnAnswer {
+  /** Retry descendants own the current result and approval state. */
+  runId: string | null;
   state: "pending" | "awaiting_approval" | "answered" | "failed" | "cancelled";
   summary: string | null;
   details: JsonValue;
 }
 export const PENDING_TURN_ANSWER: TurnAnswer = {
+  runId: null,
   state: "pending",
   summary: null,
   details: null,
@@ -31,17 +34,24 @@ export function answerFromRun(
   // Checked before the terminal statuses: a run waiting for approval is not
   // terminal, so gating this behind a terminal check makes it unreachable.
   if (run.status === "waiting_for_approval")
-    return { state: "awaiting_approval", summary: null, details: null };
+    return {
+      runId: run.id,
+      state: "awaiting_approval",
+      summary: null,
+      details: null,
+    };
   if (run.status === "failed")
     return {
+      runId: run.id,
       state: "failed",
       summary: run.failure?.message ?? null,
       details: null,
     };
   if (run.status === "cancelled")
-    return { state: "cancelled", summary: null, details: null };
+    return { runId: run.id, state: "cancelled", summary: null, details: null };
   if (run.status !== "succeeded") return PENDING_TURN_ANSWER;
   return {
+    runId: run.id,
     state: "answered",
     summary: result?.summary ?? null,
     details: result?.details ?? null,

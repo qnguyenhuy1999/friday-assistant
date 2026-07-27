@@ -24,6 +24,7 @@ export function createAudioLevelMonitor(
   const Context = win.AudioContext ?? win.webkitAudioContext;
   if (!Context || !win.navigator.mediaDevices?.getUserMedia) return null;
   const speech = createEmitter<void>();
+  let generation = 0;
   let stream: MediaStream | null = null;
   let context: AudioContext | null = null;
   let timer: number | null = null;
@@ -31,6 +32,7 @@ export function createAudioLevelMonitor(
   let started: number | null = null;
   let emitted = false;
   const stop = () => {
+    generation += 1;
     if (timer !== null) timers.clearInterval(timer);
     timer = null;
     stream?.getTracks().forEach((track) => track.stop());
@@ -43,9 +45,15 @@ export function createAudioLevelMonitor(
   };
   return {
     async start() {
-      stream = await win.navigator.mediaDevices.getUserMedia(
+      const gen = ++generation;
+      const mediaStream = await win.navigator.mediaDevices.getUserMedia(
         MICROPHONE_CONSTRAINTS,
       );
+      if (gen !== generation) {
+        mediaStream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      stream = mediaStream;
       context = new Context();
       const analyser = context.createAnalyser();
       context.createMediaStreamSource(stream).connect(analyser);

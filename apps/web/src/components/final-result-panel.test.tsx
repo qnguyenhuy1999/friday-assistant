@@ -11,6 +11,7 @@ function run(overrides: Partial<Run>): Run {
     status: "running",
     created_at: "x",
     failure: null,
+    execution_id: "exec-1",
     ...overrides,
   };
 }

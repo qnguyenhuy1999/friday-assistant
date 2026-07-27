@@ -42,7 +42,10 @@ function Turn({
       {answer.state === "awaiting_approval" && (
         <p role="alert">
           Approval required.{" "}
-          <button type="button" onClick={() => onReviewApproval(turn.run_id)}>
+          <button
+            type="button"
+            onClick={() => onReviewApproval(answer.runId ?? turn.run_id)}
+          >
             Review approval
           </button>
         </p>

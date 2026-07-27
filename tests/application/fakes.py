@@ -135,6 +135,10 @@ class FakeRunRepository:
     def count_for_execution(self, execution_id: RunId) -> int:
         return sum(run.execution_id == execution_id for run in self.items.values())
 
+    def list_for_execution(self, execution_id: RunId) -> list[Run]:
+        runs = [run for run in self.items.values() if run.execution_id == execution_id]
+        return sorted(runs, key=lambda run: (run.created_at, str(run.id)))
+
 
 class FakeScheduleRepository:
     def __init__(self) -> None:

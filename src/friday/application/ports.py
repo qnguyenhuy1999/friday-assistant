@@ -170,6 +170,9 @@ class RunRepository(Protocol):
 
     def has_non_terminal_for_ids(self, run_ids: list[RunId]) -> bool: ...
     def count_for_execution(self, execution_id: RunId) -> int: ...
+    def list_for_execution(self, execution_id: RunId) -> list[Run]:
+        """Ordered by created_at, then id. Returns all runs sharing execution_id."""
+        ...
 
 
 class RunStepRepository(Protocol):

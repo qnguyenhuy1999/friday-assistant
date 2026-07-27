@@ -9,6 +9,7 @@ function run(status: RunStatus): Run {
     status,
     created_at: "2026-07-26T00:00:00Z",
     failure: null,
+    execution_id: "exec-1",
   };
 }
 

@@ -13,4 +13,5 @@ export interface Run {
   status: RunStatus;
   created_at: string;
   failure: Failure | null;
+  execution_id: string;
 }

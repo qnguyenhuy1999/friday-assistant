@@ -26,6 +26,11 @@ _SAFE_FIELDS: Final = (
     "run_count",
     "schedule_id",
     "scheduled_for",
+    "server_id",
+    "mcp_status",
+    "mcp_failure_code",
+    "configured_binding_count",
+    "available_binding_count",
 )
 
 

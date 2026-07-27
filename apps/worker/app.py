@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from sqlalchemy import Engine
 
 from apps.worker.computer_settings import ComputerSettings
+from apps.worker.mcp_settings import McpSettings
 from apps.worker.memory_settings import MemorySettings
 from apps.worker.runtime_settings import RuntimeSettings
 from apps.worker.settings import WorkerSettings
@@ -76,6 +77,8 @@ from friday.infrastructure.tools.gateway import (
     WorkspaceToolGateway,
     WorkspaceToolGatewaySettings,
 )
+from friday.infrastructure.tools.mcp_composition import build_mcp_gateway
+from friday.infrastructure.tools.mcp_gateway import McpToolGateway
 from friday.infrastructure.tools.memory_tools import MemoryToolSettings
 
 
@@ -86,6 +89,7 @@ class Worker:
     loop: WorkerLoop
     processor: AgentRunProcessor
     computer_gateway: ComputerToolGateway | None = None
+    mcp_gateway: McpToolGateway | None = None
 
     def close(self) -> None:
         """Release everything the worker owns outside this process.
@@ -100,7 +104,11 @@ class Worker:
             if self.computer_gateway is not None:
                 self.computer_gateway.close()
         finally:
-            self.engine.dispose()
+            try:
+                if self.mcp_gateway is not None:
+                    self.mcp_gateway.close()
+            finally:
+                self.engine.dispose()
 
 
 class _DisabledMemoryRetriever:
@@ -305,6 +313,11 @@ def _computer_gateway(runtime: RuntimeSettings) -> ComputerToolGateway | None:
     )
 
 
+def _mcp_gateway() -> McpToolGateway | None:
+    """Build the optional MCP gateway; transport details stay behind composition."""
+    return build_mcp_gateway(McpSettings.from_env().gateway_config())
+
+
 def create_worker(
     settings: WorkerSettings,
     runtime: RuntimeSettings,
@@ -349,6 +362,9 @@ def create_worker(
     computer_gateway = _computer_gateway(runtime)  # raises ComputerUseUnavailable
     if computer_gateway is not None:
         gateways.append(computer_gateway)
+    mcp_gateway = _mcp_gateway()
+    if mcp_gateway is not None:
+        gateways.append(mcp_gateway)
     # ONE composite instance for both the brain manifest and execution: two
     # registries could disagree about which tools exist or what they cost.
     gateway = CompositeToolGateway(*gateways)
@@ -411,4 +427,5 @@ def create_worker(
         loop=loop,
         processor=processor,
         computer_gateway=computer_gateway,
+        mcp_gateway=mcp_gateway,
     )

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { ConversationTurn } from "@friday/contracts";
 import { ConversationTranscript } from "../components/conversation-transcript";
 import { VoiceControls } from "../components/voice-controls";
 import { isPushToTalkKey } from "../voice/push-to-talk-key";
@@ -7,11 +8,17 @@ import {
   useConversationTurns,
   useSubmitConversationTurn,
 } from "../hooks/use-conversation";
+import { useConversationAnswers } from "../hooks/use-conversation-answers";
 import { useVoice } from "../hooks/use-voice";
+/** Stable identity for the pre-load case, so the answer window's memos do not
+ * see a fresh array on every render. */
+const NO_TURNS: ConversationTurn[] = [];
 export function ConversationPage() {
   const { conversationId, isError } = useConversationId();
   const turns = useConversationTurns(conversationId);
   const submit = useSubmitConversationTurn(conversationId);
+  const { visibleTurns, answers, earlierCount, showEarlier } =
+    useConversationAnswers(conversationId, turns.data?.items ?? NO_TURNS);
   const [text, setText] = useState("");
   const voice = useVoice(async (input) => {
     await submit.mutateAsync({
@@ -77,18 +84,12 @@ export function ConversationPage() {
               : "Ready"}
       </p>
       <ConversationTranscript
-        turns={turns.data?.items ?? []}
+        turns={visibleTurns}
+        answers={answers}
+        earlierCount={earlierCount}
+        onShowEarlier={showEarlier}
         onReviewApproval={() => undefined}
-        onAnswer={(summary) => {
-          if (voice.preferences.enabled) {
-            voice.synthesis?.speak({
-              text: summary,
-              voiceURI: voice.preferences.voiceURI,
-              rate: voice.preferences.rate,
-              lang: voice.preferences.language,
-            });
-          }
-        }}
+        onAnswer={voice.deliverAnswer}
       />
       <label>
         Message{" "}

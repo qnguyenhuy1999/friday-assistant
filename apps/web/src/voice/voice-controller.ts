@@ -1,4 +1,4 @@
-import { SILENCE_TIMEOUT_MS } from "./constants";
+import { MAX_HANDS_FREE_REARMS, SILENCE_TIMEOUT_MS } from "./constants";
 import { isBenignVoiceError, isPermissionVoiceError } from "./voice-errors";
 import type {
   SpeechRecognitionAdapter,
@@ -40,6 +40,7 @@ export class VoiceController {
   #text = "";
   #permissionRequested = false;
   #silence: number | null = null;
+  #rearms = 0;
   #disposed = false;
   constructor(private readonly deps: VoiceControllerDeps) {
     deps.recognition?.onResult((result) =>
@@ -62,6 +63,7 @@ export class VoiceController {
   }
   pressToTalk(): void {
     if (this.#snapshot.handsFree || this.#active !== null) return;
+    this.#rearms = 0;
     this.begin("push_to_talk");
   }
   releaseToTalk(): void {
@@ -71,8 +73,13 @@ export class VoiceController {
   setHandsFree(enabled: boolean): void {
     if (enabled === this.#snapshot.handsFree) return;
     this.patch({ handsFree: enabled });
+    this.#rearms = 0;
     if (!enabled) {
+      // Drop the session before aborting so the adapter's end/error callback
+      // reads as an end we asked for rather than a recognizer that died.
       this.clearSilence();
+      this.#active = null;
+      this.#pending = null;
       this.deps.recognition?.abort();
       this.idle();
     } else if (this.deps.recognition) this.begin("hands_free");
@@ -96,12 +103,15 @@ export class VoiceController {
   }
   notifyResultDelivered(): void {
     this.patch({ state: "idle", interimTranscript: "" });
+    // A delivered answer proves the round trip works, so the restart budget
+    // that guards a dying recognizer starts over.
+    this.#rearms = 0;
     if (this.#snapshot.handsFree) this.begin("hands_free");
   }
   speakingStarted(): void {
     this.clearSilence();
-    this.deps.recognition?.abort();
     this.#active = null;
+    this.deps.recognition?.abort();
     this.patch({ state: "speaking", interimTranscript: "" });
     void this.deps.audioLevel?.start().catch(() => undefined);
   }
@@ -117,10 +127,10 @@ export class VoiceController {
   }
   interrupt(): void {
     this.clearSilence();
-    this.deps.recognition?.abort();
-    this.patch({ handsFree: false, state: "idle", interimTranscript: "" });
     this.#active = null;
     this.#pending = null;
+    this.deps.recognition?.abort();
+    this.patch({ handsFree: false, state: "idle", interimTranscript: "" });
     this.deps.audioLevel?.stop();
   }
   dispose(): void {
@@ -145,10 +155,13 @@ export class VoiceController {
   }
   private result(transcript: string, final: boolean): void {
     if (this.#active === null || this.#disposed) return;
-    if (final) {
-      this.#text = `${this.#text} ${transcript}`.trim();
-      if (this.#snapshot.handsFree) this.armSilence();
-    }
+    // Speech reaching us proves the recognizer is alive.
+    this.#rearms = 0;
+    if (final) this.#text = `${this.#text} ${transcript}`.trim();
+    // Any speech activity restarts the silence window, interim included.
+    // Arming only on final results let the timer fire mid-sentence whenever a
+    // user kept talking after one phrase was finalized.
+    if (this.#snapshot.handsFree) this.armSilence();
     this.patch({
       interimTranscript: final
         ? this.#text
@@ -156,18 +169,44 @@ export class VoiceController {
     });
   }
   private ended(): void {
+    if (this.#disposed) return;
     const pending = this.#pending;
-    if (!pending) return;
-    this.#pending = null;
-    void this.submit({
-      text: this.#text,
-      inputMode: pending.mode,
-      language: this.deps.language(),
-    });
+    if (pending) {
+      this.#pending = null;
+      void this.submit({
+        text: this.#text,
+        inputMode: pending.mode,
+        language: this.deps.language(),
+      });
+      return;
+    }
+    // No pending stop means the recognizer ended on its own while we still
+    // believed a session was live. Without this the controller reports
+    // "listening" forever against a dead recognizer.
+    if (this.#active === null) return;
+    this.clearSilence();
+    this.#active = null;
+    const captured = this.#text.trim();
+    if (captured) {
+      void this.submit({
+        text: captured,
+        inputMode: this.#snapshot.handsFree ? "hands_free" : "push_to_talk",
+        language: this.deps.language(),
+      });
+      return;
+    }
+    if (this.#snapshot.handsFree) this.rearm();
+    else this.idle();
   }
   private finalize(session: number, mode: "push_to_talk" | "hands_free"): void {
     if (session !== this.#active) return;
     this.clearSilence();
+    if (mode === "hands_free" && !this.#text.trim()) {
+      // Silence elapsed with nothing worth submitting (room noise raised
+      // interim results only). Keep the open session rather than churning
+      // stop/start; the next result re-arms the window.
+      return;
+    }
     this.#pending = { session, mode };
     this.#active = null;
     this.patch({ state: "finalizing" });
@@ -187,15 +226,31 @@ export class VoiceController {
     }
   }
   private error(code: VoiceErrorCode): void {
+    // Captured before idle() clears it: an error against a live session ends
+    // the recognizer, while one against an already-dropped session is the
+    // echo of an abort we asked for (and must not restart recognition).
+    const wasListening = this.#active !== null;
     this.clearSilence();
     if (isBenignVoiceError(code)) {
       this.idle();
+      if (wasListening && this.#snapshot.handsFree) this.rearm();
       return;
     }
     if (isPermissionVoiceError(code)) this.patch({ handsFree: false });
     this.#active = null;
     this.#pending = null;
     this.patch({ state: "error", error: code });
+  }
+  /** Restart hands-free listening after the recognizer ended without being
+   * asked to, giving up once the restart budget is spent. */
+  private rearm(): void {
+    if (this.#disposed || !this.#snapshot.handsFree) return;
+    if (this.#rearms >= MAX_HANDS_FREE_REARMS) {
+      this.patch({ handsFree: false, state: "error", error: "unknown" });
+      return;
+    }
+    this.#rearms += 1;
+    this.begin("hands_free");
   }
   private armSilence(): void {
     this.clearSilence();

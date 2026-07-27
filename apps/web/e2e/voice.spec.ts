@@ -30,11 +30,34 @@ async function open(page: Page, denyMicrophone = false): Promise<void> {
 async function sayPushToTalk(page: Page, text: string): Promise<void> {
   const button = page.getByRole("button", { name: "Hold to talk" });
   const before = await recognitionStarts(page);
-  await button.dispatchEvent("mousedown");
+  // The component uses onPointerDown/onPointerUp (not mouse events), so we
+  // must dispatch real PointerEvent objects with the properties the handler
+  // checks: isPrimary, button, pointerId.
+  await button.evaluate((el) =>
+    el.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        isPrimary: true,
+        button: 0,
+        pointerId: 1,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  );
   // The result has to land on a live session, so wait for the press to open one.
   await expect.poll(() => recognitionStarts(page)).toBeGreaterThan(before);
   await page.evaluate((value) => window.__fakeSpeech.result(value), text);
-  await button.dispatchEvent("mouseup");
+  await button.evaluate((el) =>
+    el.dispatchEvent(
+      new PointerEvent("pointerup", {
+        isPrimary: true,
+        button: 0,
+        pointerId: 1,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  );
 }
 
 const spoken = (page: Page) =>

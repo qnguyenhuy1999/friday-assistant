@@ -32,6 +32,7 @@ export const runExample: Run = {
   status: "running",
   created_at: "2026-07-26T00:00:01Z",
   failure: null,
+  execution_id: startRunResponseExample.run_id,
 };
 
 export const createStepBodyExample: CreateStepBody = { name: "clone repo" };

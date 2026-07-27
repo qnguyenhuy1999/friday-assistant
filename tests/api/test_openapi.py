@@ -33,6 +33,7 @@ EXPECTED_OPERATIONS = {
     ("GET", "/v1/tasks/{task_id}/events", "listTaskEvents"),
     ("GET", "/v1/runs/{run_id}", "getRun"),
     ("GET", "/v1/runs/{run_id}/result", "getRunResult"),
+    ("GET", "/v1/runs/{run_id}/execution", "listRunsByExecution"),
     ("POST", "/v1/runs/{run_id}/start", "startQueuedRun"),
     ("POST", "/v1/runs/{run_id}/complete", "completeRun"),
     ("POST", "/v1/runs/{run_id}/fail", "failRun"),

@@ -6,11 +6,13 @@ function Turn({
   answer,
   onReviewApproval,
   onAnswerState,
+  onRetry,
 }: {
   turn: ConversationTurn;
   answer: TurnAnswer;
   onReviewApproval(runId: string): void;
   onAnswerState(runId: string, answer: TurnAnswer): void;
+  onRetry(runId: string): void;
 }) {
   const previousState = useRef(answer.state);
   // Every state a run reaches is reported, not just a successful answer: the
@@ -50,7 +52,17 @@ function Turn({
           </button>
         </p>
       )}
-      {answer.state === "failed" && <p role="alert">{answer.summary}</p>}
+      {answer.state === "failed" && (
+        <p role="alert">
+          {answer.summary}{" "}
+          <button
+            type="button"
+            onClick={() => onRetry(answer.runId ?? turn.run_id)}
+          >
+            Retry
+          </button>
+        </p>
+      )}
       {answer.state === "cancelled" && <p>Run was cancelled.</p>}
     </li>
   );
@@ -62,12 +74,14 @@ export function ConversationTranscript({
   answers,
   onReviewApproval,
   onAnswerState = () => undefined,
+  onRetry,
   onShowEarlier,
 }: {
   turns: ConversationTurn[];
   answers: ReadonlyMap<string, TurnAnswer>;
   onReviewApproval(runId: string): void;
   onAnswerState?(runId: string, answer: TurnAnswer): void;
+  onRetry(runId: string): void;
   /** Omitted when nothing earlier remains. The count is deliberately not shown:
    * older turns live behind a cursor, so how many there are is not known until
    * they are fetched. */
@@ -89,6 +103,7 @@ export function ConversationTranscript({
             answer={answers.get(turn.run_id) ?? PENDING_TURN_ANSWER}
             onReviewApproval={onReviewApproval}
             onAnswerState={onAnswerState}
+            onRetry={onRetry}
           />
         ))}
       </ol>

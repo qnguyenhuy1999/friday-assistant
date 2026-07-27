@@ -85,6 +85,7 @@ export default async function globalSetup() {
     FRIDAY_WORKER_WORKSPACE_ROOT: directory,
     FRIDAY_COMPUTER_USE_ENABLED: "false",
     FRIDAY_MEMORY_ENABLED: "false",
+    FRIDAY_E2E_BRAIN: "approval",
     VITE_API_BASE_URL: apiUrl,
   };
   const migration = spawnSync(

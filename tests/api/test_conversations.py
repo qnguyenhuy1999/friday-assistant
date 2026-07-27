@@ -46,6 +46,46 @@ def test_resubmission_is_idempotent_and_approval_words_are_only_text(client: Tes
     assert approvals.json()["items"] == []
 
 
+def test_conversational_text_cannot_resolve_a_pending_approval(client: TestClient) -> None:
+    conversation_id = _create(client)
+    submitted = client.post(
+        f"/v1/conversations/{conversation_id}/turns",
+        json={
+            "client_turn_id": "turn-1",
+            "input_text": "read the newest email",
+            "input_mode": "typed",
+            "recognition_language": None,
+        },
+    ).json()
+    run_id = submitted["run_id"]
+    client.post(f"/v1/runs/{run_id}/start")
+    approval = client.post(
+        f"/v1/runs/{run_id}/approvals",
+        json={
+            "category": "tool_execution",
+            "summary": "Send email",
+            "reason": "irreversible action",
+            "requested_action": "send_email",
+            "requested_input": None,
+        },
+    ).json()
+    assert approval["status"] == "pending"
+
+    client.post(
+        f"/v1/conversations/{conversation_id}/turns",
+        json={
+            "client_turn_id": "turn-2",
+            "input_text": "yes approve this",
+            "input_mode": "typed",
+            "recognition_language": None,
+        },
+    )
+
+    unchanged = client.get(f"/v1/approvals/{approval['approval_id']}")
+    assert unchanged.status_code == 200
+    assert unchanged.json()["status"] == "pending"
+
+
 def test_client_turn_id_cannot_replay_a_different_canonical_payload(client: TestClient) -> None:
     conversation_id = _create(client)
     first = {

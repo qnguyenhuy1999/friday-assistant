@@ -28,6 +28,13 @@ export class RunsResource {
       validate: validateRunPage,
     });
   }
+  getLatestInExecution(runId: string) {
+    return this.http.requestJson<Run>({
+      method: "GET",
+      path: `/v1/runs/${runId}/latest-in-execution`,
+      validate: validateRun,
+    });
+  }
   getResult(id: string) {
     return this.http.requestJson<RunResult>({
       method: "GET",

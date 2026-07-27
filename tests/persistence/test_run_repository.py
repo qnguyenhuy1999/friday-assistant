@@ -60,6 +60,29 @@ def test_list_for_task_orders_by_created_at_then_id(session: Session) -> None:
     assert [r.id for r in result] == [run_a.id, run_b.id]
 
 
+def test_get_latest_for_execution_returns_newest_by_created_at(session: Session) -> None:
+    task_id = _make_task(session)
+    repo = RunRepository(session)
+    original = Run.new(id=RunId.new(), task_id=task_id, created_at=T0)
+    retry = Run.new(
+        id=RunId.new(),
+        task_id=task_id,
+        created_at=T0 + timedelta(seconds=1),
+        execution_id=original.id,
+    )
+    repo.add(original)
+    repo.add(retry)
+    session.flush()
+    latest = repo.get_latest_for_execution(original.id)
+    assert latest is not None
+    assert latest.id == retry.id
+
+
+def test_get_latest_for_execution_returns_none_when_no_run_shares_it(session: Session) -> None:
+    repo = RunRepository(session)
+    assert repo.get_latest_for_execution(RunId.new()) is None
+
+
 def test_timestamps_are_tz_aware_utc_after_db_round_trip(session: Session) -> None:
     task_id = _make_task(session)
     repo = RunRepository(session)

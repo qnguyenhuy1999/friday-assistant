@@ -174,6 +174,11 @@ class RunRepository(Protocol):
         """Ordered by created_at, then id. Returns all runs sharing execution_id."""
         ...
 
+    def get_latest_for_execution(self, execution_id: RunId) -> Run | None:
+        """The most recently created run sharing execution_id (ties broken by
+        id), i.e. the effective run of a retry chain. Bounded to one row."""
+        ...
+
 
 class RunStepRepository(Protocol):
     def add(self, step: RunStep) -> None: ...

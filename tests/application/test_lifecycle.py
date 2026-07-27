@@ -41,6 +41,7 @@ from friday.application.lifecycle import (
     StartQueuedRun,
     StartStep,
 )
+from friday.application.run_lifecycle import GetLatestRunForExecution
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.identifiers import ApprovalRequestId, RunId, RunStepId, TaskId, ToolInvocationId
 from friday.domain.run import Run, RunStatus
@@ -110,6 +111,29 @@ def test_failure_retry_skip_and_cancellation_propagate() -> None:
     assert retry.run_id != run.id
     CancelRun(factory, clock).execute(CancelRunCommand(retry.run_id))
     CancelTask(factory, clock).execute(CancelTaskCommand(task.id))
+
+
+def test_get_latest_run_for_execution_follows_retry_chain_regardless_of_retryable() -> None:
+    uow, factory, task, run = _prepared()
+    run.start(T0)
+    run.fail(T0, Failure("x", "failed", False, FailureCause.RUNTIME))
+    uow.run_repo.save(run)
+    clock = FakeClock(T0 + timedelta(minutes=1))
+    retry = RetryFailedRun(factory, clock).execute(RetryFailedRunCommand(run.id))
+    latest = GetLatestRunForExecution(factory, clock).execute(run.id)
+    assert latest.run_id == retry.run_id
+
+
+def test_get_latest_run_for_execution_returns_the_run_itself_without_retries() -> None:
+    uow, factory, task, run = _prepared()
+    result = GetLatestRunForExecution(factory, FakeClock()).execute(run.id)
+    assert result.run_id == run.id
+
+
+def test_get_latest_run_for_execution_reports_missing_run() -> None:
+    _, factory, _, _ = _prepared()
+    with pytest.raises(RunNotFound):
+        GetLatestRunForExecution(factory, FakeClock()).execute(RunId.new())
 
 
 def test_terminal_replays_are_idempotent_and_conflicts_are_stable() -> None:

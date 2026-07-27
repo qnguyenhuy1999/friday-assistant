@@ -1,6 +1,10 @@
 import type { ConversationTurn, Run } from "@friday/contracts";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useMemo, useRef } from "react";
+import {
+  keepPreviousData,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { useCallback, useMemo, useRef } from "react";
 import { friday } from "../friday-client";
 import {
   answerFromRun,
@@ -22,26 +26,17 @@ export const conversationAnswersQueryKey = (
   runIds: readonly string[],
 ) => ["conversation-answers", conversationId, runIds] as const;
 
-/** Given a run id, resolve the effective run by walking the execution chain.
- * If the root run is terminal with a retryable failure, follow retries to the
- * latest live or terminal run. Returns the effective run id + its status. */
+/** Given a run id, resolve the effective run by checking the execution chain.
+ * A failed run may have been manually retried regardless of whether its
+ * failure was marked retryable, so any failure checks for a newer run in its
+ * execution rather than gating on `failure.retryable`. */
 export async function resolveEffectiveRun(
   runId: string,
 ): Promise<{ effectiveRunId: string; run: Run }> {
   const run = await friday.runs.get(runId);
-  if (run.status === "failed" && run.failure?.retryable && run.execution_id) {
-    const chain = await friday.runs.listByExecution(runId);
-    if (chain.items.length > 1) {
-      for (const candidate of [...chain.items].reverse()) {
-        if (candidate.status !== "failed" && candidate.status !== "cancelled") {
-          return { effectiveRunId: candidate.id, run: candidate };
-        }
-      }
-      return {
-        effectiveRunId: chain.items.at(-1)!.id,
-        run: chain.items.at(-1)!,
-      };
-    }
+  if (run.status === "failed" && run.execution_id) {
+    const latest = await friday.runs.getLatestInExecution(runId);
+    if (latest.id !== run.id) return { effectiveRunId: latest.id, run: latest };
   }
   return { effectiveRunId: runId, run };
 }
@@ -91,16 +86,26 @@ async function mapWithConcurrency<T, R>(
  * A single request for the whole page would need a batch endpoint the API does
  * not expose today (`GET /v1/runs/{id}` and `/v1/runs/{id}/result` are both
  * single-run); this bounds the fan-out without touching the API. */
+export interface ConversationAnswers {
+  answers: ReadonlyMap<string, TurnAnswer>;
+  /** Drops a run's cached settled answer and forces the next poll to
+   * re-resolve it. A manual retry supersedes a cached "failed" answer, so the
+   * retry action itself must invalidate rather than relying on a repoll. */
+  invalidateAnswer(runId: string): void;
+}
+
 export function useConversationAnswers(
   conversationId: string | null,
   turns: ConversationTurn[],
-): ReadonlyMap<string, TurnAnswer> {
+): ConversationAnswers {
   const runIds = useMemo(() => turns.map((turn) => turn.run_id), [turns]);
   // Answers that can no longer change, kept for the life of the page so a poll
   // re-requests only the runs still in flight instead of the whole window.
   const settled = useRef(new Map<string, TurnAnswer>());
+  const queryClient = useQueryClient();
+  const queryKey = conversationAnswersQueryKey(conversationId ?? "", runIds);
   const { data } = useQuery({
-    queryKey: conversationAnswersQueryKey(conversationId ?? "", runIds),
+    queryKey,
     enabled: conversationId !== null && runIds.length > 0,
     placeholderData: keepPreviousData,
     queryFn: async () => {
@@ -125,5 +130,12 @@ export function useConversationAnswers(
         ? ANSWER_POLL_MS
         : false,
   });
-  return data ?? EMPTY_ANSWERS;
+  const invalidateAnswer = useCallback(
+    (runId: string) => {
+      settled.current.delete(runId);
+      void queryClient.invalidateQueries({ queryKey });
+    },
+    [queryClient, queryKey],
+  );
+  return { answers: data ?? EMPTY_ANSWERS, invalidateAnswer };
 }

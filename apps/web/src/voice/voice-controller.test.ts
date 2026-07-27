@@ -94,10 +94,13 @@ function harness(
   const output = { stops: 0, stop: () => output.stops++ };
   const audioLevel = {
     starts: 0,
+    stops: 0,
     start: async () => {
       audioLevel.starts += 1;
     },
-    stop: () => undefined,
+    stop: () => {
+      audioLevel.stops += 1;
+    },
     onSustainedSpeech: () => () => undefined,
   };
   /** Holds a submission open so an interrupt can land while it is in flight. */
@@ -400,6 +403,82 @@ describe("VoiceController", () => {
     expect(h.controller.snapshot()).toMatchObject({
       handsFree: true,
       state: "listening",
+    });
+  });
+  it("tears down speaking output and mic before a typed submission advances", async () => {
+    const h = harness();
+    h.holdSubmit();
+    h.controller.setHandsFree(true);
+    h.controller.speakingStarted();
+    expect(h.audioLevel.starts).toBe(1);
+
+    const submitted = h.controller.submitTyped("hello B");
+    expect(h.output.stops).toBe(1);
+    expect(h.audioLevel.stops).toBe(1);
+    expect(h.controller.snapshot().state).toBe("submitting");
+
+    h.releaseSubmit();
+    await submitted;
+    expect(h.submitted).toEqual(["hello B"]);
+  });
+  it("does not rearm after hands-free is turned off while finalizing", () => {
+    const clock = timers();
+    const h = harness(clock.api);
+    h.controller.setHandsFree(true);
+    h.rec.adapter.emit("hi", true);
+    h.rec.adapter.stop = () => undefined; // hold the recognizer open through finalize
+    clock.fire();
+    expect(h.controller.snapshot().state).toBe("finalizing");
+
+    h.controller.setHandsFree(false);
+    h.rec.finish();
+
+    expect(h.rec.adapter.starts).toBe(1);
+    expect(h.controller.snapshot().handsFree).toBe(false);
+  });
+  it("does not rearm after hands-free is turned off while processing", () => {
+    const h = harness();
+    h.controller.setHandsFree(true);
+    h.controller.notifyProcessing();
+
+    h.controller.setHandsFree(false);
+    h.controller.notifyResultDelivered();
+
+    expect(h.rec.adapter.starts).toBe(1);
+    expect(h.controller.snapshot()).toMatchObject({
+      handsFree: false,
+      state: "idle",
+    });
+  });
+  it("does not rearm after hands-free is turned off while awaiting approval", () => {
+    const h = harness();
+    h.controller.setHandsFree(true);
+    h.controller.notifyAwaitingApproval();
+
+    h.controller.setHandsFree(false);
+    h.controller.notifyResultDelivered();
+
+    expect(h.rec.adapter.starts).toBe(1);
+    expect(h.controller.snapshot()).toMatchObject({
+      handsFree: false,
+      state: "idle",
+    });
+  });
+  it("does not rearm after hands-free is turned off while speaking", () => {
+    const h = harness();
+    h.controller.setHandsFree(true);
+    h.controller.speakingStarted();
+    expect(h.audioLevel.starts).toBe(1);
+
+    h.controller.setHandsFree(false);
+    expect(h.audioLevel.stops).toBe(1);
+
+    h.controller.speakingEnded();
+
+    expect(h.rec.adapter.starts).toBe(1);
+    expect(h.controller.snapshot()).toMatchObject({
+      handsFree: false,
+      state: "idle",
     });
   });
 });

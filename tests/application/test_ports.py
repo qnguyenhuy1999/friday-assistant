@@ -122,6 +122,10 @@ class _FakeRunRepository:
         runs = [run for run in self._runs.values() if run.execution_id == execution_id]
         return sorted(runs, key=lambda run: (run.created_at, str(run.id)))
 
+    def get_latest_for_execution(self, execution_id: RunId) -> Run | None:
+        runs = self.list_for_execution(execution_id)
+        return runs[-1] if runs else None
+
 
 @dataclass
 class _FakeRunStepRepository:

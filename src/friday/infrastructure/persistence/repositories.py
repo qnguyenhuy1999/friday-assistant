@@ -195,6 +195,16 @@ class RunRepository:
         )
         return [run_from_row(row) for row in self._session.execute(stmt).scalars()]
 
+    def get_latest_for_execution(self, execution_id: RunId) -> Run | None:
+        stmt = (
+            select(RunRow)
+            .where(RunRow.execution_id == str(execution_id))
+            .order_by(RunRow.created_at.desc(), RunRow.id.desc())
+            .limit(1)
+        )
+        row = self._session.execute(stmt).scalars().first()
+        return run_from_row(row) if row is not None else None
+
 
 class ScheduleRepository:
     def __init__(self, session: Session) -> None:

@@ -23,9 +23,13 @@ export function ConversationPage({
   const { conversationId, isError } = useConversationId();
   const turns = useConversationTurns(conversationId);
   const submit = useSubmitConversationTurn(conversationId);
-  const answers = useConversationAnswers(conversationId, turns.items);
+  const { answers, invalidateAnswer } = useConversationAnswers(
+    conversationId,
+    turns.items,
+  );
   const [text, setText] = useState("");
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
   const activeRunId = useRef<string | null>(null);
   const speakableRunIds = useRef(new Set<string>());
   const answersRef = useRef(answers);
@@ -44,6 +48,15 @@ export function ConversationPage({
         setCancelError("Could not cancel the run on the server.");
       });
   }, []);
+  const onRetry = useCallback(
+    (runId: string) => {
+      void friday.runs
+        .retry(runId)
+        .then(() => invalidateAnswer(runId))
+        .catch(() => setRetryError("Could not retry the run on the server."));
+    },
+    [invalidateAnswer],
+  );
   const adoptRun = useCallback(
     (runId: string, generation: number) => {
       if (generation !== submitGeneration.current) {
@@ -191,6 +204,7 @@ export function ConversationPage({
               : "Ready"}
       </p>
       {cancelError && <p role="alert">{cancelError}</p>}
+      {retryError && <p role="alert">{retryError}</p>}
       <ConversationTranscript
         turns={turns.items}
         answers={answers}
@@ -199,6 +213,7 @@ export function ConversationPage({
         }
         onReviewApproval={onReviewApproval}
         onAnswerState={handleAnswerState}
+        onRetry={onRetry}
       />
       <label>
         Message{" "}

@@ -29,6 +29,7 @@ from friday.application.run_lifecycle import (
     CancelRun,
     CompleteRun,
     FailRun,
+    GetLatestRunForExecution,
     GetRun,
     ListRunsByExecution,
     ListRunsForTask,
@@ -82,6 +83,19 @@ def list_runs_by_execution(
 ) -> RunPageResponse:
     results = ListRunsByExecution(uow_factory, clock).execute(RunId.parse(str(run_id)))
     return RunPageResponse(items=[_run_response(r) for r in results], next_cursor=None)
+
+
+@router.get(
+    "/runs/{run_id}/latest-in-execution",
+    response_model=RunResponse,
+    operation_id="getLatestRunForExecution",
+)
+def get_latest_run_for_execution(
+    run_id: UUID, uow_factory: UowDependency, clock: ClockDependency
+) -> RunResponse:
+    return _run_response(
+        GetLatestRunForExecution(uow_factory, clock).execute(RunId.parse(str(run_id)))
+    )
 
 
 @router.get("/runs/{run_id}/result", response_model=RunResultResponse, operation_id="getRunResult")

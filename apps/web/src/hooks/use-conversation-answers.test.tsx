@@ -29,7 +29,12 @@ function turn(index: number): ConversationTurn {
 
 /** Routes the two endpoints an answer needs and records what was asked for, so
  * a test can assert on fan-out rather than on rendered output. */
-function stubApi() {
+function stubApi(
+  options: {
+    run?: (runId: string) => unknown;
+    latest?: (runId: string) => unknown;
+  } = {},
+) {
   const runRequests: string[] = [];
   const resultRequests: string[] = [];
   vi.spyOn(global, "fetch").mockImplementation((input) => {
@@ -50,14 +55,34 @@ function stubApi() {
       const runId = run[1] ?? "";
       runRequests.push(runId);
       return Promise.resolve(
-        jsonResponse({
-          id: runId,
-          task_id: "task-1",
-          status: "succeeded",
-          created_at: "2026-07-26T00:00:00Z",
-          failure: null,
-          execution_id: runId,
-        }),
+        jsonResponse(
+          options.run?.(runId) ?? {
+            id: runId,
+            task_id: "task-1",
+            status: "succeeded",
+            created_at: "2026-07-26T00:00:00Z",
+            failure: null,
+            execution_id: runId,
+          },
+        ),
+      );
+    }
+    const latest = /^\/v1\/runs\/([^/]+)\/latest-in-execution$/.exec(
+      url.pathname,
+    );
+    if (latest) {
+      const runId = latest[1] ?? "";
+      return Promise.resolve(
+        jsonResponse(
+          options.latest?.(runId) ?? {
+            id: runId,
+            task_id: "task-1",
+            status: "succeeded",
+            created_at: "2026-07-26T00:00:00Z",
+            failure: null,
+            execution_id: runId,
+          },
+        ),
       );
     }
     const execution = /^\/v1\/runs\/([^/]+)\/execution$/.exec(url.pathname);
@@ -111,7 +136,7 @@ describe("useConversationAnswers", () => {
       wrapper,
     });
     await waitFor(() =>
-      expect(result.current.get("run-24")?.state).toBe("answered"),
+      expect(result.current.answers.get("run-24")?.state).toBe("answered"),
     );
 
     // One run request per loaded turn and no event walk behind it. What keeps
@@ -119,7 +144,7 @@ describe("useConversationAnswers", () => {
     // asked for are ever loaded.
     expect(new Set(api.runRequests).size).toBe(25);
     expect(api.runRequests).toHaveLength(25);
-    expect(result.current.get("run-24")).toEqual({
+    expect(result.current.answers.get("run-24")).toEqual({
       runId: "run-24",
       state: "answered",
       summary: "answer for run-24",
@@ -137,14 +162,14 @@ describe("useConversationAnswers", () => {
       { wrapper, initialProps: { turns: newest } },
     );
     await waitFor(() =>
-      expect(result.current.get("run-9")?.state).toBe("answered"),
+      expect(result.current.answers.get("run-9")?.state).toBe("answered"),
     );
 
     // Fetching an older page prepends turns, exactly as the transcript does.
     const older = Array.from({ length: 5 }, (_, index) => turn(index));
     rerender({ turns: [...older, ...newest] });
     await waitFor(() =>
-      expect(result.current.get("run-0")?.state).toBe("answered"),
+      expect(result.current.answers.get("run-0")?.state).toBe("answered"),
     );
 
     // Answers already final stay cached, so revealing history costs one request
@@ -161,7 +186,7 @@ describe("useConversationAnswers", () => {
       { wrapper },
     );
     await waitFor(() =>
-      expect(result.current.get("run-0")?.state).toBe("answered"),
+      expect(result.current.answers.get("run-0")?.state).toBe("answered"),
     );
 
     expect(api.resultRequests).toEqual(["run-0"]);
@@ -174,7 +199,59 @@ describe("useConversationAnswers", () => {
       wrapper,
     });
 
-    expect(result.current.size).toBe(0);
+    expect(result.current.answers.size).toBe(0);
     expect(api.runRequests).toEqual([]);
+  });
+
+  it("re-resolves a failed run to its retry descendant after invalidation", async () => {
+    let retried = false;
+    const failed = {
+      id: "run-0",
+      task_id: "task-1",
+      status: "failed",
+      created_at: "2026-07-26T00:00:00Z",
+      failure: {
+        code: "tool_timeout",
+        message: "timed out",
+        retryable: true,
+        cause: "timeout",
+        details: null,
+      },
+      execution_id: "run-0",
+    };
+    stubApi({
+      run: (runId) =>
+        retried && runId === "run-1"
+          ? {
+              ...failed,
+              id: "run-1",
+              status: "succeeded",
+              failure: null,
+            }
+          : failed,
+      latest: () =>
+        retried
+          ? { ...failed, id: "run-1", status: "succeeded", failure: null }
+          : failed,
+    });
+    const { result } = renderHook(
+      () => useConversationAnswers("c-1", [turn(0)]),
+      { wrapper },
+    );
+    await waitFor(() =>
+      expect(result.current.answers.get("run-0")?.state).toBe("failed"),
+    );
+
+    retried = true;
+    result.current.invalidateAnswer("run-0");
+
+    await waitFor(() =>
+      expect(result.current.answers.get("run-0")).toEqual({
+        runId: "run-1",
+        state: "answered",
+        summary: "answer for run-1",
+        details: null,
+      }),
+    );
   });
 });

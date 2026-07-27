@@ -132,13 +132,8 @@ class ConversationContextAssembler:
         run = uow.runs.get(turn.run_id)
         if run is None or run.status not in TERMINAL_RUN_STATUSES:
             return turn.run_id
-        runs = uow.runs.list_for_execution(run.execution_id)
-        if len(runs) <= 1:
-            return turn.run_id
-        for candidate in reversed(runs):
-            if candidate.status not in TERMINAL_RUN_STATUSES:
-                return candidate.id
-        return runs[-1].id
+        latest = uow.runs.get_latest_for_execution(run.execution_id)
+        return latest.id if latest is not None else turn.run_id
 
     def _messages_for(
         self, uow: UnitOfWork, turns: Sequence[ConversationTurn]

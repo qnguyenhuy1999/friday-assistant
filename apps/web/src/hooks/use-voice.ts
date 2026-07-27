@@ -51,11 +51,16 @@ export function useVoice(
     [audioLevel, output],
   );
   const [snapshot, setSnapshot] = useState(controller.snapshot());
+  /** Cleanup releases the microphone, speech and recognizer but must leave the
+   * instances usable: React remounts a component without rebuilding these
+   * memos, and disposing them here would hand the second mount dead adapters —
+   * which is exactly what silently killed voice under StrictMode. Unsubscribing
+   * is what stops a torn-down mount from being called back into. */
   useEffect(() => {
     const off = controller.subscribe(setSnapshot);
     return () => {
       off();
-      controller.dispose();
+      controller.interrupt();
     };
   }, [controller]);
   useEffect(() => {
@@ -65,8 +70,8 @@ export function useVoice(
     return () => {
       start?.();
       end?.();
-      synthesis.dispose();
-      audioLevel?.dispose();
+      output?.stop();
+      audioLevel?.stop();
     };
   }, [synthesis, output, controller, audioLevel]);
   /** Single seam for "an answer arrived". Speaking it is optional; telling the

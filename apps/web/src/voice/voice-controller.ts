@@ -43,6 +43,7 @@ export class VoiceController {
   #permissionRequested = false;
   #silence: number | null = null;
   #rearms = 0;
+  #submits = 0;
   #disposed = false;
   constructor(private readonly deps: VoiceControllerDeps) {
     deps.recognition?.onResult((result) =>
@@ -122,7 +123,11 @@ export class VoiceController {
     this.#active = null;
     this.deps.recognition?.abort();
     this.patch({ state: "speaking", interimTranscript: "" });
-    void this.deps.audioLevel?.start().catch(() => undefined);
+    // Automatic barge-in needs the microphone, so it is only armed for a
+    // hands-free session the user explicitly opted into. Push-to-talk and
+    // typed turns barge in by gesture and must never open the mic on their own.
+    if (this.#snapshot.handsFree)
+      void this.deps.audioLevel?.start().catch(() => undefined);
   }
   speakingEnded(): void {
     this.deps.audioLevel?.stop();
@@ -134,6 +139,7 @@ export class VoiceController {
     if (this.#snapshot.handsFree) this.begin("hands_free");
   }
   interrupt(): void {
+    this.#submits += 1;
     this.clearSilence();
     this.stopOutputAndRecognition();
     this.patch({ handsFree: false, state: "idle", interimTranscript: "" });
@@ -245,11 +251,17 @@ export class VoiceController {
       this.idle();
       return;
     }
+    // An interrupt during the in-flight request invalidates this submission:
+    // its late resolution must not drag the controller back into a run the
+    // user already abandoned.
+    const generation = ++this.#submits;
     this.patch({ state: "submitting", interimTranscript: "", error: null });
     try {
       await this.deps.submit(input);
+      if (generation !== this.#submits) return;
       this.patch({ state: "processing" });
     } catch {
+      if (generation !== this.#submits) return;
       this.patch({ state: "error", error: "network" });
     }
   }

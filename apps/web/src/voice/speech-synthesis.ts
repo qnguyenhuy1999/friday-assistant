@@ -15,6 +15,7 @@ export function createSpeechSynthesisAdapter(
       lang: string;
       onstart: (() => void) | null;
       onend: (() => void) | null;
+      onerror: (() => void) | null;
     };
   };
   if (!w.speechSynthesis || !w.SpeechSynthesisUtterance) return null;
@@ -37,6 +38,11 @@ export function createSpeechSynthesisAdapter(
       };
       utterance.onend = () => {
         if (!disposed) callbacks.onEnd();
+      };
+      // A failed utterance fires `error` instead of `end`, so without this the
+      // queue would wait forever on an utterance that is already over.
+      utterance.onerror = () => {
+        if (!disposed) callbacks.onError();
       };
       w.speechSynthesis!.speak(utterance);
     },

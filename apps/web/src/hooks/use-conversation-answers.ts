@@ -1,6 +1,6 @@
 import type { ConversationTurn } from "@friday/contracts";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import { friday } from "../friday-client";
 import {
   answerFromRun,
@@ -9,12 +9,7 @@ import {
   type TurnAnswer,
 } from "./use-turn-answer";
 
-/** Turns that hydrate an answer at once. Each hydrated turn costs a run request
- * plus, once succeeded, an event request, and a conversation grows without
- * bound — so this window is what stops a long history from fanning out into
- * thousands of requests on load. Older turns stay reachable via `showEarlier`. */
-export const ANSWER_WINDOW_TURNS = 20;
-/** Answer loads in flight at once, so widening the window cannot burst. */
+/** Answer loads in flight at once, so a freshly revealed page cannot burst. */
 export const ANSWER_CONCURRENCY = 6;
 /** `agent_finished` is written at the tail of a succeeded run's log, so the walk
  * is short in practice; the cap stops a pathological run from paging forever. */
@@ -55,43 +50,26 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-export interface ConversationAnswers {
-  /** The turns to render — the newest `windowSize`, so a new turn is always in. */
-  visibleTurns: ConversationTurn[];
-  answers: ReadonlyMap<string, TurnAnswer>;
-  /** Turns held back by the window, for an affordance to reveal them. */
-  earlierCount: number;
-  showEarlier(): void;
-}
-
-/** Loads answers for the visible turns as one bounded query.
+/** Loads answers for the loaded turns as one bounded query.
  *
  * Replaces a per-turn hook that issued its own run query and walked every event
  * page: N turns meant N polling queries plus an unbounded page walk each, so
  * reopening a long conversation fanned out into thousands of requests. Here the
- * whole window is one query with one poll timer, capped concurrency, capped
- * paging, and final answers cached so a poll only re-requests what can still
- * change.
+ * loaded transcript is one query with one poll timer, capped concurrency, and
+ * final answers cached so a poll only re-requests what can still change.
  *
- * A single request for the whole window would need a batch endpoint the API
- * does not expose today (`GET /v1/runs/{id}` and `/v1/runs/{id}/events` are
- * both single-run); this bounds the fan-out without touching the API. */
+ * What bounds the total is the transcript's own cursor paging: only the pages
+ * the user has actually asked for are loaded, so the fan-out grows with what is
+ * on screen rather than with the age of the conversation.
+ *
+ * A single request for the whole page would need a batch endpoint the API does
+ * not expose today (`GET /v1/runs/{id}` and `/v1/runs/{id}/result` are both
+ * single-run); this bounds the fan-out without touching the API. */
 export function useConversationAnswers(
   conversationId: string | null,
   turns: ConversationTurn[],
-): ConversationAnswers {
-  const [windowSize, setWindowSize] = useState(ANSWER_WINDOW_TURNS);
-  const visibleTurns = useMemo(
-    () =>
-      turns.length > windowSize
-        ? turns.slice(turns.length - windowSize)
-        : turns,
-    [turns, windowSize],
-  );
-  const runIds = useMemo(
-    () => visibleTurns.map((turn) => turn.run_id),
-    [visibleTurns],
-  );
+): ReadonlyMap<string, TurnAnswer> {
+  const runIds = useMemo(() => turns.map((turn) => turn.run_id), [turns]);
   // Answers that can no longer change, kept for the life of the page so a poll
   // re-requests only the runs still in flight instead of the whole window.
   const settled = useRef(new Map<string, TurnAnswer>());
@@ -121,14 +99,5 @@ export function useConversationAnswers(
         ? ANSWER_POLL_MS
         : false,
   });
-  const showEarlier = useCallback(
-    () => setWindowSize((size) => size + ANSWER_WINDOW_TURNS),
-    [],
-  );
-  return {
-    visibleTurns,
-    answers: data ?? EMPTY_ANSWERS,
-    earlierCount: turns.length - visibleTurns.length,
-    showEarlier,
-  };
+  return data ?? EMPTY_ANSWERS;
 }

@@ -1,13 +1,10 @@
 import type { ConversationTurn } from "@friday/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { friday } from "../friday-client";
-import {
-  ANSWER_WINDOW_TURNS,
-  useConversationAnswers,
-} from "./use-conversation-answers";
+import { useConversationAnswers } from "./use-conversation-answers";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -86,51 +83,53 @@ describe("useConversationAnswers", () => {
       details: null,
     });
   });
-  it("hydrates only the newest window of a long conversation", async () => {
+  it("hydrates an answer for every loaded turn exactly once", async () => {
     const api = stubApi();
-    const turns = Array.from({ length: 50 }, (_, index) => turn(index));
+    const turns = Array.from({ length: 25 }, (_, index) => turn(index));
 
     const { result } = renderHook(() => useConversationAnswers("c-1", turns), {
       wrapper,
     });
     await waitFor(() =>
-      expect(result.current.answers.get("run-49")?.state).toBe("answered"),
+      expect(result.current.get("run-24")?.state).toBe("answered"),
     );
 
-    // 50 turns must not mean 50 run requests plus an event walk each.
-    expect(result.current.visibleTurns).toHaveLength(ANSWER_WINDOW_TURNS);
-    expect(new Set(api.runRequests).size).toBe(ANSWER_WINDOW_TURNS);
-    expect(result.current.earlierCount).toBe(50 - ANSWER_WINDOW_TURNS);
-    // The window holds the newest turns, so a fresh answer is never cut off.
-    expect(result.current.visibleTurns[0]?.run_id).toBe(
-      `run-${50 - ANSWER_WINDOW_TURNS}`,
-    );
-    expect(result.current.answers.get("run-49")).toEqual({
+    // One run request per loaded turn and no event walk behind it. What keeps
+    // this bounded on a long conversation is that only the pages the user
+    // asked for are ever loaded.
+    expect(new Set(api.runRequests).size).toBe(25);
+    expect(api.runRequests).toHaveLength(25);
+    expect(result.current.get("run-24")).toEqual({
       state: "answered",
-      summary: "answer for run-49",
+      summary: "answer for run-24",
       details: null,
     });
   });
 
-  it("reveals earlier turns without re-requesting settled answers", async () => {
+  it("does not re-request settled answers when earlier turns are revealed", async () => {
     const api = stubApi();
-    const turns = Array.from({ length: 50 }, (_, index) => turn(index));
+    const newest = Array.from({ length: 5 }, (_, index) => turn(index + 5));
 
-    const { result } = renderHook(() => useConversationAnswers("c-1", turns), {
-      wrapper,
-    });
-    await waitFor(() =>
-      expect(result.current.answers.get("run-49")?.state).toBe("answered"),
+    const { result, rerender } = renderHook(
+      ({ turns }: { turns: ConversationTurn[] }) =>
+        useConversationAnswers("c-1", turns),
+      { wrapper, initialProps: { turns: newest } },
     );
-    act(() => result.current.showEarlier());
     await waitFor(() =>
-      expect(result.current.visibleTurns).toHaveLength(ANSWER_WINDOW_TURNS * 2),
+      expect(result.current.get("run-9")?.state).toBe("answered"),
     );
 
-    // Only the newly revealed turns are fetched; the first window is final and
-    // stays cached, so widening costs one request per new turn and no more.
-    expect(api.runRequests).toHaveLength(ANSWER_WINDOW_TURNS * 2);
-    expect(new Set(api.runRequests).size).toBe(ANSWER_WINDOW_TURNS * 2);
+    // Fetching an older page prepends turns, exactly as the transcript does.
+    const older = Array.from({ length: 5 }, (_, index) => turn(index));
+    rerender({ turns: [...older, ...newest] });
+    await waitFor(() =>
+      expect(result.current.get("run-0")?.state).toBe("answered"),
+    );
+
+    // Answers already final stay cached, so revealing history costs one request
+    // per newly revealed turn and nothing for what was already on screen.
+    expect(api.runRequests).toHaveLength(10);
+    expect(new Set(api.runRequests).size).toBe(10);
   });
 
   it("uses one durable projection request instead of walking event pages", async () => {
@@ -141,7 +140,7 @@ describe("useConversationAnswers", () => {
       { wrapper },
     );
     await waitFor(() =>
-      expect(result.current.answers.get("run-0")?.state).toBe("answered"),
+      expect(result.current.get("run-0")?.state).toBe("answered"),
     );
 
     expect(api.resultRequests).toEqual(["run-0"]);
@@ -154,7 +153,7 @@ describe("useConversationAnswers", () => {
       wrapper,
     });
 
-    expect(result.current.visibleTurns).toEqual([]);
+    expect(result.current.size).toBe(0);
     expect(api.runRequests).toEqual([]);
   });
 });

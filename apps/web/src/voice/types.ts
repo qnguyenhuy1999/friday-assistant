@@ -63,6 +63,10 @@ export interface SpeakOptions {
 export interface SpeechSynthesisCallbacks {
   onStart(): void;
   onEnd(): void;
+  /** An utterance that errors never fires `end`, so this is the other way the
+   * queue learns it is done with it. Without it a failed utterance strands the
+   * queue mid-playback and the session never leaves `speaking`. */
+  onError(): void;
 }
 export interface SpeechSynthesisAdapter {
   /** Callbacks belong to this utterance, never to a shared synthesis stream. */

@@ -10,6 +10,10 @@ import type { FridayHttpClient } from "../http";
 export interface ListConversationTurnsParams {
   limit?: number;
   cursor?: string;
+  /** `recent_desc` opens on the newest turns and pages backwards in time, so a
+   * long conversation does not have to be downloaded from the beginning.
+   * Cursors are bound to their ordering and cannot be mixed. */
+  order?: "created_at_id_asc" | "recent_desc";
 }
 
 export class ConversationsResource {
@@ -40,7 +44,11 @@ export class ConversationsResource {
     return this.http.requestJson<Page<ConversationTurn>>({
       method: "GET",
       path: `/v1/conversations/${id}/turns`,
-      query: { limit: params.limit, cursor: params.cursor },
+      query: {
+        limit: params.limit,
+        cursor: params.cursor,
+        order: params.order,
+      },
       validate: validateConversationTurnPage,
     });
   }

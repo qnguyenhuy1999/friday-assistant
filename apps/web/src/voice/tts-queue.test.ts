@@ -43,4 +43,38 @@ describe("TtsQueue", () => {
     b?.onEnd();
     expect(ends).toBe(1);
   });
+  it("completes the queue when an utterance errors instead of ending", () => {
+    const fake = synthesis();
+    const queue = new TtsQueue(fake.adapter);
+    let ends = 0;
+    queue.onEnd(() => (ends += 1));
+
+    queue.speak({ ...options, text: "A" });
+    fake.callbacks[0]?.onError();
+
+    // The failed utterance is terminal, so the session stops speaking …
+    expect(ends).toBe(1);
+
+    // … and the queue is free to play the next answer.
+    queue.speak({ ...options, text: "B" });
+    expect(fake.callbacks).toHaveLength(2);
+    fake.callbacks[1]?.onEnd();
+    expect(ends).toBe(2);
+  });
+  it("ignores a cancelled utterance's late error", () => {
+    const fake = synthesis();
+    const queue = new TtsQueue(fake.adapter);
+    let ends = 0;
+    queue.onEnd(() => (ends += 1));
+
+    queue.speak({ ...options, text: "A" });
+    const a = fake.callbacks[0];
+    queue.stop();
+    queue.speak({ ...options, text: "B" });
+
+    a?.onError();
+
+    expect(ends).toBe(0);
+    expect(fake.callbacks).toHaveLength(2);
+  });
 });

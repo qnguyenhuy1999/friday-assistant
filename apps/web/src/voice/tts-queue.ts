@@ -48,15 +48,20 @@ export class TtsQueue {
     this.#playing = true;
     const generation = ++this.#generation;
     this.#activeGeneration = generation;
+    // An utterance is over on either `end` or `error`, and both are terminal
+    // for the same generation. Treating only `end` as terminal strands the
+    // queue on a failed utterance and the session never stops speaking.
+    const finished = () => {
+      if (this.#activeGeneration !== generation) return;
+      this.#activeGeneration = null;
+      this.next();
+    };
     this.adapter.speak(item, {
       onStart: () => {
         if (this.#activeGeneration === generation) this.#starts.emit();
       },
-      onEnd: () => {
-        if (this.#activeGeneration !== generation) return;
-        this.#activeGeneration = null;
-        this.next();
-      },
+      onEnd: finished,
+      onError: finished,
     });
   }
 }

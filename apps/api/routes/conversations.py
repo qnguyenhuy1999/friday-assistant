@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
@@ -11,6 +11,7 @@ from apps.api.pagination import (
     MAX_PAGE_SIZE,
     cursor_datetime,
     decode_cursor,
+    encode_cursor,
     page_from_query,
 )
 from apps.api.schemas.conversations import (
@@ -100,6 +101,49 @@ def submit_turn(
     return _turn(GetConversationTurn(uow_factory).execute(result.turn_id))
 
 
+def _recent_turns(
+    conversation_id: ConversationId,
+    parent_id: str,
+    uow_factory: UnitOfWorkFactory,
+    limit: int,
+    cursor: str | None,
+) -> ConversationTurnPageResponse:
+    """Newest turns first page, then backwards through older ones.
+
+    Items stay oldest-first within a page so a transcript renders as-is, while
+    `next_cursor` walks *backwards* in time. That is what lets a long-lived
+    conversation open on its tail instead of downloading its whole history.
+    """
+    before = decode_cursor(
+        cursor,
+        collection="conversation_turns",
+        parent_id=parent_id,
+        order="recent_desc",
+        parts=2,
+    )
+    items = ListConversationTurns(uow_factory).recent_page(
+        conversation_id,
+        limit + 1,
+        cursor_datetime(before.after[0]) if before else None,
+        before.after[1] if before else None,
+    )
+    has_older = len(items) > limit
+    page = items[1:] if has_older else items
+    next_cursor = (
+        encode_cursor(
+            collection="conversation_turns",
+            parent_id=parent_id,
+            order="recent_desc",
+            after=(page[0].created_at.isoformat(), str(page[0].turn_id)),
+        )
+        if has_older and page
+        else None
+    )
+    return ConversationTurnPageResponse(
+        items=[_turn(item) for item in page], next_cursor=next_cursor
+    )
+
+
 @router.get(
     "/{conversation_id}/turns",
     response_model=ConversationTurnPageResponse,
@@ -110,8 +154,11 @@ def list_turns(
     uow_factory: UowDependency,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: str | None = None,
+    order: Literal["created_at_id_asc", "recent_desc"] = "created_at_id_asc",
 ) -> ConversationTurnPageResponse:
     parsed = ConversationId.parse(str(conversation_id))
+    if order == "recent_desc":
+        return _recent_turns(parsed, str(conversation_id), uow_factory, limit, cursor)
     after = decode_cursor(
         cursor,
         collection="conversation_turns",

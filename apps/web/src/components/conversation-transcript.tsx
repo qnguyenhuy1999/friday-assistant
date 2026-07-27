@@ -5,23 +5,23 @@ function Turn({
   turn,
   answer,
   onReviewApproval,
-  onAnswer,
+  onAnswerState,
 }: {
   turn: ConversationTurn;
   answer: TurnAnswer;
   onReviewApproval(runId: string): void;
-  onAnswer(runId: string, summary: string): void;
+  onAnswerState(runId: string, answer: TurnAnswer): void;
 }) {
   const previousState = useRef(answer.state);
+  // Every state a run reaches is reported, not just a successful answer: the
+  // voice session is waiting on this run, and a failure or an approval pause
+  // that goes unreported leaves it stuck mid-turn.
   useEffect(() => {
-    if (
-      previousState.current !== "answered" &&
-      answer.state === "answered" &&
-      answer.summary
-    )
-      onAnswer(turn.run_id, answer.summary);
-    previousState.current = answer.state;
-  }, [answer.state, answer.summary, onAnswer, turn.run_id]);
+    if (previousState.current !== answer.state) {
+      previousState.current = answer.state;
+      onAnswerState(turn.run_id, answer);
+    }
+  }, [answer, onAnswerState, turn.run_id]);
   return (
     <li>
       <strong>You</strong>
@@ -58,23 +58,24 @@ export function ConversationTranscript({
   turns,
   answers,
   onReviewApproval,
-  onAnswer = () => undefined,
-  earlierCount = 0,
+  onAnswerState = () => undefined,
   onShowEarlier,
 }: {
   turns: ConversationTurn[];
   answers: ReadonlyMap<string, TurnAnswer>;
   onReviewApproval(runId: string): void;
-  onAnswer?(runId: string, summary: string): void;
-  earlierCount?: number;
+  onAnswerState?(runId: string, answer: TurnAnswer): void;
+  /** Omitted when nothing earlier remains. The count is deliberately not shown:
+   * older turns live behind a cursor, so how many there are is not known until
+   * they are fetched. */
   onShowEarlier?(): void;
 }) {
   if (!turns.length) return <p>Ask Friday to get started.</p>;
   return (
     <>
-      {earlierCount > 0 && onShowEarlier && (
+      {onShowEarlier && (
         <button type="button" onClick={onShowEarlier}>
-          Show {earlierCount} earlier {earlierCount === 1 ? "turn" : "turns"}
+          Show earlier turns
         </button>
       )}
       <ol>
@@ -84,7 +85,7 @@ export function ConversationTranscript({
             turn={turn}
             answer={answers.get(turn.run_id) ?? PENDING_TURN_ANSWER}
             onReviewApproval={onReviewApproval}
-            onAnswer={onAnswer}
+            onAnswerState={onAnswerState}
           />
         ))}
       </ol>

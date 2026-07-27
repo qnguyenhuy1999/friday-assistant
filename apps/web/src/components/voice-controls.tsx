@@ -5,6 +5,7 @@ export function VoiceControls({
   capabilities,
   snapshot,
   preferences,
+  disabled = false,
   onPreferences,
   onPress,
   onRelease,
@@ -13,6 +14,9 @@ export function VoiceControls({
   capabilities: VoiceCapabilities;
   snapshot: VoiceSnapshot;
   preferences: VoicePreferences;
+  /** Voice input has nowhere to go until the conversation exists, so it is
+   * held back exactly like Send — speech accepted before then is lost. */
+  disabled?: boolean;
   onPreferences(value: VoicePreferences): void;
   onPress(): void;
   onRelease(): void;
@@ -25,6 +29,7 @@ export function VoiceControls({
       <button
         type="button"
         aria-label="Hold to talk"
+        disabled={disabled}
         onMouseDown={onPress}
         onMouseUp={onRelease}
       >
@@ -33,6 +38,7 @@ export function VoiceControls({
       <label>
         <input
           type="checkbox"
+          disabled={disabled}
           checked={snapshot.handsFree}
           onChange={(event) => onHandsFree(event.target.checked)}
         />

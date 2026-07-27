@@ -67,6 +67,73 @@ def test_client_turn_id_cannot_replay_a_different_canonical_payload(client: Test
     assert changed.json()["error"]["type"] == "entity_conflict"
 
 
+def test_recent_order_opens_on_the_newest_turns_and_pages_backwards(
+    client: TestClient,
+) -> None:
+    conversation_id = _create(client)
+    created = [
+        client.post(
+            f"/v1/conversations/{conversation_id}/turns",
+            json={
+                "client_turn_id": f"turn-{index}",
+                "input_text": f"message {index}",
+                "input_mode": "typed",
+                "recognition_language": None,
+            },
+        ).json()["id"]
+        for index in range(5)
+    ]
+
+    newest = client.get(
+        f"/v1/conversations/{conversation_id}/turns", params={"order": "recent_desc", "limit": 2}
+    ).json()
+
+    # The tail arrives first, still oldest-first inside the page so a transcript
+    # renders it as-is — that is the whole point of the ordering.
+    assert [item["id"] for item in newest["items"]] == created[3:]
+    assert newest["next_cursor"]
+
+    older = client.get(
+        f"/v1/conversations/{conversation_id}/turns",
+        params={"order": "recent_desc", "limit": 2, "cursor": newest["next_cursor"]},
+    ).json()
+
+    assert [item["id"] for item in older["items"]] == created[1:3]
+    assert older["next_cursor"]
+
+    oldest = client.get(
+        f"/v1/conversations/{conversation_id}/turns",
+        params={"order": "recent_desc", "limit": 2, "cursor": older["next_cursor"]},
+    ).json()
+
+    # The walk terminates rather than looping or re-serving the same page.
+    assert [item["id"] for item in oldest["items"]] == created[:1]
+    assert oldest["next_cursor"] is None
+
+
+def test_recent_cursor_is_rejected_by_the_forward_order(client: TestClient) -> None:
+    conversation_id = _create(client)
+    for index in range(3):
+        client.post(
+            f"/v1/conversations/{conversation_id}/turns",
+            json={
+                "client_turn_id": f"turn-{index}",
+                "input_text": f"message {index}",
+                "input_mode": "typed",
+                "recognition_language": None,
+            },
+        )
+    cursor = client.get(
+        f"/v1/conversations/{conversation_id}/turns", params={"order": "recent_desc", "limit": 1}
+    ).json()["next_cursor"]
+
+    # Cursors are bound to their ordering; replaying one against the other
+    # direction would silently skip or repeat turns.
+    response = client.get(f"/v1/conversations/{conversation_id}/turns", params={"cursor": cursor})
+
+    assert response.status_code == 422
+
+
 def test_client_turn_id_lookup_uses_the_same_trimmed_key_as_persistence(client: TestClient) -> None:
     conversation_id = _create(client)
     body = {

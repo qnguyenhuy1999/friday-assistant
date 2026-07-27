@@ -77,16 +77,43 @@ function harness(
   const rec = recognition();
   const submitted: string[] = [];
   const output = { stops: 0, stop: () => output.stops++ };
+  const audioLevel = {
+    starts: 0,
+    start: async () => {
+      audioLevel.starts += 1;
+    },
+    stop: () => undefined,
+    onSustainedSpeech: () => () => undefined,
+  };
+  /** Holds a submission open so an interrupt can land while it is in flight. */
+  let hold = false;
+  let release: (() => void) | null = null;
   const controller = new VoiceController({
     recognition: rec.adapter,
     output,
+    audioLevel,
     language: () => "en-US",
     submit: async ({ text }) => {
       submitted.push(text);
+      if (hold) await new Promise<void>((resolve) => (release = resolve));
     },
     timers: timerApi,
   });
-  return { controller, rec, submitted, output };
+  return {
+    controller,
+    rec,
+    submitted,
+    output,
+    audioLevel,
+    holdSubmit() {
+      hold = true;
+    },
+    releaseSubmit() {
+      hold = false;
+      release?.();
+      release = null;
+    },
+  };
 }
 
 describe("VoiceController", () => {
@@ -244,6 +271,38 @@ describe("VoiceController", () => {
       handsFree: false,
       state: "idle",
     });
+  });
+  it("never opens the microphone to speak a typed-only answer", () => {
+    const h = harness();
+    // No push-to-talk, no hands-free — the user has only ever typed.
+    h.controller.speakingStarted();
+    expect(h.audioLevel.starts).toBe(0);
+  });
+  it("arms barge-in monitoring only for a hands-free session", () => {
+    const h = harness();
+    h.controller.setHandsFree(true);
+    h.controller.speakingStarted();
+    expect(h.audioLevel.starts).toBe(1);
+  });
+  it("does not resume processing when a submission resolves after an interrupt", async () => {
+    const h = harness();
+    h.holdSubmit();
+    h.controller.pressToTalk();
+    h.rec.adapter.emit("cancel me", true);
+    h.controller.releaseToTalk();
+    h.rec.adapter.finish();
+    await Promise.resolve();
+    expect(h.controller.snapshot().state).toBe("submitting");
+
+    h.controller.interrupt();
+    expect(h.controller.snapshot().state).toBe("idle");
+
+    // The server answers the request the user already walked away from.
+    h.releaseSubmit();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(h.controller.snapshot().state).toBe("idle");
   });
   it("ignores adapter events after disposal", async () => {
     const h = harness();

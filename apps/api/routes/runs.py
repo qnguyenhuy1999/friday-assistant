@@ -13,7 +13,7 @@ from apps.api.pagination import (
     decode_cursor,
     page_from_query,
 )
-from apps.api.schemas.runs import RunPageResponse, RunResponse
+from apps.api.schemas.runs import RunPageResponse, RunResponse, RunResultResponse
 from apps.api.schemas.tasks import FailureBody
 from friday.application.commands import (
     CancelRunCommand,
@@ -22,6 +22,7 @@ from friday.application.commands import (
     RetryFailedRunCommand,
     StartQueuedRunCommand,
 )
+from friday.application.list_events import GetRunResult
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.results import RunResult
 from friday.application.run_lifecycle import (
@@ -69,6 +70,19 @@ def _failure(body: FailureBody) -> Failure:
 @router.get("/runs/{run_id}", response_model=RunResponse, operation_id="getRun")
 def get_run(run_id: UUID, uow_factory: UowDependency, clock: ClockDependency) -> RunResponse:
     return _run_response(GetRun(uow_factory, clock).execute(RunId.parse(str(run_id))))
+
+
+@router.get("/runs/{run_id}/result", response_model=RunResultResponse, operation_id="getRunResult")
+def get_run_result(
+    run_id: UUID, uow_factory: UowDependency, clock: ClockDependency
+) -> RunResultResponse:
+    event = GetRunResult(uow_factory, clock).execute(RunId.parse(str(run_id)))
+    payload = event.payload if event is not None and isinstance(event.payload, dict) else {}
+    summary = payload.get("summary")
+    return RunResultResponse(
+        summary=summary if isinstance(summary, str) else None,
+        details=payload.get("details", None),
+    )
 
 
 @router.get("/tasks/{task_id}/runs", response_model=RunPageResponse, operation_id="listRunsForTask")

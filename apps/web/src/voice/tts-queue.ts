@@ -10,17 +10,14 @@ export function spokenText(text: string): string {
 export class TtsQueue {
   #items: SpeakOptions[] = [];
   #playing = false;
-  #cancelled = false;
+  #generation = 0;
+  #activeGeneration: number | null = null;
   #starts = createEmitter<void>();
   #ends = createEmitter<void>();
-  constructor(private readonly adapter: SpeechSynthesisAdapter) {
-    adapter.onEnd(() => this.next());
-    adapter.onStart(() => this.#starts.emit());
-  }
+  constructor(private readonly adapter: SpeechSynthesisAdapter) {}
   speak(options: SpeakOptions): void {
     // Some browsers do not dispatch an `end` event after cancel(). A fresh
     // answer must therefore be able to restart the queue immediately.
-    this.#cancelled = false;
     this.#items.push({ ...options, text: spokenText(options.text) });
     if (this.#items.length > MAX_TTS_QUEUE)
       this.#items.splice(0, this.#items.length - MAX_TTS_QUEUE);
@@ -29,7 +26,10 @@ export class TtsQueue {
   stop(): void {
     this.#items = [];
     this.#playing = false;
-    this.#cancelled = true;
+    // Invalidate callbacks already queued by the browser before cancelling.
+    // A late end for an old utterance must not complete its replacement.
+    this.#activeGeneration = null;
+    this.#generation += 1;
     this.adapter.stop();
   }
   onStart(listener: () => void): () => void {
@@ -39,10 +39,6 @@ export class TtsQueue {
     return this.#ends.add(listener);
   }
   private next(): void {
-    if (this.#cancelled) {
-      this.#cancelled = false;
-      return;
-    }
     const item = this.#items.shift();
     if (!item) {
       this.#playing = false;
@@ -50,6 +46,17 @@ export class TtsQueue {
       return;
     }
     this.#playing = true;
-    this.adapter.speak(item);
+    const generation = ++this.#generation;
+    this.#activeGeneration = generation;
+    this.adapter.speak(item, {
+      onStart: () => {
+        if (this.#activeGeneration === generation) this.#starts.emit();
+      },
+      onEnd: () => {
+        if (this.#activeGeneration !== generation) return;
+        this.#activeGeneration = null;
+        this.next();
+      },
+    });
   }
 }

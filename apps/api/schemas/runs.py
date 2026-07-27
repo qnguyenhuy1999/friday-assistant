@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -13,6 +14,11 @@ class RunResponse(BaseModel):
     status: str
     created_at: datetime
     failure: FailureBody | None
+
+
+class RunResultResponse(BaseModel):
+    summary: str | None
+    details: Any
 
 
 class RunPageResponse(BaseModel):

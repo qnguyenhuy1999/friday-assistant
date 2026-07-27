@@ -65,3 +65,22 @@ def test_client_turn_id_cannot_replay_a_different_canonical_payload(client: Test
     assert same.json()["run_id"] == created.json()["run_id"]
     assert changed.status_code == 409
     assert changed.json()["error"]["type"] == "entity_conflict"
+
+
+def test_client_turn_id_lookup_uses_the_same_trimmed_key_as_persistence(client: TestClient) -> None:
+    conversation_id = _create(client)
+    body = {
+        "client_turn_id": "  turn-1  ",
+        "input_text": "summarise my inbox",
+        "input_mode": "typed",
+        "recognition_language": None,
+    }
+
+    created = client.post(f"/v1/conversations/{conversation_id}/turns", json=body)
+    replay = client.post(
+        f"/v1/conversations/{conversation_id}/turns",
+        json={**body, "client_turn_id": "turn-1"},
+    )
+
+    assert created.status_code == replay.status_code == 201
+    assert replay.json()["run_id"] == created.json()["run_id"]

@@ -1,4 +1,4 @@
-import type { ConversationTurn, RunEvent } from "@friday/contracts";
+import type { ConversationTurn } from "@friday/contracts";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { friday } from "../friday-client";
@@ -18,8 +18,6 @@ export const ANSWER_WINDOW_TURNS = 20;
 export const ANSWER_CONCURRENCY = 6;
 /** `agent_finished` is written at the tail of a succeeded run's log, so the walk
  * is short in practice; the cap stops a pathological run from paging forever. */
-export const MAX_ANSWER_EVENT_PAGES = 5;
-export const ANSWER_EVENT_PAGE_SIZE = 100;
 export const ANSWER_POLL_MS = 5_000;
 
 const EMPTY_ANSWERS: ReadonlyMap<string, TurnAnswer> = new Map();
@@ -29,29 +27,11 @@ export const conversationAnswersQueryKey = (
   runIds: readonly string[],
 ) => ["conversation-answers", conversationId, runIds] as const;
 
-/** Reads a bounded number of event pages. The run event feed is
- * sequence-ascending and forward-only, so the answer sits on the last page we
- * read rather than the first. */
-async function loadRunEvents(runId: string): Promise<RunEvent[]> {
-  const items: RunEvent[] = [];
-  let cursor: string | undefined;
-  for (let page = 0; page < MAX_ANSWER_EVENT_PAGES; page += 1) {
-    const result = await friday.events.listForRun(runId, {
-      limit: ANSWER_EVENT_PAGE_SIZE,
-      cursor,
-    });
-    items.push(...result.items);
-    if (!result.next_cursor) break;
-    cursor = result.next_cursor;
-  }
-  return items;
-}
-
 async function loadAnswer(runId: string): Promise<TurnAnswer> {
   const run = await friday.runs.get(runId);
-  const events =
-    run.status === "succeeded" ? await loadRunEvents(runId) : undefined;
-  return answerFromRun(run, events);
+  const result =
+    run.status === "succeeded" ? await friday.runs.getResult(runId) : undefined;
+  return answerFromRun(run, result);
 }
 
 async function mapWithConcurrency<T, R>(

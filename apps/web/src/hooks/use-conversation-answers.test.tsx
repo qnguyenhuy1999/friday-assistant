@@ -3,9 +3,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { friday } from "../friday-client";
 import {
   ANSWER_WINDOW_TURNS,
-  MAX_ANSWER_EVENT_PAGES,
   useConversationAnswers,
 } from "./use-conversation-answers";
 
@@ -32,31 +32,19 @@ function turn(index: number): ConversationTurn {
 
 /** Routes the two endpoints an answer needs and records what was asked for, so
  * a test can assert on fan-out rather than on rendered output. */
-function stubApi(options: { eventPages?: number } = {}) {
+function stubApi() {
   const runRequests: string[] = [];
-  const eventRequests: string[] = [];
-  const eventPages = options.eventPages ?? 1;
+  const resultRequests: string[] = [];
   vi.spyOn(global, "fetch").mockImplementation((input) => {
     const url = new URL(String(input), "http://127.0.0.1:8000");
-    const events = /^\/v1\/runs\/([^/]+)\/events$/.exec(url.pathname);
-    if (events) {
-      const runId = events[1] ?? "";
-      eventRequests.push(runId);
-      const page = Number(url.searchParams.get("cursor") ?? "0");
+    const result = /^\/v1\/runs\/([^/]+)\/result$/.exec(url.pathname);
+    if (result) {
+      const runId = result[1] ?? "";
+      resultRequests.push(runId);
       return Promise.resolve(
         jsonResponse({
-          items: [
-            {
-              event_id: `event-${runId}-${page}`,
-              run_id: runId,
-              step_id: null,
-              type: "agent_finished",
-              sequence: page + 1,
-              occurred_at: "2026-07-26T00:00:00Z",
-              payload: { summary: `answer for ${runId}`, details: null },
-            },
-          ],
-          next_cursor: page + 1 < eventPages ? String(page + 1) : null,
+          summary: `answer for ${runId}`,
+          details: null,
         }),
       );
     }
@@ -76,7 +64,7 @@ function stubApi(options: { eventPages?: number } = {}) {
     }
     throw new Error(`unexpected request: ${url.pathname}`);
   });
-  return { runRequests, eventRequests };
+  return { runRequests, resultRequests };
 }
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -91,6 +79,13 @@ afterEach(() => {
 });
 
 describe("useConversationAnswers", () => {
+  it("validates the durable result projection", async () => {
+    stubApi();
+    await expect(friday.runs.getResult("run-0")).resolves.toEqual({
+      summary: "answer for run-0",
+      details: null,
+    });
+  });
   it("hydrates only the newest window of a long conversation", async () => {
     const api = stubApi();
     const turns = Array.from({ length: 50 }, (_, index) => turn(index));
@@ -99,7 +94,7 @@ describe("useConversationAnswers", () => {
       wrapper,
     });
     await waitFor(() =>
-      expect(result.current.answers.size).toBe(ANSWER_WINDOW_TURNS),
+      expect(result.current.answers.get("run-49")?.state).toBe("answered"),
     );
 
     // 50 turns must not mean 50 run requests plus an event walk each.
@@ -125,7 +120,7 @@ describe("useConversationAnswers", () => {
       wrapper,
     });
     await waitFor(() =>
-      expect(result.current.answers.size).toBe(ANSWER_WINDOW_TURNS),
+      expect(result.current.answers.get("run-49")?.state).toBe("answered"),
     );
     act(() => result.current.showEarlier());
     await waitFor(() =>
@@ -138,16 +133,18 @@ describe("useConversationAnswers", () => {
     expect(new Set(api.runRequests).size).toBe(ANSWER_WINDOW_TURNS * 2);
   });
 
-  it("caps the event page walk for a single answer", async () => {
-    const api = stubApi({ eventPages: 100 });
+  it("uses one durable projection request instead of walking event pages", async () => {
+    const api = stubApi();
 
     const { result } = renderHook(
       () => useConversationAnswers("c-1", [turn(0)]),
       { wrapper },
     );
-    await waitFor(() => expect(result.current.answers.size).toBe(1));
+    await waitFor(() =>
+      expect(result.current.answers.get("run-0")?.state).toBe("answered"),
+    );
 
-    expect(api.eventRequests).toHaveLength(MAX_ANSWER_EVENT_PAGES);
+    expect(api.resultRequests).toEqual(["run-0"]);
   });
 
   it("requests nothing until a conversation exists", () => {

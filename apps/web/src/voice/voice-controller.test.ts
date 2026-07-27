@@ -132,6 +132,19 @@ describe("VoiceController", () => {
     expect(h.output.stops).toBe(1);
     expect(h.rec.adapter.starts).toBe(1);
   });
+  it("does not start a new microphone session while a run is processing", () => {
+    const h = harness();
+    h.controller.notifyProcessing();
+
+    h.controller.pressToTalk();
+    h.controller.setHandsFree(true);
+
+    expect(h.rec.adapter.starts).toBe(0);
+    expect(h.controller.snapshot()).toMatchObject({
+      state: "processing",
+      handsFree: false,
+    });
+  });
   it("restarts the silence window on interim speech after a final result", async () => {
     const clock = timers();
     const h = harness(clock.api);

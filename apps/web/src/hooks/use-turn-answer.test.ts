@@ -1,4 +1,4 @@
-import type { Run, RunEvent, RunStatus } from "@friday/contracts";
+import type { Run, RunResult, RunStatus } from "@friday/contracts";
 import { describe, expect, it } from "vitest";
 import {
   answerFromRun,
@@ -13,18 +13,6 @@ function run(status: RunStatus, failure: Run["failure"] = null): Run {
     status,
     created_at: "2026-07-26T00:00:00Z",
     failure,
-  };
-}
-
-function event(sequence: number, payload: RunEvent["payload"]): RunEvent {
-  return {
-    event_id: `event-${sequence}`,
-    run_id: "run-1",
-    step_id: null,
-    type: "agent_finished",
-    sequence,
-    occurred_at: "2026-07-26T00:00:00Z",
-    payload,
   };
 }
 
@@ -47,13 +35,10 @@ describe("answerFromRun", () => {
     expect(answerFromRun(undefined, undefined)).toEqual(PENDING_TURN_ANSWER);
   });
 
-  it("reads the answer from the last agent_finished event", () => {
-    const events = [
-      event(1, { summary: "first", details: null }),
-      event(2, { summary: "final", details: { count: 2 } }),
-    ];
+  it("reads the answer from the durable result projection", () => {
+    const result: RunResult = { summary: "final", details: { count: 2 } };
 
-    expect(answerFromRun(run("succeeded"), events)).toEqual({
+    expect(answerFromRun(run("succeeded"), result)).toEqual({
       state: "answered",
       summary: "final",
       details: { count: 2 },
@@ -61,7 +46,7 @@ describe("answerFromRun", () => {
   });
 
   it("answers with no summary when the succeeded run never reported one", () => {
-    expect(answerFromRun(run("succeeded"), [])).toEqual({
+    expect(answerFromRun(run("succeeded"), undefined)).toEqual({
       state: "answered",
       summary: null,
       details: null,
@@ -76,12 +61,12 @@ describe("answerFromRun", () => {
       cause: "runtime",
       details: null,
     } as const;
-    expect(answerFromRun(run("failed", failure), [])).toEqual({
+    expect(answerFromRun(run("failed", failure), undefined)).toEqual({
       state: "failed",
       summary: "it broke",
       details: null,
     });
-    expect(answerFromRun(run("cancelled"), [])).toEqual({
+    expect(answerFromRun(run("cancelled"), undefined)).toEqual({
       state: "cancelled",
       summary: null,
       details: null,

@@ -14,6 +14,10 @@ from friday.domain.task import Task
 CONVERSATION_TASK_TITLE_CHARS = 120
 
 
+def _canonical_client_turn_id(value: str) -> str:
+    return value.strip()
+
+
 def _title_for(input_text: str) -> str:
     collapsed = " ".join(input_text.split())
     return (
@@ -38,12 +42,13 @@ class SubmitConversationTurn:
             return replay
 
     def _materialize(self, command: SubmitConversationTurnCommand) -> SubmitConversationTurnResult:
+        client_turn_id = _canonical_client_turn_id(command.client_turn_id)
         with self._uow_factory() as uow:
             conversation = uow.conversations.get(command.conversation_id)
             if conversation is None:
                 raise ConversationNotFound(command.conversation_id)
             existing = uow.conversation_turns.get_by_client_turn_id(
-                command.conversation_id, command.client_turn_id
+                command.conversation_id, client_turn_id
             )
             if existing is not None:
                 self._assert_same_payload(existing, command)
@@ -60,7 +65,7 @@ class SubmitConversationTurn:
             turn = ConversationTurn.new(
                 id=ConversationTurnId.new(),
                 conversation_id=command.conversation_id,
-                client_turn_id=command.client_turn_id,
+                client_turn_id=client_turn_id,
                 input_text=command.input_text,
                 input_mode=command.input_mode,
                 recognition_language=command.recognition_language,
@@ -77,9 +82,10 @@ class SubmitConversationTurn:
     def _existing(
         self, command: SubmitConversationTurnCommand
     ) -> SubmitConversationTurnResult | None:
+        client_turn_id = _canonical_client_turn_id(command.client_turn_id)
         with self._uow_factory() as uow:
             turn = uow.conversation_turns.get_by_client_turn_id(
-                command.conversation_id, command.client_turn_id
+                command.conversation_id, client_turn_id
             )
         if turn is None:
             return None
@@ -93,7 +99,7 @@ class SubmitConversationTurn:
         canonical = ConversationTurn.new(
             id=turn.id,
             conversation_id=command.conversation_id,
-            client_turn_id=command.client_turn_id,
+            client_turn_id=_canonical_client_turn_id(command.client_turn_id),
             input_text=command.input_text,
             input_mode=command.input_mode,
             recognition_language=command.recognition_language,

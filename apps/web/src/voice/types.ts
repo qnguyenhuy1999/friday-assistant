@@ -60,12 +60,15 @@ export interface SpeakOptions {
   rate: number;
   lang: string;
 }
+export interface SpeechSynthesisCallbacks {
+  onStart(): void;
+  onEnd(): void;
+}
 export interface SpeechSynthesisAdapter {
-  speak(options: SpeakOptions): void;
+  /** Callbacks belong to this utterance, never to a shared synthesis stream. */
+  speak(options: SpeakOptions, callbacks: SpeechSynthesisCallbacks): void;
   stop(): void;
   listVoices(): SpeechSynthesisVoiceInfo[];
-  onStart(listener: () => void): () => void;
-  onEnd(listener: () => void): () => void;
   dispose(): void;
 }
 /** The sole output boundary owned by VoiceController. */

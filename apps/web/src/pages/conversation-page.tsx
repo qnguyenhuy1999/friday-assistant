@@ -25,6 +25,7 @@ export function ConversationPage({
   const { visibleTurns, answers, earlierCount, showEarlier } =
     useConversationAnswers(conversationId, turns.data?.items ?? NO_TURNS);
   const [text, setText] = useState("");
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const activeRunId = useRef<string | null>(null);
   const speakableRunIds = useRef(new Set<string>());
   const voice = useVoice(async (input) => {
@@ -39,9 +40,18 @@ export function ConversationPage({
   });
   const { deliverAnswer } = voice;
   const cancelActiveRun = useCallback(() => {
-    voice.controller.interrupt();
     const runId = activeRunId.current;
-    if (runId) void friday.runs.cancel(runId).catch(() => undefined);
+    // Commit the local interruption before the durable cancellation request:
+    // a worker may win that request's race, but it must never revive output.
+    activeRunId.current = null;
+    if (runId) speakableRunIds.current.delete(runId);
+    voice.controller.interrupt();
+    if (runId)
+      void friday.runs.cancel(runId).catch(() => {
+        // Local suppression remains authoritative, but durable cancellation
+        // failure needs to be visible so the user can make an informed retry.
+        setCancelError("Could not cancel the run on the server.");
+      });
   }, [voice.controller]);
   /** Only a run this page started is delivered to voice: answers hydrated from
    * history must not speak, nor resume a hands-free session nobody asked for. */
@@ -78,6 +88,12 @@ export function ConversationPage({
     };
   }, [voice.controller, cancelActiveRun]);
   const send = () => {
+    if (
+      ["finalizing", "submitting", "processing", "awaiting_approval"].includes(
+        voice.snapshot.state,
+      )
+    )
+      return;
     const input_text = text.trim();
     if (!input_text) return;
     submit.mutate(
@@ -96,6 +112,12 @@ export function ConversationPage({
     );
     setText("");
   };
+  const inputBlocked = [
+    "finalizing",
+    "submitting",
+    "processing",
+    "awaiting_approval",
+  ].includes(voice.snapshot.state);
   if (isError)
     return (
       <section>
@@ -115,6 +137,7 @@ export function ConversationPage({
               ? "Approval required"
               : "Ready"}
       </p>
+      {cancelError && <p role="alert">{cancelError}</p>}
       <ConversationTranscript
         turns={visibleTurns}
         answers={answers}
@@ -139,7 +162,7 @@ export function ConversationPage({
       <button
         type="button"
         onClick={send}
-        disabled={!conversationId || submit.isPending}
+        disabled={!conversationId || submit.isPending || inputBlocked}
       >
         Send
       </button>

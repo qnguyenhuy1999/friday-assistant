@@ -65,6 +65,7 @@ export class VoiceController {
   }
   pressToTalk(): void {
     if (this.#snapshot.handsFree || this.#active !== null) return;
+    if (!this.canStartInput()) return;
     if (this.#snapshot.state === "speaking") {
       this.stopOutputAndRecognition();
     }
@@ -77,6 +78,7 @@ export class VoiceController {
   }
   setHandsFree(enabled: boolean): void {
     if (enabled === this.#snapshot.handsFree) return;
+    if (enabled && !this.canStartInput()) return;
     this.patch({ handsFree: enabled });
     this.#rearms = 0;
     if (!enabled) {
@@ -87,8 +89,10 @@ export class VoiceController {
       this.#pending = null;
       this.deps.recognition?.abort();
       this.idle();
-    } else if (this.deps.recognition) this.begin("hands_free");
-    else
+    } else if (this.deps.recognition) {
+      if (this.#snapshot.state === "speaking") this.stopOutputAndRecognition();
+      this.begin("hands_free");
+    } else
       this.patch({ handsFree: false, state: "error", error: "not-supported" });
   }
   async submitTyped(text: string): Promise<void> {
@@ -153,6 +157,16 @@ export class VoiceController {
       language: this.deps.language(),
       continuous: mode === "hands_free",
     });
+  }
+  /** A run owns the turn while it is being finalized, submitted, processed, or
+   * awaiting authority. Starting another microphone session would otherwise
+   * let its answer abort the new user's speech mid-utterance. */
+  private canStartInput(): boolean {
+    return (
+      this.#snapshot.state === "idle" ||
+      this.#snapshot.state === "error" ||
+      this.#snapshot.state === "speaking"
+    );
   }
   /**
    * Keep browser output and input mutually exclusive.  `cancel()` is

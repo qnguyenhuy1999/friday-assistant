@@ -368,11 +368,21 @@
         "run_id": { "type": "string" },
         "created_at": { "type": "string" }
       }
+    },
+    "RunResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "details"],
+      "properties": {
+        "summary": { "type": ["string", "null"] },
+        "details": {}
+      }
     }
   },
   "responses": {
     "task": { "$ref": "#/definitions/Task" },
     "run": { "$ref": "#/definitions/Run" },
+    "runResult": { "$ref": "#/definitions/RunResult" },
     "step": { "$ref": "#/definitions/RunStep" },
     "approval": { "$ref": "#/definitions/ApprovalRequest" },
     "invocation": { "$ref": "#/definitions/ToolInvocation" },

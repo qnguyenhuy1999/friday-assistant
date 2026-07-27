@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from friday.application.errors import RunNotFound, TaskNotFound
 from friday.application.lifecycle_events import LifecycleEvents
-from friday.domain.event import RunEvent
+from friday.domain.event import RunEvent, RunEventType
 from friday.domain.identifiers import RunId, TaskId
 from friday.domain.task_event import TaskEvent
 
@@ -21,6 +21,16 @@ class ListRunEvents(LifecycleEvents):
             if uow.runs.get(run_id) is None:
                 raise RunNotFound(run_id)
             return uow.events.list_after_sequence(run_id, after_sequence, limit)
+
+
+class GetRunResult(LifecycleEvents):
+    """Read the durable final-result projection without walking the event log."""
+
+    def execute(self, run_id: RunId) -> RunEvent | None:
+        with self._uow_factory() as uow:
+            if uow.runs.get(run_id) is None:
+                raise RunNotFound(run_id)
+            return uow.events.latest_of_type_for_run(run_id, RunEventType.AGENT_FINISHED)
 
 
 class ListTaskEvents(LifecycleEvents):

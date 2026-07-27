@@ -1,4 +1,4 @@
-import type { JsonValue, Run, RunEvent } from "@friday/contracts";
+import type { JsonValue, Run, RunResult } from "@friday/contracts";
 export interface TurnAnswer {
   state: "pending" | "awaiting_approval" | "answered" | "failed" | "cancelled";
   summary: string | null;
@@ -21,11 +21,11 @@ export function isSettledTurnAnswer(answer: TurnAnswer | undefined): boolean {
 }
 /** Maps a run (plus its events, once succeeded) onto what the transcript shows.
  * Pure, so the batching layer decides what to fetch and this decides what it
- * means. `events` is only consulted for a succeeded run, whose answer lives in
- * the last `agent_finished` payload. */
+ * means. A succeeded run reads a dedicated durable result projection rather
+ * than paging its unbounded event log. */
 export function answerFromRun(
   run: Run | undefined,
-  events: readonly RunEvent[] | undefined,
+  result: RunResult | undefined,
 ): TurnAnswer {
   if (!run) return PENDING_TURN_ANSWER;
   // Checked before the terminal statuses: a run waiting for approval is not
@@ -41,19 +41,9 @@ export function answerFromRun(
   if (run.status === "cancelled")
     return { state: "cancelled", summary: null, details: null };
   if (run.status !== "succeeded") return PENDING_TURN_ANSWER;
-  const payload = [...(events ?? [])]
-    .reverse()
-    .find((event) => event.type === "agent_finished")?.payload;
-  const record =
-    payload !== null &&
-    payload !== undefined &&
-    typeof payload === "object" &&
-    !Array.isArray(payload)
-      ? (payload as Record<string, JsonValue>)
-      : {};
   return {
     state: "answered",
-    summary: typeof record.summary === "string" ? record.summary : null,
-    details: record.details ?? null,
+    summary: result?.summary ?? null,
+    details: result?.details ?? null,
   };
 }

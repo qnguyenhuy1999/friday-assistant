@@ -1,6 +1,6 @@
 # Quality Gates
 
-This document describes the repository quality gates through Phase 16: what
+This document describes the repository quality gates through Phase 17: what
 each one checks, the exact command that runs it, where it runs
 (local/pre-commit/pre-push/CI), and how to change it safely. It complements
 [repository-rules.md](repository-rules.md) and

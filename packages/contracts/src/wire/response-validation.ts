@@ -6,6 +6,7 @@ export {
   validateRunPage,
   validateTaskPage,
   validateRun,
+  validateRunResult,
   validateTask,
   validateStep,
   validateStepPage,

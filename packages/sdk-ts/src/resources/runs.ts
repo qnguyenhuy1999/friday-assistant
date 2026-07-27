@@ -4,6 +4,8 @@ import {
   type Failure,
   type Page,
   type Run,
+  type RunResult,
+  validateRunResult,
 } from "@friday/contracts";
 import type { FridayHttpClient } from "../http";
 export interface ListRunsParams {
@@ -17,6 +19,13 @@ export class RunsResource {
       method: "GET",
       path: `/v1/runs/${id}`,
       validate: validateRun,
+    });
+  }
+  getResult(id: string) {
+    return this.http.requestJson<RunResult>({
+      method: "GET",
+      path: `/v1/runs/${id}/result`,
+      validate: validateRunResult,
     });
   }
   listForTask(id: string, p: ListRunsParams = {}) {

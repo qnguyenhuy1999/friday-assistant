@@ -199,6 +199,11 @@ export interface ConversationTurn {
   created_at: string;
 }
 
+export interface RunResult {
+  summary: string | null;
+  details: JsonValue;
+}
+
 export type TaskStatus = Task["status"];
 export type RunStatus = Run["status"];
 export type RunStepStatus = RunStep["status"];
@@ -797,6 +802,17 @@ const schema = {
         },
       },
     },
+    RunResult: {
+      type: "object",
+      additionalProperties: false,
+      required: ["summary", "details"],
+      properties: {
+        summary: {
+          type: ["string", "null"],
+        },
+        details: {},
+      },
+    },
   },
   responses: {
     task: {
@@ -804,6 +820,9 @@ const schema = {
     },
     run: {
       $ref: "#/definitions/Run",
+    },
+    runResult: {
+      $ref: "#/definitions/RunResult",
     },
     step: {
       $ref: "#/definitions/RunStep",
@@ -1034,6 +1053,8 @@ export const validateTask: WireValidator = (value, path) =>
   assertWire("task", value, path);
 export const validateRun: WireValidator = (value, path) =>
   assertWire("run", value, path);
+export const validateRunResult: WireValidator = (value, path) =>
+  assertWire("runResult", value, path);
 export const validateStep: WireValidator = (value, path) =>
   assertWire("step", value, path);
 export const validateApproval: WireValidator = (value, path) =>

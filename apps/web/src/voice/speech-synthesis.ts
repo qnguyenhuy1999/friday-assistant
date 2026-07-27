@@ -1,5 +1,4 @@
 import { MAX_TTS_RATE, MIN_TTS_RATE } from "./constants";
-import { createEmitter } from "./speech-recognition";
 import type { SpeechSynthesisAdapter, SpeechSynthesisVoiceInfo } from "./types";
 export function createSpeechSynthesisAdapter(
   win: Window,
@@ -19,11 +18,9 @@ export function createSpeechSynthesisAdapter(
     };
   };
   if (!w.speechSynthesis || !w.SpeechSynthesisUtterance) return null;
-  const starts = createEmitter<void>();
-  const ends = createEmitter<void>();
   let disposed = false;
   return {
-    speak(options) {
+    speak(options, callbacks) {
       if (disposed) return;
       const utterance = new w.SpeechSynthesisUtterance!(options.text);
       utterance.rate = Math.min(
@@ -36,10 +33,10 @@ export function createSpeechSynthesisAdapter(
           .speechSynthesis!.getVoices()
           .find((voice) => voice.voiceURI === options.voiceURI) ?? null;
       utterance.onstart = () => {
-        if (!disposed) starts.emit();
+        if (!disposed) callbacks.onStart();
       };
       utterance.onend = () => {
-        if (!disposed) ends.emit();
+        if (!disposed) callbacks.onEnd();
       };
       w.speechSynthesis!.speak(utterance);
     },
@@ -51,13 +48,9 @@ export function createSpeechSynthesisAdapter(
         .speechSynthesis!.getVoices()
         .map(({ voiceURI, name, lang }) => ({ voiceURI, name, lang }));
     },
-    onStart: starts.add,
-    onEnd: ends.add,
     dispose() {
       disposed = true;
       w.speechSynthesis!.cancel();
-      starts.clear();
-      ends.clear();
     },
   };
 }

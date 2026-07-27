@@ -33,6 +33,21 @@ def test_brain_runtime_has_no_mcp_awareness() -> None:
     assert not any(module.startswith(MCP_PREFIX) for module in imported_modules(path.read_text()))
 
 
+def test_the_brain_runtime_passes_no_mcp_configuration_to_claude() -> None:
+    source = (REPO_ROOT / "src/friday/infrastructure/brain/claude_cli.py").read_text(
+        encoding="utf-8"
+    )
+    forbidden = (
+        "--mcp-config",
+        "--mcp-server",
+        "mcpServers",
+        "--dangerously-skip-permissions",
+        "--permission-mode",
+        "--allowedTools",
+    )
+    assert [flag for flag in forbidden if flag in source] == []
+
+
 def test_no_source_uses_shell_true_or_generic_mcp_dispatcher() -> None:
     for root in (REPO_ROOT / "src", REPO_ROOT / "apps"):
         for path in root.rglob("*.py"):

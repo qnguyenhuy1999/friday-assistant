@@ -1,16 +1,17 @@
 import { useEffect, useRef } from "react";
 import type { ConversationTurn } from "@friday/contracts";
-import { useTurnAnswer } from "../hooks/use-turn-answer";
+import { PENDING_TURN_ANSWER, type TurnAnswer } from "../hooks/use-turn-answer";
 function Turn({
   turn,
+  answer,
   onReviewApproval,
   onAnswer,
 }: {
   turn: ConversationTurn;
+  answer: TurnAnswer;
   onReviewApproval(runId: string): void;
   onAnswer(runId: string, summary: string): void;
 }) {
-  const answer = useTurnAnswer(turn.run_id);
   const previousState = useRef(answer.state);
   useEffect(() => {
     if (
@@ -51,26 +52,42 @@ function Turn({
     </li>
   );
 }
+/** Renders turns against answers loaded in one bounded batch by the page, so a
+ * long conversation does not fan out into a request per turn. */
 export function ConversationTranscript({
   turns,
+  answers,
   onReviewApproval,
   onAnswer = () => undefined,
+  earlierCount = 0,
+  onShowEarlier,
 }: {
   turns: ConversationTurn[];
+  answers: ReadonlyMap<string, TurnAnswer>;
   onReviewApproval(runId: string): void;
   onAnswer?(runId: string, summary: string): void;
+  earlierCount?: number;
+  onShowEarlier?(): void;
 }) {
   if (!turns.length) return <p>Ask Friday to get started.</p>;
   return (
-    <ol>
-      {turns.map((turn) => (
-        <Turn
-          key={turn.id}
-          turn={turn}
-          onReviewApproval={onReviewApproval}
-          onAnswer={onAnswer}
-        />
-      ))}
-    </ol>
+    <>
+      {earlierCount > 0 && onShowEarlier && (
+        <button type="button" onClick={onShowEarlier}>
+          Show {earlierCount} earlier {earlierCount === 1 ? "turn" : "turns"}
+        </button>
+      )}
+      <ol>
+        {turns.map((turn) => (
+          <Turn
+            key={turn.id}
+            turn={turn}
+            answer={answers.get(turn.run_id) ?? PENDING_TURN_ANSWER}
+            onReviewApproval={onReviewApproval}
+            onAnswer={onAnswer}
+          />
+        ))}
+      </ol>
+    </>
   );
 }

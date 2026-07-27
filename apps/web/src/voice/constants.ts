@@ -1,4 +1,8 @@
 export const SILENCE_TIMEOUT_MS = 1_500;
+/** Consecutive recognizer restarts allowed after an end we did not ask for.
+ * A recognizer that dies immediately every time would otherwise restart
+ * forever, so hands-free gives up and surfaces an error instead. */
+export const MAX_HANDS_FREE_REARMS = 3;
 export const MIN_TTS_RATE = 0.75;
 export const MAX_TTS_RATE = 1.5;
 export const DEFAULT_TTS_RATE = 1;

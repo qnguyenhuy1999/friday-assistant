@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ConversationTurn } from "@friday/contracts";
 import { ConversationTranscript } from "../components/conversation-transcript";
 import { VoiceControls } from "../components/voice-controls";
 import { isPushToTalkKey } from "../voice/push-to-talk-key";
@@ -7,8 +8,12 @@ import {
   useConversationTurns,
   useSubmitConversationTurn,
 } from "../hooks/use-conversation";
+import { useConversationAnswers } from "../hooks/use-conversation-answers";
 import { useVoice } from "../hooks/use-voice";
 import { friday } from "../friday-client";
+/** Stable identity for the pre-load case, so the answer window's memos do not
+ * see a fresh array on every render. */
+const NO_TURNS: ConversationTurn[] = [];
 export function ConversationPage({
   onReviewApproval,
 }: {
@@ -17,6 +22,8 @@ export function ConversationPage({
   const { conversationId, isError } = useConversationId();
   const turns = useConversationTurns(conversationId);
   const submit = useSubmitConversationTurn(conversationId);
+  const { visibleTurns, answers, earlierCount, showEarlier } =
+    useConversationAnswers(conversationId, turns.data?.items ?? NO_TURNS);
   const [text, setText] = useState("");
   const activeRunId = useRef<string | null>(null);
   const speakableRunIds = useRef(new Set<string>());
@@ -30,11 +37,21 @@ export function ConversationPage({
     activeRunId.current = turn.run_id;
     speakableRunIds.current.add(turn.run_id);
   });
+  const { deliverAnswer } = voice;
   const cancelActiveRun = useCallback(() => {
     voice.controller.interrupt();
     const runId = activeRunId.current;
     if (runId) void friday.runs.cancel(runId).catch(() => undefined);
   }, [voice.controller]);
+  /** Only a run this page started is delivered to voice: answers hydrated from
+   * history must not speak, nor resume a hands-free session nobody asked for. */
+  const handleAnswer = useCallback(
+    (runId: string, summary: string) => {
+      if (activeRunId.current === runId) activeRunId.current = null;
+      if (speakableRunIds.current.delete(runId)) deliverAnswer(summary);
+    },
+    [deliverAnswer],
+  );
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
       if (isPushToTalkKey(event)) {
@@ -99,22 +116,12 @@ export function ConversationPage({
               : "Ready"}
       </p>
       <ConversationTranscript
-        turns={turns.data?.items ?? []}
+        turns={visibleTurns}
+        answers={answers}
+        earlierCount={earlierCount}
+        onShowEarlier={showEarlier}
         onReviewApproval={onReviewApproval}
-        onAnswer={(runId, summary) => {
-          if (
-            speakableRunIds.current.delete(runId) &&
-            voice.preferences.enabled
-          ) {
-            voice.output?.speak({
-              text: summary,
-              voiceURI: voice.preferences.voiceURI,
-              rate: voice.preferences.rate,
-              lang: voice.preferences.language,
-            });
-          }
-          if (activeRunId.current === runId) activeRunId.current = null;
-        }}
+        onAnswer={handleAnswer}
       />
       <label>
         Message{" "}

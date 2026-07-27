@@ -12,6 +12,18 @@ those same recipes — see `.pre-commit-config.yaml` and
 `.github/workflows/quality.yml` — so there is exactly one place each rule is
 implemented.
 
+CI runs those recipes directly rather than running `pre-commit` itself, so a
+rule only reaches CI if a `just` recipe covers it. `.pre-commit-config.yaml`
+also enables upstream `pre-commit-hooks` that no recipe wraps
+(`trailing-whitespace`, `end-of-file-fixer`, `check-yaml`, `check-json`,
+`check-toml`, `check-merge-conflict`, `check-added-large-files`,
+`detect-private-key`); each of their invariants is asserted by a policy test so
+none depends on a contributor having installed the hooks — see
+[File Hygiene](#file-hygiene), [Repository Policy](#repository-policy),
+and [Sensitive Files](#sensitive-files). Those hooks remain configured because
+several of them repair a file in place, which is useful locally and wrong for a
+gate.
+
 ## Formatting
 
 - **Purpose:** consistent code style with no manual bikeshedding.
@@ -183,6 +195,22 @@ implemented.
 - **Command:** `just policy-check`.
 - **Runs:** local, pre-commit (default stage), CI.
 
+## File Hygiene
+
+- **Purpose:** assert the invariants of the upstream `pre-commit-hooks` that no
+  `just` recipe wraps (`trailing-whitespace`, `end-of-file-fixer`,
+  `check-toml`, `check-added-large-files`) so they reach CI without depending on
+  a contributor having installed the hooks. `check-yaml`/`check-json` are
+  covered instead by `just format-check` (prettier cannot format a file it
+  cannot parse); `check-merge-conflict` by [Repository Policy](#repository-policy);
+  `detect-private-key` by [Sensitive Files](#sensitive-files).
+- **Implementation:** `tests/policy/test_file_hygiene.py` — non-mutating
+  detectors over `git ls-files`, unlike the hooks, which rewrite files in
+  place. Binary (non-UTF-8) files are skipped.
+- **Command:** `just policy-check`.
+- **Runs:** local, pre-commit (default stage, as part of `policy-check`), CI
+  (`just check`, which runs the full `pytest` suite including `tests/policy`).
+
 ## Sensitive Files
 
 - **Purpose:** defense in depth against committed secrets, alongside the
@@ -193,12 +221,15 @@ implemented.
   private-key header. `docs/superpowers/plans/**` is excluded from the
   content scan because planning documents show that same fixture as
   illustrative example text.
-- **Command:** `just policy-check` (custom checks) plus the pre-commit
-  `detect-private-key` hook (industry-standard heuristic scanner). The
-  `detect-private-key` hook excludes `tests/policy/test_sensitive_files.py`
-  and `docs/superpowers/plans/**` for the same reason — both intentionally
-  contain private-key-shaped fixture text that isn't a real secret.
-- **Runs:** local, pre-commit (default stage), CI.
+- **Command:** `just policy-check`. The pre-commit `detect-private-key` hook
+  adds an industry-standard heuristic scan on top locally; it excludes
+  `tests/policy/test_sensitive_files.py` and `docs/superpowers/plans/**` for the
+  same reason as the content scan above — both intentionally contain
+  private-key-shaped fixture text that isn't a real secret.
+- **Runs:** local, pre-commit (default stage), CI (`just check`, which runs the
+  full `pytest` suite including `tests/policy`). The private-key content scan
+  reaching CI is the policy test's doing, not the hook's — CI does not run
+  `pre-commit`.
 
 ## Markdown Links
 

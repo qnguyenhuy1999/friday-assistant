@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 from friday.application.errors import ToolInputInvalid
 from friday.application.tool_gateway import ToolCall, ToolExecutionRequest
 from friday.domain.approval import ApprovalCategory
 from friday.domain.identifiers import RunId, ToolInvocationId
+from friday.domain.json_value import JsonValue
 from friday.infrastructure.mcp.bindings import McpBindingRegistry, compute_binding_fingerprint
 from friday.infrastructure.mcp.client import McpCallResult, McpRemoteTool
 from friday.infrastructure.mcp.config import McpServerConfig, McpToolBinding
@@ -53,8 +56,13 @@ class _Client:
         return self.tools
 
     def call_tool(
-        self, name: str, arguments: dict[str, object], *, timeout_seconds: float, cancelled=None
-    ) -> McpCallResult:  # type: ignore[no-untyped-def]
+        self,
+        name: str,
+        arguments: dict[str, JsonValue],
+        *,
+        timeout_seconds: float,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> McpCallResult:
         del name, arguments, timeout_seconds, cancelled
         self.called = True
         return McpCallResult(structured_content={"ok": True})
@@ -105,7 +113,8 @@ def test_output_is_bounded() -> None:
         McpCallResult(text_blocks=("x" * 20,)),
         bounds=OutputBounds(2, 4, 1000),
     )
-    assert result["truncated"] is True  # type: ignore[index]
+    assert isinstance(result, dict)
+    assert result["truncated"] is True
 
 
 def test_gateway_uses_frozen_risk_and_normalized_result() -> None:

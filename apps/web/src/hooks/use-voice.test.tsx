@@ -44,7 +44,7 @@ describe("useVoice.deliverAnswer", () => {
     const { result } = renderHook(() => useVoice(async () => undefined));
     // jsdom exposes no speech synthesis, which is the same position a user is
     // in with "Speak answers" switched off.
-    expect(result.current.synthesis).toBeNull();
+    expect(result.current.output).toBeNull();
     const delivered = vi.spyOn(
       result.current.controller,
       "notifyResultDelivered",
@@ -59,7 +59,7 @@ describe("useVoice.deliverAnswer", () => {
   it("leaves delivery to speech when it will speak the answer", () => {
     const spoken = installSpeechSynthesis();
     const { result } = renderHook(() => useVoice(async () => undefined));
-    expect(result.current.synthesis).not.toBeNull();
+    expect(result.current.output).not.toBeNull();
     const delivered = vi.spyOn(
       result.current.controller,
       "notifyResultDelivered",

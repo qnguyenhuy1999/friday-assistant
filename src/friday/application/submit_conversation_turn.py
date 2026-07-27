@@ -46,6 +46,7 @@ class SubmitConversationTurn:
                 command.conversation_id, command.client_turn_id
             )
             if existing is not None:
+                self._assert_same_payload(existing, command)
                 return _result(existing, deduplicated=True)
             now = self._clock.now()
             task = Task.new(
@@ -80,7 +81,36 @@ class SubmitConversationTurn:
             turn = uow.conversation_turns.get_by_client_turn_id(
                 command.conversation_id, command.client_turn_id
             )
-        return _result(turn, deduplicated=True) if turn is not None else None
+        if turn is None:
+            return None
+        self._assert_same_payload(turn, command)
+        return _result(turn, deduplicated=True)
+
+    @staticmethod
+    def _assert_same_payload(
+        turn: ConversationTurn, command: SubmitConversationTurnCommand
+    ) -> None:
+        canonical = ConversationTurn.new(
+            id=turn.id,
+            conversation_id=command.conversation_id,
+            client_turn_id=command.client_turn_id,
+            input_text=command.input_text,
+            input_mode=command.input_mode,
+            recognition_language=command.recognition_language,
+            task_id=turn.task_id,
+            run_id=turn.run_id,
+            created_at=turn.created_at,
+        )
+        if (
+            turn.input_text,
+            turn.input_mode,
+            turn.recognition_language,
+        ) != (
+            canonical.input_text,
+            canonical.input_mode,
+            canonical.recognition_language,
+        ):
+            raise EntityConflict("client_turn_id is already bound to a different payload")
 
 
 def _result(turn: ConversationTurn, *, deduplicated: bool) -> SubmitConversationTurnResult:

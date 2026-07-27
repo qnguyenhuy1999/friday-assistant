@@ -6,6 +6,7 @@ import {
 import { createSpeechSynthesisAdapter } from "../voice/speech-synthesis";
 import { createAudioLevelMonitor } from "../voice/audio-level";
 import { VoiceController } from "../voice/voice-controller";
+import { TtsQueue } from "../voice/tts-queue";
 import {
   readVoicePreferences,
   writeVoicePreferences,
@@ -29,11 +30,16 @@ export function useVoice(
   languageRef.current = preferences.language;
   preferencesRef.current = preferences;
   const synthesis = useMemo(() => createSpeechSynthesisAdapter(window), []);
+  const output = useMemo(
+    () => (synthesis ? new TtsQueue(synthesis) : null),
+    [synthesis],
+  );
   const audioLevel = useMemo(() => createAudioLevelMonitor(window), []);
   const controller = useMemo(
     () =>
       new VoiceController({
         recognition: createSpeechRecognitionAdapter(window),
+        output,
         language: () => languageRef.current,
         submit: (input) => submitRef.current(input),
         timers: {
@@ -42,7 +48,7 @@ export function useVoice(
         },
         audioLevel,
       }),
-    [audioLevel],
+    [audioLevel, output],
   );
   const [snapshot, setSnapshot] = useState(controller.snapshot());
   useEffect(() => {
@@ -54,27 +60,30 @@ export function useVoice(
   }, [controller]);
   useEffect(() => {
     if (!synthesis) return;
-    const start = synthesis.onStart(() => controller.speakingStarted());
-    const end = synthesis.onEnd(() => controller.speakingEnded());
+    const start = output?.onStart(() => controller.speakingStarted());
+    const end = output?.onEnd(() => controller.speakingEnded());
     return () => {
-      start();
-      end();
+      start?.();
+      end?.();
       synthesis.dispose();
       audioLevel?.dispose();
     };
-  }, [synthesis, controller, audioLevel]);
+  }, [synthesis, output, controller, audioLevel]);
   /** Single seam for "an answer arrived". Speaking it is optional; telling the
    * controller the answer was delivered is not — hands-free resumes off that
    * signal, and with speech turned off or unsupported nothing else would
    * report it, leaving the session dead after the first answer.
+   *
+   * Speaking goes through the queue rather than the adapter, so the controller
+   * stays the only thing that can stop output.
    *
    * Identity is stable so a consumer effect keyed on this callback cannot
    * re-fire (and re-speak) on every render. */
   const deliverAnswer = useCallback(
     (summary: string) => {
       const current = preferencesRef.current;
-      if (current.enabled && synthesis) {
-        synthesis.speak({
+      if (current.enabled && output) {
+        output.speak({
           text: summary,
           voiceURI: current.voiceURI,
           rate: current.rate,
@@ -84,7 +93,7 @@ export function useVoice(
       }
       controller.notifyResultDelivered();
     },
-    [controller, synthesis],
+    [controller, output],
   );
   return {
     controller,
@@ -96,6 +105,6 @@ export function useVoice(
       writeVoicePreferences(value);
       setStored(value);
     },
-    synthesis,
+    output,
   };
 }

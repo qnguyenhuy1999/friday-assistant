@@ -2,6 +2,7 @@ import { MAX_HANDS_FREE_REARMS, SILENCE_TIMEOUT_MS } from "./constants";
 import { isBenignVoiceError, isPermissionVoiceError } from "./voice-errors";
 import type {
   SpeechRecognitionAdapter,
+  OutputSpeechController,
   VoiceErrorCode,
   VoiceSnapshot,
 } from "./types";
@@ -16,6 +17,7 @@ export interface TimerApi {
 }
 export interface VoiceControllerDeps {
   recognition: SpeechRecognitionAdapter | null;
+  output?: OutputSpeechController | null;
   language: () => string;
   submit(input: SubmitVoiceInput): Promise<void>;
   timers: TimerApi;
@@ -63,6 +65,9 @@ export class VoiceController {
   }
   pressToTalk(): void {
     if (this.#snapshot.handsFree || this.#active !== null) return;
+    if (this.#snapshot.state === "speaking") {
+      this.stopOutputAndRecognition();
+    }
     this.#rearms = 0;
     this.begin("push_to_talk");
   }
@@ -121,17 +126,13 @@ export class VoiceController {
   }
   bargeIn(): void {
     if (this.#snapshot.state !== "speaking") return;
-    this.deps.audioLevel?.stop();
-    this.patch({ state: "idle" });
+    this.stopOutputAndRecognition();
     if (this.#snapshot.handsFree) this.begin("hands_free");
   }
   interrupt(): void {
     this.clearSilence();
-    this.#active = null;
-    this.#pending = null;
-    this.deps.recognition?.abort();
+    this.stopOutputAndRecognition();
     this.patch({ handsFree: false, state: "idle", interimTranscript: "" });
-    this.deps.audioLevel?.stop();
   }
   dispose(): void {
     this.#disposed = true;
@@ -152,6 +153,19 @@ export class VoiceController {
       language: this.deps.language(),
       continuous: mode === "hands_free",
     });
+  }
+  /**
+   * Keep browser output and input mutually exclusive.  `cancel()` is
+   * synchronous in the Web Speech API, so recognition is only cleared after
+   * output has been stopped, before a new recognition session can begin.
+   */
+  private stopOutputAndRecognition(): void {
+    this.deps.output?.stop();
+    this.deps.audioLevel?.stop();
+    this.deps.recognition?.abort();
+    this.#active = null;
+    this.#pending = null;
+    this.patch({ state: "idle", interimTranscript: "" });
   }
   private result(transcript: string, final: boolean): void {
     if (this.#active === null || this.#disposed) return;

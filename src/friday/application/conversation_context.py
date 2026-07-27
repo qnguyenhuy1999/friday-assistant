@@ -51,12 +51,41 @@ def build_conversation_section(context: ConversationContext, *, max_chars: int) 
         raise ValueError("max_chars must be positive")
     if not context.messages and not context.omitted_turns:
         return ""
-    lines = ["# CONVERSATION"]
-    if context.omitted_turns:
-        lines.append(f"[{context.omitted_turns} older turn(s) omitted]")
-    lines.extend(f"{message.role.value}: {message.text}" for message in context.messages)
-    document = "\n".join(lines)
-    return document if len(document) <= max_chars else document[:max_chars]
+    header = "# CONVERSATION"
+    omitted = context.omitted_turns
+    lines = [f"{message.role.value}: {message.text}" for message in context.messages]
+    # Window from the newest message backwards: continuity is more valuable
+    # than the beginning of a stale transcript.
+    kept: list[str] = []
+    for line in reversed(lines):
+        candidate = "\n".join(
+            [header, *([f"[{omitted} older turn(s) omitted]"] if omitted else []), line, *kept]
+        )
+        if len(candidate) > max_chars:
+            if not kept:
+                # A single long newest message still carries more continuity
+                # than an empty section; retain as much of it as fits.
+                prefix = [header, f"[{omitted + 1} older turn(s) omitted]"]
+                room = max_chars - len("\n".join(prefix)) - 1
+                if room > len(_TRUNCATION_SUFFIX):
+                    kept.insert(0, _clip(line, room))
+            omitted += 1
+            continue
+        kept.insert(0, line)
+    prefix = [header]
+    if omitted:
+        prefix.append(f"[{omitted} older turn(s) omitted]")
+    document = "\n".join([*prefix, *kept])
+    while len(document) > max_chars and len(kept) > 1:
+        kept.pop(0)
+        omitted += 1
+        prefix = [header, f"[{omitted} older turn(s) omitted]"]
+        document = "\n".join([*prefix, *kept])
+    if len(document) > max_chars and kept:
+        room = max_chars - len("\n".join(prefix)) - 1
+        if room > len(_TRUNCATION_SUFFIX):
+            document = "\n".join([*prefix, _clip(kept[-1], room)])
+    return document if len(document) <= max_chars else header[:max_chars]
 
 
 class ConversationContextAssembler:

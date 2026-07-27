@@ -23,7 +23,11 @@ export function App() {
           Tasks
         </button>
       </nav>
-      {route.view === "conversation" && <ConversationPage />}
+      {route.view === "conversation" && (
+        <ConversationPage
+          onReviewApproval={(id) => navigate({ view: "approvals", id })}
+        />
+      )}
       {route.view === "tasks" && (
         <TasksPage
           onRunStarted={(id) => navigate({ view: "run", id })}

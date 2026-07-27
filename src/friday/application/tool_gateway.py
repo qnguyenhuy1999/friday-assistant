@@ -16,6 +16,7 @@ from friday.domain.artifact import ArtifactKind
 from friday.domain.failure import Failure
 from friday.domain.identifiers import RunId, RunStepId, ToolInvocationId
 from friday.domain.json_value import JsonValue, ensure_json_value
+from friday.domain.tool_provenance import ToolProvenance
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,12 +28,16 @@ class ToolDescriptor:
     description: str
     read_only: bool
     approval_required: bool
+    input_schema: JsonValue = None
 
     def __post_init__(self) -> None:
         if not TOOL_NAME_PATTERN.match(self.name):
             raise ValueError(f"tool name does not match the required pattern: {self.name!r}")
         if not self.description.strip():
             raise ValueError("tool description must not be empty")
+        if self.input_schema is not None and not isinstance(self.input_schema, dict):
+            raise ValueError("tool input_schema must be a JSON object when present")
+        ensure_json_value(self.input_schema, path="$.input_schema")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,10 +65,16 @@ class ToolRiskAssessment:
     approval_required: bool
     category: ApprovalCategory
     summary: str
+    authorization_scope: str | None = None
+    provenance: ToolProvenance | None = None
 
     def __post_init__(self) -> None:
         if not self.summary.strip():
             raise ValueError("risk assessment summary must not be empty")
+        if self.provenance is not None and not (self.authorization_scope or "").strip():
+            raise ValueError(
+                "a risk assessment with external provenance must carry an authorization scope"
+            )
 
 
 @dataclass(frozen=True, slots=True)

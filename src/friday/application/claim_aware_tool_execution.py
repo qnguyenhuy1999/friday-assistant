@@ -129,7 +129,12 @@ class ExecuteToolAction(LifecycleEvents):
     ) -> ToolActionOutcome:
         # risk assessment is pure gateway policy — may raise ToolNotFound
         risk = self._gateway.assess(call)
-        fingerprint = compute_authorization_fingerprint(run_id=run_id, step_id=step_id, call=call)
+        fingerprint = compute_authorization_fingerprint(
+            run_id=run_id,
+            step_id=step_id,
+            call=call,
+            authorization_scope=risk.authorization_scope,
+        )
 
         # ---- Txn A: authorize and durably create the invocation ----------
         with self._uow_factory() as uow:
@@ -166,6 +171,7 @@ class ExecuteToolAction(LifecycleEvents):
                 requested_at=now,
                 step_id=step_id,
                 approval_request_id=approval_id,
+                provenance=risk.provenance,
             )
             uow.tool_invocations.add(invocation)
             invocation.start(now)

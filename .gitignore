@@ -53,3 +53,4 @@ graphify-out/
 
 # Herdr orchestration state (task specs, worker status, locks — not deliverable)
 .herdr/
+mcp.servers.json

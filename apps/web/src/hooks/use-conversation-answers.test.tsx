@@ -56,6 +56,26 @@ function stubApi() {
           status: "succeeded",
           created_at: "2026-07-26T00:00:00Z",
           failure: null,
+          execution_id: runId,
+        }),
+      );
+    }
+    const execution = /^\/v1\/runs\/([^/]+)\/execution$/.exec(url.pathname);
+    if (execution) {
+      const runId = execution[1] ?? "";
+      return Promise.resolve(
+        jsonResponse({
+          items: [
+            {
+              id: runId,
+              task_id: "task-1",
+              status: "succeeded",
+              created_at: "2026-07-26T00:00:00Z",
+              failure: null,
+              execution_id: runId,
+            },
+          ],
+          next_cursor: null,
         }),
       );
     }
@@ -100,6 +120,7 @@ describe("useConversationAnswers", () => {
     expect(new Set(api.runRequests).size).toBe(25);
     expect(api.runRequests).toHaveLength(25);
     expect(result.current.get("run-24")).toEqual({
+      runId: "run-24",
       state: "answered",
       summary: "answer for run-24",
       details: null,

@@ -52,7 +52,14 @@
     "Run": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "task_id", "status", "created_at", "failure"],
+      "required": [
+        "id",
+        "task_id",
+        "status",
+        "created_at",
+        "failure",
+        "execution_id"
+      ],
       "properties": {
         "id": { "type": "string" },
         "task_id": { "type": "string" },
@@ -69,7 +76,8 @@
         "created_at": { "type": "string" },
         "failure": {
           "anyOf": [{ "$ref": "#/definitions/Failure" }, { "type": "null" }]
-        }
+        },
+        "execution_id": { "type": "string" }
       }
     },
     "RunStep": {

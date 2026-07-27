@@ -21,6 +21,13 @@ export class RunsResource {
       validate: validateRun,
     });
   }
+  listByExecution(runId: string) {
+    return this.http.requestJson<Page<Run>>({
+      method: "GET",
+      path: `/v1/runs/${runId}/execution`,
+      validate: validateRunPage,
+    });
+  }
   getResult(id: string) {
     return this.http.requestJson<RunResult>({
       method: "GET",

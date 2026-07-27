@@ -10,6 +10,7 @@ from friday.application.ports import UnitOfWork, UnitOfWorkFactory
 from friday.domain.conversation_turn import ConversationTurn
 from friday.domain.event import RunEventType
 from friday.domain.identifiers import RunId
+from friday.domain.run import TERMINAL_RUN_STATUSES
 
 CONVERSATION_MAX_TURNS = 12
 CONVERSATION_MAX_CHARS = 8_000
@@ -110,6 +111,10 @@ class ConversationContextAssembler:
         with self._uow_factory() as uow:
             current = uow.conversation_turns.get_by_run(run_id)
             if current is None:
+                run = uow.runs.get(run_id)
+                if run is not None:
+                    current = uow.conversation_turns.get_by_run(run.execution_id)
+            if current is None:
                 return EMPTY_CONVERSATION_CONTEXT
             window = uow.conversation_turns.list_recent_before(
                 current.conversation_id, current.created_at, str(current.id), self._max_turns + 1
@@ -123,6 +128,18 @@ class ConversationContextAssembler:
             dropped += 1
         return ConversationContext(tuple(messages), dropped)
 
+    def _resolve_effective_run_id(self, uow: UnitOfWork, turn: ConversationTurn) -> RunId:
+        run = uow.runs.get(turn.run_id)
+        if run is None or run.status not in TERMINAL_RUN_STATUSES:
+            return turn.run_id
+        runs = uow.runs.list_for_execution(run.execution_id)
+        if len(runs) <= 1:
+            return turn.run_id
+        for candidate in reversed(runs):
+            if candidate.status not in TERMINAL_RUN_STATUSES:
+                return candidate.id
+        return runs[-1].id
+
     def _messages_for(
         self, uow: UnitOfWork, turns: Sequence[ConversationTurn]
     ) -> list[ConversationMessage]:
@@ -133,7 +150,8 @@ class ConversationContextAssembler:
                     ConversationRole.USER, _clip(turn.input_text, self._max_message_chars)
                 )
             )
-            event = uow.events.latest_of_type_for_run(turn.run_id, RunEventType.AGENT_FINISHED)
+            effective_run_id = self._resolve_effective_run_id(uow, turn)
+            event = uow.events.latest_of_type_for_run(effective_run_id, RunEventType.AGENT_FINISHED)
             summary = (
                 event.payload.get("summary") if event and isinstance(event.payload, dict) else None
             )

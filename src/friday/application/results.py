@@ -84,6 +84,7 @@ class RunResult:
     status: RunStatus
     created_at: datetime
     failure: Failure | None
+    execution_id: RunId | None = None
 
 
 @dataclass(frozen=True, slots=True)

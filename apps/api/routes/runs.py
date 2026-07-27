@@ -30,6 +30,7 @@ from friday.application.run_lifecycle import (
     CompleteRun,
     FailRun,
     GetRun,
+    ListRunsByExecution,
     ListRunsForTask,
     RetryFailedRun,
     StartQueuedRun,
@@ -60,6 +61,7 @@ def _run_response(result: RunResult) -> RunResponse:
         status=result.status,
         created_at=result.created_at,
         failure=failure,
+        execution_id=str(result.execution_id),
     )
 
 
@@ -70,6 +72,16 @@ def _failure(body: FailureBody) -> Failure:
 @router.get("/runs/{run_id}", response_model=RunResponse, operation_id="getRun")
 def get_run(run_id: UUID, uow_factory: UowDependency, clock: ClockDependency) -> RunResponse:
     return _run_response(GetRun(uow_factory, clock).execute(RunId.parse(str(run_id))))
+
+
+@router.get(
+    "/runs/{run_id}/execution", response_model=RunPageResponse, operation_id="listRunsByExecution"
+)
+def list_runs_by_execution(
+    run_id: UUID, uow_factory: UowDependency, clock: ClockDependency
+) -> RunPageResponse:
+    results = ListRunsByExecution(uow_factory, clock).execute(RunId.parse(str(run_id)))
+    return RunPageResponse(items=[_run_response(r) for r in results], next_cursor=None)
 
 
 @router.get("/runs/{run_id}/result", response_model=RunResultResponse, operation_id="getRunResult")

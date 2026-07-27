@@ -98,6 +98,7 @@ const runningRun = {
   status: "running",
   created_at: "x",
   failure: null,
+  execution_id: "exec-1",
 };
 
 describe("RunDetailPage", () => {

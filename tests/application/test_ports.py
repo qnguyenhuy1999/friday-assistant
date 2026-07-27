@@ -118,6 +118,10 @@ class _FakeRunRepository:
     def count_for_execution(self, execution_id: RunId) -> int:
         return sum(run.execution_id == execution_id for run in self._runs.values())
 
+    def list_for_execution(self, execution_id: RunId) -> list[Run]:
+        runs = [run for run in self._runs.values() if run.execution_id == execution_id]
+        return sorted(runs, key=lambda run: (run.created_at, str(run.id)))
+
 
 @dataclass
 class _FakeRunStepRepository:

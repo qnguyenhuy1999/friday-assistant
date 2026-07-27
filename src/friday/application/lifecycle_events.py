@@ -28,7 +28,7 @@ def task_result(task: Task) -> TaskResult:
 
 
 def run_result(run: Run) -> RunResult:
-    return RunResult(run.id, run.task_id, run.status, run.created_at, run.failure)
+    return RunResult(run.id, run.task_id, run.status, run.created_at, run.failure, run.execution_id)
 
 
 def step_result(step: RunStep) -> RunStepResult:

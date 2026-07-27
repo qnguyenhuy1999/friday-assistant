@@ -84,13 +84,29 @@ export class VoiceController {
     this.patch({ handsFree: enabled });
     this.#rearms = 0;
     if (!enabled) {
-      // Drop the session before aborting so the adapter's end/error callback
-      // reads as an end we asked for rather than a recognizer that died.
-      this.clearSilence();
-      this.#active = null;
-      this.#pending = null;
-      this.deps.recognition?.abort();
-      this.idle();
+      switch (this.#snapshot.state) {
+        case "listening":
+        case "requesting_permission":
+          this.clearSilence();
+          this.#active = null;
+          this.#pending = null;
+          this.deps.recognition?.abort();
+          this.deps.audioLevel?.stop();
+          this.idle();
+          break;
+        case "finalizing":
+          this.clearSilence();
+          break;
+        case "speaking":
+          this.deps.audioLevel?.stop();
+          break;
+        case "submitting":
+        case "processing":
+        case "awaiting_approval":
+        case "idle":
+        case "error":
+          break;
+      }
     } else if (this.deps.recognition) {
       if (this.#snapshot.state === "speaking") this.stopOutputAndRecognition();
       this.begin("hands_free");
@@ -100,15 +116,7 @@ export class VoiceController {
   async submitTyped(text: string): Promise<void> {
     const trimmed = text.trim();
     if (!trimmed) return;
-    // Take ownership: abort any active recognition so late end/error
-    // cannot submit a duplicate turn or rearm during typed processing.
-    this.clearSilence();
-    this.#active = null;
-    this.#failedAttempt = null;
-    this.#pending = null;
-    this.deps.recognition?.abort();
-    this.deps.audioLevel?.stop();
-    this.patch({ state: "idle", interimTranscript: "" });
+    this.stopOutputAndRecognition();
     await this.submit({
       text: trimmed,
       inputMode: "typed",
@@ -285,10 +293,14 @@ export class VoiceController {
     try {
       await this.deps.submit(input);
       if (generation !== this.#submits) return;
-      this.patch({ state: "processing" });
+      if (this.#snapshot.state === "submitting") {
+        this.patch({ state: "processing" });
+      }
     } catch {
       if (generation !== this.#submits) return;
-      this.patch({ state: "error", error: "network" });
+      if (this.#snapshot.state === "submitting") {
+        this.patch({ state: "error", error: "network" });
+      }
     }
   }
   private error(attempt: number, code: VoiceErrorCode): void {

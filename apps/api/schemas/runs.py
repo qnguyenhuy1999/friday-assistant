@@ -14,6 +14,7 @@ class RunResponse(BaseModel):
     status: str
     created_at: datetime
     failure: FailureBody | None
+    execution_id: str
 
 
 class RunResultResponse(BaseModel):

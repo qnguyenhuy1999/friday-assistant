@@ -187,6 +187,14 @@ class RunRepository:
             or 0
         )
 
+    def list_for_execution(self, execution_id: RunId) -> list[Run]:
+        stmt = (
+            select(RunRow)
+            .where(RunRow.execution_id == str(execution_id))
+            .order_by(RunRow.created_at, RunRow.id)
+        )
+        return [run_from_row(row) for row in self._session.execute(stmt).scalars()]
+
 
 class ScheduleRepository:
     def __init__(self, session: Session) -> None:

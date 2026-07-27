@@ -211,10 +211,25 @@ class CancelRun(_RunCancellation):
                 uow.commit()
                 return run_result(run)
             if run.status in TERMINAL_RUN_STATUSES:
+                execution_runs = uow.runs.list_for_execution(run.execution_id)
+                for candidate in reversed(execution_runs):
+                    if candidate.status not in TERMINAL_RUN_STATUSES:
+                        self._cancel_run(uow, candidate, self._clock.now())
+                        uow.commit()
+                        return run_result(candidate)
                 raise EntityConflict("run is terminal")
             self._cancel_run(uow, run, self._clock.now())
             uow.commit()
             return run_result(run)
+
+
+class ListRunsByExecution(LifecycleEvents):
+    def execute(self, run_id: RunId) -> list[RunResult]:
+        with self._uow_factory() as uow:
+            run = uow.runs.get(run_id)
+            if run is None:
+                raise RunNotFound(run_id)
+            return [run_result(r) for r in uow.runs.list_for_execution(run.execution_id)]
 
 
 class RetryFailedRun(LifecycleEvents):

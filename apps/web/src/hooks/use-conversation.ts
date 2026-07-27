@@ -66,9 +66,13 @@ export function useSubmitConversationTurn(id: string | null) {
   return useMutation({
     mutationFn: (body: SubmitConversationTurnBody) =>
       friday.conversations.submitTurn(String(id), body),
-    onSuccess: () =>
-      client.invalidateQueries({
+    onSuccess: () => {
+      // Let the submitter adopt the returned run before a refetch can mount a
+      // terminal turn. The refetch still happens immediately, but is not part
+      // of mutation completion.
+      void client.invalidateQueries({
         queryKey: conversationTurnsQueryKey(id ?? ""),
-      }),
+      });
+    },
   });
 }

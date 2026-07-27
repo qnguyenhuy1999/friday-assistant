@@ -53,13 +53,46 @@ function stubApi() {
         updated_at: "2026-01-01T00:00:00Z",
       });
     if (/\/runs\/[^/]+\/cancel$/.test(url)) {
-      cancelled.push(url.split("/runs/")[1]!.replace("/cancel", ""));
+      const runId = url.split("/runs/")[1]!.replace("/cancel", "");
+      cancelled.push(runId);
       return jsonResponse({
-        id: "run-1",
+        id: runId,
         task_id: "task-1",
         status: "cancelled",
         created_at: "2026-01-01T00:00:00Z",
         failure: null,
+        execution_id: runId,
+      });
+    }
+    const parsedUrl = new URL(url, "http://127.0.0.1:8000");
+    const runMatch = /^\/v1\/runs\/([^/]+)$/.exec(parsedUrl.pathname);
+    if (runMatch) {
+      return jsonResponse({
+        id: runMatch[1],
+        task_id: "task-1",
+        status: "running",
+        created_at: "2026-01-01T00:00:00Z",
+        failure: null,
+        execution_id: runMatch[1],
+      });
+    }
+    const executionMatch = /^\/v1\/runs\/([^/]+)\/execution$/.exec(
+      parsedUrl.pathname,
+    );
+    if (executionMatch) {
+      const runId = executionMatch[1];
+      return jsonResponse({
+        items: [
+          {
+            id: runId,
+            task_id: "task-1",
+            status: "running",
+            created_at: "2026-01-01T00:00:00Z",
+            failure: null,
+            execution_id: runId,
+          },
+        ],
+        next_cursor: null,
       });
     }
     return jsonResponse({ items: [], next_cursor: null });

@@ -13,12 +13,14 @@ function run(status: RunStatus, failure: Run["failure"] = null): Run {
     status,
     created_at: "2026-07-26T00:00:00Z",
     failure,
+    execution_id: "exec-1",
   };
 }
 
 describe("answerFromRun", () => {
   it("surfaces an approval wait, which is not a terminal status", () => {
     expect(answerFromRun(run("waiting_for_approval"), undefined)).toEqual({
+      runId: "run-1",
       state: "awaiting_approval",
       summary: null,
       details: null,
@@ -39,6 +41,7 @@ describe("answerFromRun", () => {
     const result: RunResult = { summary: "final", details: { count: 2 } };
 
     expect(answerFromRun(run("succeeded"), result)).toEqual({
+      runId: "run-1",
       state: "answered",
       summary: "final",
       details: { count: 2 },
@@ -47,6 +50,7 @@ describe("answerFromRun", () => {
 
   it("answers with no summary when the succeeded run never reported one", () => {
     expect(answerFromRun(run("succeeded"), undefined)).toEqual({
+      runId: "run-1",
       state: "answered",
       summary: null,
       details: null,
@@ -62,11 +66,13 @@ describe("answerFromRun", () => {
       details: null,
     } as const;
     expect(answerFromRun(run("failed", failure), undefined)).toEqual({
+      runId: "run-1",
       state: "failed",
       summary: "it broke",
       details: null,
     });
     expect(answerFromRun(run("cancelled"), undefined)).toEqual({
+      runId: "run-1",
       state: "cancelled",
       summary: null,
       details: null,
@@ -80,6 +86,7 @@ describe("isSettledTurnAnswer", () => {
     expect(isSettledTurnAnswer(PENDING_TURN_ANSWER)).toBe(false);
     expect(
       isSettledTurnAnswer({
+        runId: "run-1",
         state: "awaiting_approval",
         summary: null,
         details: null,
@@ -89,13 +96,28 @@ describe("isSettledTurnAnswer", () => {
 
   it("treats a finished answer as final", () => {
     expect(
-      isSettledTurnAnswer({ state: "answered", summary: "hi", details: null }),
+      isSettledTurnAnswer({
+        runId: "run-1",
+        state: "answered",
+        summary: "hi",
+        details: null,
+      }),
     ).toBe(true);
     expect(
-      isSettledTurnAnswer({ state: "failed", summary: null, details: null }),
+      isSettledTurnAnswer({
+        runId: "run-1",
+        state: "failed",
+        summary: null,
+        details: null,
+      }),
     ).toBe(true);
     expect(
-      isSettledTurnAnswer({ state: "cancelled", summary: null, details: null }),
+      isSettledTurnAnswer({
+        runId: "run-1",
+        state: "cancelled",
+        summary: null,
+        details: null,
+      }),
     ).toBe(true);
   });
 });

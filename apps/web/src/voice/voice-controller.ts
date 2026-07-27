@@ -100,6 +100,15 @@ export class VoiceController {
   async submitTyped(text: string): Promise<void> {
     const trimmed = text.trim();
     if (!trimmed) return;
+    // Take ownership: abort any active recognition so late end/error
+    // cannot submit a duplicate turn or rearm during typed processing.
+    this.clearSilence();
+    this.#active = null;
+    this.#failedAttempt = null;
+    this.#pending = null;
+    this.deps.recognition?.abort();
+    this.deps.audioLevel?.stop();
+    this.patch({ state: "idle", interimTranscript: "" });
     await this.submit({
       text: trimmed,
       inputMode: "typed",
@@ -183,12 +192,12 @@ export class VoiceController {
    * output has been stopped, before a new recognition session can begin.
    */
   private stopOutputAndRecognition(): void {
-    this.deps.output?.stop();
-    this.deps.audioLevel?.stop();
-    this.deps.recognition?.abort();
     this.#active = null;
     this.#failedAttempt = null;
     this.#pending = null;
+    this.deps.recognition?.abort();
+    this.deps.output?.stop();
+    this.deps.audioLevel?.stop();
     this.patch({ state: "idle", interimTranscript: "" });
   }
   private result(attempt: number, transcript: string, final: boolean): void {
@@ -307,6 +316,15 @@ export class VoiceController {
    * asked to, giving up once the restart budget is spent. */
   private rearm(): void {
     if (this.#disposed || !this.#snapshot.handsFree) return;
+    // Never restart recognition while a turn is in flight — the
+    // new session would compete with the in-flight submission.
+    if (
+      this.#snapshot.state === "submitting" ||
+      this.#snapshot.state === "processing" ||
+      this.#snapshot.state === "awaiting_approval" ||
+      this.#snapshot.state === "finalizing"
+    )
+      return;
     if (this.#rearms >= MAX_HANDS_FREE_REARMS) {
       this.patch({ handsFree: false, state: "error", error: "unknown" });
       return;

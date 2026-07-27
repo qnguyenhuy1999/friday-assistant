@@ -364,4 +364,42 @@ describe("VoiceController", () => {
     await Promise.resolve();
     expect(h.submitted).toEqual([]);
   });
+  it("aborts hands-free recognition when typed text is submitted", async () => {
+    const h = harness();
+    h.controller.setHandsFree(true);
+    expect(h.rec.adapter.starts).toBe(1);
+
+    await h.controller.submitTyped("hello");
+
+    expect(h.rec.adapter.aborts).toBe(1);
+    expect(h.rec.adapter.starts).toBe(1);
+    expect(h.submitted).toEqual(["hello"]);
+  });
+  it("ignores late recognition end after typed submission", async () => {
+    const h = harness();
+    h.controller.setHandsFree(true);
+    expect(h.rec.adapter.starts).toBe(1);
+
+    await h.controller.submitTyped("hello");
+
+    h.rec.adapter.finish();
+    expect(h.rec.adapter.starts).toBe(1);
+    expect(h.submitted).toEqual(["hello"]);
+  });
+  it("resumes hands-free listening after typed turn delivers", async () => {
+    const h = harness();
+    h.controller.setHandsFree(true);
+    expect(h.rec.adapter.starts).toBe(1);
+
+    await h.controller.submitTyped("hello");
+    expect(h.controller.snapshot().state).toBe("processing");
+
+    h.controller.notifyResultDelivered();
+
+    expect(h.rec.adapter.starts).toBe(2);
+    expect(h.controller.snapshot()).toMatchObject({
+      handsFree: true,
+      state: "listening",
+    });
+  });
 });

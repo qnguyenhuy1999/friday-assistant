@@ -56,6 +56,7 @@ describe("RunsResource", () => {
                 status: "queued",
                 created_at: "now",
                 failure: null,
+                execution_id: "exec-1",
               },
             ],
             next_cursor: null,

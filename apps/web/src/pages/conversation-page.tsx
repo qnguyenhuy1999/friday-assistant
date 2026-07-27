@@ -48,15 +48,6 @@ export function ConversationPage({
         setCancelError("Could not cancel the run on the server.");
       });
   }, []);
-  const onRetry = useCallback(
-    (runId: string) => {
-      void friday.runs
-        .retry(runId)
-        .then(() => invalidateAnswer(runId))
-        .catch(() => setRetryError("Could not retry the run on the server."));
-    },
-    [invalidateAnswer],
-  );
   const adoptRun = useCallback(
     (runId: string, generation: number) => {
       if (generation !== submitGeneration.current) {
@@ -84,6 +75,36 @@ export function ConversationPage({
     adoptRun(turn.run_id, generation);
   });
   const { deliverAnswer } = voice;
+  /** Retry starts a new lifecycle for the turn's execution, exactly like a
+   * fresh submission: it must own `activeRunId`/`submitGeneration` so Send,
+   * PTT, and Escape-cancellation see it the same way they see a submitted
+   * turn, rather than racing a bare POST outside the fence. */
+  const onRetry = useCallback(
+    (rootRunId: string, effectiveRunId: string) => {
+      const generation = submitGeneration.current;
+      activeRunId.current = rootRunId;
+      voice.controller.notifyProcessing();
+      void friday.runs
+        .retry(effectiveRunId)
+        .then((retryRun) => {
+          if (generation !== submitGeneration.current) {
+            void friday.runs.cancel(retryRun.id).catch(() => undefined);
+            return;
+          }
+          // The cache is keyed by the turn's root run id, never by whichever
+          // attempt just failed, so invalidation must target the root.
+          invalidateAnswer(rootRunId);
+        })
+        .catch(() => {
+          if (generation === submitGeneration.current) {
+            activeRunId.current = null;
+            voice.controller.notifyResultDelivered();
+          }
+          setRetryError("Could not retry the run on the server.");
+        });
+    },
+    [invalidateAnswer, voice.controller],
+  );
 
   // Conversation state is durable. On reload (and when a query update wins a
   // mutation race), recover the newest non-terminal turn instead of relying on

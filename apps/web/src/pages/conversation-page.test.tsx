@@ -14,7 +14,10 @@ function jsonResponse(body: unknown, status = 200): Response {
 type RouteTable = {
   turns?: unknown[] | (() => unknown[]);
   run?: (runId: string) => unknown;
+  latestInExecution?: (runId: string) => unknown;
+  retry?: (runId: string) => unknown;
   holdSubmit?: boolean;
+  holdRetry?: boolean;
   includeSubmittedTurn?: boolean;
 };
 
@@ -46,6 +49,7 @@ function turn(runId = "run-1") {
 /** Routes the page's calls. Individual tests override only their scenario. */
 function stubApi(routes: RouteTable = {}) {
   const cancelled: string[] = [];
+  const retried: string[] = [];
   let releaseSubmit: (() => void) | null = null;
   let didSubmit = false;
   const submitted = new Promise<void>((resolve) => {
@@ -54,6 +58,14 @@ function stubApi(routes: RouteTable = {}) {
   let allowSubmit: (() => void) | null = null;
   const gate = new Promise<void>((resolve) => {
     allowSubmit = resolve;
+  });
+  let releaseRetryPosted: (() => void) | null = null;
+  const retryPosted = new Promise<void>((resolve) => {
+    releaseRetryPosted = resolve;
+  });
+  let allowRetry: (() => void) | null = null;
+  const retryGate = new Promise<void>((resolve) => {
+    allowRetry = resolve;
   });
   vi.spyOn(global, "fetch").mockImplementation(async (input, init) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -96,7 +108,23 @@ function stubApi(routes: RouteTable = {}) {
         execution_id: runId,
       });
     }
+    if (/\/runs\/[^/]+\/retry$/.test(url) && method === "POST") {
+      const runId = url.split("/runs/")[1]!.replace("/retry", "");
+      retried.push(runId);
+      releaseRetryPosted?.();
+      if (routes.holdRetry) await retryGate;
+      return jsonResponse(routes.retry?.(runId) ?? run(runId, "succeeded"));
+    }
     const parsedUrl = new URL(url, "http://127.0.0.1:8000");
+    const latestMatch = /^\/v1\/runs\/([^/]+)\/latest-in-execution$/.exec(
+      parsedUrl.pathname,
+    );
+    if (latestMatch) {
+      return jsonResponse(
+        routes.latestInExecution?.(latestMatch[1]!) ??
+          run(latestMatch[1]!, "running"),
+      );
+    }
     const runMatch = /^\/v1\/runs\/([^/]+)$/.exec(parsedUrl.pathname);
     if (runMatch) {
       return jsonResponse(
@@ -131,8 +159,11 @@ function stubApi(routes: RouteTable = {}) {
   });
   return {
     cancelled,
+    retried,
     submitted,
+    retryPosted,
     releaseServer: () => allowSubmit?.(),
+    releaseRetry: () => allowRetry?.(),
   };
 }
 
@@ -270,5 +301,87 @@ describe("ConversationPage", () => {
 
     // The run the user walked away from must not be left running.
     await waitFor(() => expect(api.cancelled).toEqual(["run-1"]));
+  }, 20_000);
+
+  it("invalidates the root answer through a second retry, not the failed descendant", async () => {
+    // run-1 never changes: it is the turn's permanent root record. Each retry
+    // advances what "latest in execution" resolves to, exactly like the API.
+    let latestId = "run-1";
+    let latestStatus: "failed" | "succeeded" = "failed";
+    const api = stubApi({
+      turns: [turn("run-1")],
+      run: (id) =>
+        id === "run-1" ? run("run-1", "failed") : run(id, latestStatus),
+      latestInExecution: () => run(latestId, latestStatus),
+      retry: (id) => {
+        const nextId = id === "run-1" ? "run-2" : "run-3";
+        latestId = nextId;
+        latestStatus = nextId === "run-2" ? "failed" : "succeeded";
+        return run(nextId, latestStatus);
+      },
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    // The transcript passes the effective (failed) run id, not the root, so
+    // the second click must retry run-2 — the descendant that actually failed.
+    await waitFor(() => expect(api.retried).toEqual(["run-1"]));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(api.retried).toEqual(["run-1", "run-2"]));
+
+    // If invalidation targeted the descendant id instead of the root, the
+    // cache entry at the root key would never clear and this would hang.
+    await waitFor(() =>
+      expect(screen.getByText("E2E task completed")).toBeInTheDocument(),
+    );
+  });
+
+  it("blocks Send while a retry POST is in flight", async () => {
+    const api = stubApi({
+      turns: [turn("run-1")],
+      run: (id) => run(id, "failed"),
+      holdRetry: true,
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    await api.retryPosted;
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Send" })).toBeDisabled(),
+    );
+    await user.type(screen.getByLabelText("Message"), "hello");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    api.releaseRetry();
+    await waitFor(() => expect(api.retried).toEqual(["run-1"]));
+  });
+
+  it("cancels the run created by a retry that resolves after the user interrupted", async () => {
+    const api = stubApi({
+      turns: [turn("run-1")],
+      run: (id) => run(id, "failed"),
+      retry: () => run("run-2", "failed"),
+      holdRetry: true,
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    // The retry POST is in flight and has no run id yet, so Escape has
+    // nothing local to cancel — this is the window the fence has to cover.
+    await api.retryPosted;
+    await user.keyboard("{Escape}");
+
+    api.releaseRetry();
+
+    // The run the retry created must not be left running after the
+    // interruption, even though it did not exist yet when Escape was pressed.
+    await waitFor(() => expect(api.cancelled).toContain("run-2"));
   }, 20_000);
 });

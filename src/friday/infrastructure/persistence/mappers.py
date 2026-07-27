@@ -60,6 +60,7 @@ from friday.domain import (
     ToolInvocationStatus,
 )
 from friday.domain.json_value import JsonValue
+from friday.domain.tool_provenance import ToolProvenance
 from friday.infrastructure.persistence.models import (
     ApprovalRequestRow,
     ArtifactRow,
@@ -386,6 +387,7 @@ def artifact_from_row(row: ArtifactRow) -> Artifact:
 
 
 def tool_invocation_to_row(invocation: ToolInvocation) -> ToolInvocationRow:
+    provenance = invocation.provenance
     return ToolInvocationRow(
         id=str(invocation.id),
         run_id=str(invocation.run_id),
@@ -402,6 +404,12 @@ def tool_invocation_to_row(invocation: ToolInvocation) -> ToolInvocationRow:
         output=invocation.output,
         output_set=invocation.output_set,
         failure=_failure_to_dict(invocation.failure),
+        provenance_kind=provenance.kind if provenance is not None else None,
+        provenance_target=provenance.target if provenance is not None else None,
+        provenance_remote_name=provenance.remote_name if provenance is not None else None,
+        provenance_binding_fingerprint=(
+            provenance.binding_fingerprint if provenance is not None else None
+        ),
     )
 
 
@@ -422,6 +430,29 @@ def tool_invocation_from_row(row: ToolInvocationRow) -> ToolInvocation:
         _output=cast(JsonValue, row.output),
         _output_set=row.output_set,
         _failure=_failure_from_dict(row.failure),
+        _provenance=_provenance_from_row(row),
+    )
+
+
+def _provenance_from_row(row: ToolInvocationRow) -> ToolProvenance | None:
+    values = (
+        row.provenance_kind,
+        row.provenance_target,
+        row.provenance_remote_name,
+        row.provenance_binding_fingerprint,
+    )
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise ValueError(f"tool invocation {row.id} has partial provenance columns")
+    kind, target, remote_name, fingerprint = values
+    assert kind is not None and target is not None
+    assert remote_name is not None and fingerprint is not None
+    return ToolProvenance(
+        kind=kind,
+        target=target,
+        remote_name=remote_name,
+        binding_fingerprint=fingerprint,
     )
 
 

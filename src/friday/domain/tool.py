@@ -16,6 +16,7 @@ from friday.domain.failure import Failure
 from friday.domain.identifiers import ApprovalRequestId, RunId, RunStepId, ToolInvocationId
 from friday.domain.json_value import JsonValue, ensure_json_value
 from friday.domain.time import ensure_utc
+from friday.domain.tool_provenance import ToolProvenance
 
 _UNSET = object()
 
@@ -52,6 +53,7 @@ class ToolInvocation:
     _output: JsonValue = field(default=None)
     _output_set: bool = field(default=False)
     _failure: Failure | None = field(default=None)
+    _provenance: ToolProvenance | None = field(default=None)
 
     @classmethod
     def new(
@@ -64,6 +66,7 @@ class ToolInvocation:
         requested_at: datetime,
         step_id: RunStepId | None = None,
         approval_request_id: ApprovalRequestId | None = None,
+        provenance: ToolProvenance | None = None,
     ) -> ToolInvocation:
         normalized_name = tool_name.strip()
         if not normalized_name:
@@ -79,6 +82,7 @@ class ToolInvocation:
             _requested_at=ensure_utc(requested_at),
             _step_id=step_id,
             _approval_request_id=approval_request_id,
+            _provenance=provenance,
         )
 
     @property
@@ -132,6 +136,11 @@ class ToolInvocation:
     @property
     def approval_request_id(self) -> ApprovalRequestId | None:
         return self._approval_request_id
+
+    @property
+    def provenance(self) -> ToolProvenance | None:
+        """External target selected before execution and never mutated."""
+        return self._provenance
 
     def _require_status(self, *allowed: ToolInvocationStatus, target: ToolInvocationStatus) -> None:
         if self._status not in allowed:

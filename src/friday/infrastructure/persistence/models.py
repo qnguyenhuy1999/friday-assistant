@@ -253,6 +253,10 @@ class ToolInvocationRow(Base):
     output: Mapped[object | None] = mapped_column(JSON)
     output_set: Mapped[bool]
     failure: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    provenance_kind: Mapped[str | None]
+    provenance_target: Mapped[str | None]
+    provenance_remote_name: Mapped[str | None]
+    provenance_binding_fingerprint: Mapped[str | None]
 
 
 class RunEventRow(Base):

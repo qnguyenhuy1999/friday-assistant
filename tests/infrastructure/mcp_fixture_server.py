@@ -50,6 +50,7 @@ class FixtureBehaviour:
     helper_descendant_ignores_sigterm: bool = False
     descendant_pid_file: str | None = None
     notification_marker_file: str | None = None
+    write_marker_file: str | None = None
     """Unsolicited JSON-RPC notifications emitted before every answer. Line
     size bounds one message; only a queue bound stops an endless stream."""
 
@@ -84,6 +85,8 @@ def call(p):
  a=p.get('arguments') or {}; name=p.get('name')
  if name=='write' and (B['write_then_is_error'] or B['write_then_jsonrpc_error'] or B['write_then_hang'] or B['write_then_exit']):
   STATE[a.get('key')]=a.get('value')
+  if B['write_marker_file']:
+   with open(B['write_marker_file'], 'a', encoding='utf-8') as f: f.write(str(a.get('key'))+'='+str(a.get('value'))+'\n')
   if B['write_then_hang']: return '__HANG__'
   if B['write_then_exit']: os._exit(0)
   if B['write_then_is_error']: return {'isError':True,'content':[{'type':'text','text':'written then failed'}]}
@@ -101,7 +104,11 @@ def call(p):
  if B['result_nan']: return {'content':[],'structuredContent':{'value':float('nan')}}
  if B['result_infinity']: return {'content':[],'structuredContent':{'value':float('inf')}}
  if B['malformed_content_block']: return {'content':[{}]}
- if name=='write': STATE[a.get('key')]=a.get('value'); return {'content':[],'structuredContent':{'written':a.get('key')}}
+ if name=='write':
+  STATE[a.get('key')]=a.get('value')
+  if B['write_marker_file']:
+   with open(B['write_marker_file'], 'a', encoding='utf-8') as f: f.write(str(a.get('key'))+'='+str(a.get('value'))+'\n')
+  return {'content':[],'structuredContent':{'written':a.get('key')}}
  if name=='read': return {'content':[],'structuredContent':{'key':a.get('key'),'value':STATE.get(a.get('key'))}}
  return {'isError':True,'content':[{'type':'text','text':'unknown'}]}
 if B['stderr_flood_bytes']: sys.stderr.write('e'*B['stderr_flood_bytes']); sys.stderr.flush()

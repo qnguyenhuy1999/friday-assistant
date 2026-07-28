@@ -164,7 +164,20 @@ class StdioJsonRpcSession:
                     stream.close()
         # Signal our *recorded* group even when poll() already reaped the
         # leader.  Descendants can otherwise survive stdin EOF indefinitely.
-        _signal_group(process, group_id, signal.SIGTERM)
+        used_process_group = _signal_group(process, group_id, signal.SIGTERM)
+        if not used_process_group:
+            # On platforms without usable POSIX process groups, preserve the
+            # direct-child lifecycle: TERM, bounded grace, then KILL and reap.
+            # A suppressed timeout alone would let a SIGTERM-resistant child
+            # survive close().
+            try:
+                process.wait(timeout=_SHUTDOWN_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(OSError):
+                    process.kill()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=_SHUTDOWN_GRACE_SECONDS)
+            return
         # The leader is not a reliable proxy for its process group: it can
         # exit immediately after SIGTERM while a descendant deliberately
         # ignores it.  Always finish the grace period by killing our recorded
@@ -409,14 +422,14 @@ def _require_error_object(error: JsonValue) -> None:
         raise StdioSessionProtocolError("the child sent a malformed error")
 
 
-def _signal_group(process: subprocess.Popen[bytes], group_id: int | None, number: int) -> None:
+def _signal_group(process: subprocess.Popen[bytes], group_id: int | None, number: int) -> bool:
     """Signal the child's own process group, falling back to the child alone
     when the group is already gone or the platform has no process groups."""
     try:
         if group_id is None:
             raise OSError("no owned process group")
         os.killpg(group_id, number)
-        return
+        return True
     except (OSError, AttributeError, PermissionError):
         pass
     with contextlib.suppress(OSError):
@@ -424,6 +437,7 @@ def _signal_group(process: subprocess.Popen[bytes], group_id: int | None, number
             process.kill()
         else:
             process.terminate()
+    return False
 
 
 def _group_exists(group_id: int | None) -> bool:

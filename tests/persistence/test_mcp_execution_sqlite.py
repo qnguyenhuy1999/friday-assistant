@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -30,21 +31,26 @@ from alembic.config import Config
 from friday.application.approval_workflow import ApproveRequest
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
 from friday.application.commands import ApproveRequestCommand, RequestApprovalCommand
+from friday.application.errors import ToolExecutionAmbiguous
 from friday.application.ports import UnitOfWorkFactory
-from friday.application.tool_authorization import RequestToolApproval
+from friday.application.runtime_context import RunSnapshot, build_runtime_context
+from friday.application.tool_authorization import (
+    RequestToolApproval,
+    compute_legacy_authorization_fingerprint,
+)
 from friday.application.tool_gateway import ToolCall, ToolExecutionRequest
-from friday.domain.approval import ApprovalCategory, ApprovalStatus
-from friday.domain.identifiers import RunId, TaskId
+from friday.domain.approval import ApprovalCategory, ApprovalRequest, ApprovalStatus
+from friday.domain.identifiers import ApprovalRequestId, RunId, TaskId, ToolInvocationId
 from friday.domain.run import Run, RunStatus
 from friday.domain.task import Task
-from friday.domain.tool import ToolInvocationStatus
+from friday.domain.tool import ToolInvocation, ToolInvocationStatus
 from friday.infrastructure.mcp.config import McpServerConfig, McpToolBinding
 from friday.infrastructure.mcp.discovery import discover_server
 from friday.infrastructure.mcp.stdio_client import McpStdioClient
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
 from friday.infrastructure.tools.mcp_gateway import McpServerStack, McpToolGateway
-from tests.infrastructure.mcp_fixture_server import make_fixture_server
+from tests.infrastructure.mcp_fixture_server import FixtureBehaviour, make_fixture_server
 
 T0 = datetime.fromisoformat("2026-07-28T12:00:00+00:00")
 LEASE = timedelta(minutes=1)
@@ -172,6 +178,46 @@ def _request(run_id: RunId, call: ToolCall) -> ToolExecutionRequest:
     from friday.domain.identifiers import ToolInvocationId
 
     return ToolExecutionRequest(ToolInvocationId.new(), run_id, None, call)
+
+
+def _approved_legacy(run_id: RunId, call: ToolCall) -> ApprovalRequest:
+    approval = ApprovalRequest.new(
+        id=ApprovalRequestId.new(),
+        run_id=run_id,
+        category=ApprovalCategory.NETWORK_ACCESS,
+        summary="legacy",
+        reason="legacy replay proof",
+        requested_action=call.tool,
+        requested_input=call.tool_input,
+        requested_at=T0,
+        authorization_fingerprint=compute_legacy_authorization_fingerprint(
+            run_id=run_id, step_id=None, call=call
+        ),
+    )
+    approval.approve(T0, "operator")
+    approval.consume(T0)
+    return approval
+
+
+def _gateway_with_behaviour(
+    tmp_path: Path,
+    behaviour: FixtureBehaviour,
+    *,
+    base_environment: dict[str, str] | None = None,
+    call_timeout_seconds: float = 10.0,
+) -> McpToolGateway:
+    server = McpServerConfig(
+        server_id="fixture",
+        enabled=True,
+        command=make_fixture_server(tmp_path, behaviour),
+        bindings=_bindings(),
+        call_timeout_seconds=call_timeout_seconds,
+        env_from=("FIXTURE_TOKEN",) if base_environment is not None else (),
+    )
+    client = McpStdioClient(server, base_environment=base_environment)
+    discovery = discover_server(client, server)
+    assert discovery.failure_code is None
+    return McpToolGateway((McpServerStack(server, client, discovery),))
 
 
 def test_a_read_only_binding_executes_and_records_vendor_free_provenance(
@@ -365,3 +411,243 @@ def test_a_claim_lost_before_the_call_produces_no_remote_side_effect(
     assert result.status == "failed"
     assert result.failure is not None and result.failure.code == "claim_lost"
     assert _remote_value(gateway, "k") is None
+
+
+@pytest.mark.parametrize("terminal", ["succeeded", "failed", "running"])
+def test_consumed_v1_approval_replays_only_legacy_local_invocations(
+    uow_factory: UnitOfWorkFactory,
+    gateway: McpToolGateway,
+    clock: FixedClock,
+    terminal: str,
+) -> None:
+    """v1 is replay fencing, never a route into an MCP binding."""
+    run_id = RunId.new()
+    _seed_claimed_run(uow_factory, run_id)
+    approval = _approved_legacy(run_id, WRITE)
+    invocation = ToolInvocation.new(
+        id=ToolInvocationId.new(),
+        run_id=run_id,
+        tool_name=WRITE.tool,
+        requested_input=WRITE.tool_input,
+        requested_at=T0,
+        approval_request_id=approval.id,
+    )
+    invocation.start(T0)
+    if terminal == "succeeded":
+        invocation.succeed(T0, {"legacy": "result"})
+    elif terminal == "failed":
+        from friday.domain.failure import Failure, FailureCause
+
+        invocation.fail(T0, Failure("legacy_failed", "legacy failure", False, FailureCause.TOOL))
+    with uow_factory() as uow:
+        uow.approvals.add(approval)
+        uow.tool_invocations.add(invocation)
+        uow.commit()
+
+    executor = ExecuteToolAction(uow_factory, clock, gateway)
+    if terminal == "running":
+        with pytest.raises(ToolExecutionAmbiguous):
+            executor.execute(
+                run_id=run_id,
+                step_id=None,
+                call=WRITE,
+                worker_id=WORKER,
+                claim_token=TOKEN,
+                claim_generation=_generation(uow_factory, run_id),
+            )
+    else:
+        outcome = executor.execute(
+            run_id=run_id,
+            step_id=None,
+            call=WRITE,
+            worker_id=WORKER,
+            claim_token=TOKEN,
+            claim_generation=_generation(uow_factory, run_id),
+        )
+        assert outcome.replayed is True
+        assert outcome.result is not None
+        assert outcome.result.status == terminal
+    assert _remote_value(gateway, "k") is None
+
+
+def test_unconsumed_v1_and_mcp_provenance_do_not_authorize_or_replay(
+    uow_factory: UnitOfWorkFactory, gateway: McpToolGateway, clock: FixedClock
+) -> None:
+    run_id = RunId.new()
+    _seed_claimed_run(uow_factory, run_id)
+    legacy = _approved_legacy(run_id, WRITE)
+    # v1 approval without consumption cannot authorize a current v2 execution.
+    legacy._consumed_at = None  # noqa: SLF001 - explicitly models historic durable row
+    with uow_factory() as uow:
+        uow.approvals.add(legacy)
+        uow.commit()
+    assert (
+        ExecuteToolAction(uow_factory, clock, gateway)
+        .execute(
+            run_id=run_id,
+            step_id=None,
+            call=WRITE,
+            worker_id=WORKER,
+            claim_token=TOKEN,
+            claim_generation=_generation(uow_factory, run_id),
+        )
+        .kind
+        == "approval_required"
+    )
+
+    # A consumed v1 record attached to an MCP-provenanced invocation is not
+    # local legacy replay and therefore cannot suppress current approval.
+    legacy.consume(T0)
+    risk = gateway.assess(WRITE)
+    invocation = ToolInvocation.new(
+        id=ToolInvocationId.new(),
+        run_id=run_id,
+        tool_name=WRITE.tool,
+        requested_input=WRITE.tool_input,
+        requested_at=T0,
+        approval_request_id=legacy.id,
+        provenance=risk.provenance,
+    )
+    invocation.start(T0)
+    invocation.succeed(T0, {"must": "not replay"})
+    with uow_factory() as uow:
+        uow.approvals.save(legacy)
+        uow.tool_invocations.add(invocation)
+        uow.commit()
+    assert (
+        ExecuteToolAction(uow_factory, clock, gateway)
+        .execute(
+            run_id=run_id,
+            step_id=None,
+            call=WRITE,
+            worker_id=WORKER,
+            claim_token=TOKEN,
+            claim_generation=_generation(uow_factory, run_id),
+        )
+        .kind
+        == "approval_required"
+    )
+
+
+@pytest.mark.parametrize(
+    "behaviour",
+    [FixtureBehaviour(write_then_is_error=True), FixtureBehaviour(write_then_hang=True)],
+    ids=["protocol-error", "transport-loss"],
+)
+def test_post_side_effect_mutation_uncertainty_stays_running_and_never_retries(
+    uow_factory: UnitOfWorkFactory,
+    tmp_path: Path,
+    clock: FixedClock,
+    behaviour: FixtureBehaviour,
+) -> None:
+    marker = tmp_path / "writes.txt"
+    behaviour = replace(behaviour, write_marker_file=str(marker))
+    built = _gateway_with_behaviour(tmp_path, behaviour, call_timeout_seconds=0.1)
+    try:
+        run_id = RunId.new()
+        _seed_claimed_run(uow_factory, run_id)
+        executor = ExecuteToolAction(uow_factory, clock, built)
+        proposed = executor.execute(
+            run_id=run_id,
+            step_id=None,
+            call=WRITE,
+            worker_id=WORKER,
+            claim_token=TOKEN,
+            claim_generation=_generation(uow_factory, run_id),
+        )
+        approval = RequestToolApproval(uow_factory, clock).execute(
+            RequestApprovalCommand(
+                run_id=run_id,
+                category=proposed.risk.category,
+                summary=proposed.risk.summary,
+                reason="write",
+                requested_action=WRITE.tool,
+                requested_input=WRITE.tool_input,
+                authorization_fingerprint=proposed.fingerprint,
+            ),
+            worker_id=WORKER,
+            claim_token=TOKEN,
+            claim_generation=_generation(uow_factory, run_id),
+        )
+        ApproveRequest(uow_factory, clock).execute(
+            ApproveRequestCommand(approval_id=approval.approval_id, resolver="operator")
+        )
+        generation = _reclaim(uow_factory, run_id)
+        with pytest.raises(ToolExecutionAmbiguous):
+            executor.execute(
+                run_id=run_id,
+                step_id=None,
+                call=WRITE,
+                worker_id=WORKER,
+                claim_token=TOKEN,
+                claim_generation=generation,
+            )
+        assert marker.read_text(encoding="utf-8") == "k=v\n"
+        with uow_factory() as fresh:
+            invocations = fresh.tool_invocations.list_for_run(run_id)
+            assert len(invocations) == 1 and invocations[0].status is ToolInvocationStatus.RUNNING
+            assert invocations[0].approval_request_id == approval.approval_id
+            assert fresh.approvals.list_for_run(run_id)[0].is_consumed is True
+            assert all(
+                event.type.value != "tool_invocation_failed"
+                for event in fresh.events.list_for_run(run_id)
+            )
+        with pytest.raises(ToolExecutionAmbiguous):
+            executor.execute(
+                run_id=run_id,
+                step_id=None,
+                call=WRITE,
+                worker_id=WORKER,
+                claim_token=TOKEN,
+                claim_generation=generation,
+            )
+        assert marker.read_text(encoding="utf-8") == "k=v\n"
+    finally:
+        built.close()
+
+
+def test_echoed_credential_is_redacted_from_sqlite_and_next_runtime_context(
+    uow_factory: UnitOfWorkFactory, tmp_path: Path, clock: FixedClock
+) -> None:
+    secret = "credential-only-for-this-e2e-proof"
+    built = _gateway_with_behaviour(
+        tmp_path,
+        FixtureBehaviour(echo_token=True),
+        base_environment={"PATH": "/usr/bin:/bin", "FIXTURE_TOKEN": secret},
+    )
+    try:
+        run_id = RunId.new()
+        _seed_claimed_run(uow_factory, run_id)
+        ExecuteToolAction(uow_factory, clock, built).execute(
+            run_id=run_id,
+            step_id=None,
+            call=READ,
+            worker_id=WORKER,
+            claim_token=TOKEN,
+            claim_generation=_generation(uow_factory, run_id),
+        )
+        with uow_factory() as fresh:
+            invocation = fresh.tool_invocations.list_for_run(run_id)[0]
+            events = fresh.events.list_for_run(run_id)
+            run = fresh.runs.get(run_id)
+            task = fresh.tasks.get(run.task_id) if run is not None else None
+            assert run is not None and task is not None
+            durable = json.dumps(
+                {
+                    "output": invocation.output,
+                    "provenance": str(invocation.provenance),
+                    "events": [e.payload for e in events],
+                }
+            )
+            context = build_runtime_context(
+                RunSnapshot(task, run, (), (), (invocation,), (), tuple(events)),
+                tool_manifest=built.list_tools(),
+                attempt_number=1,
+                turn_number=2,
+                max_chars=4_000,
+            )
+        assert secret not in durable
+        assert secret not in context
+        assert "[REDACTED]" in durable
+    finally:
+        built.close()

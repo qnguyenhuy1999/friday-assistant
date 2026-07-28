@@ -35,6 +35,7 @@ from friday.infrastructure.mcp.errors import (
     McpUnavailable,
 )
 from friday.infrastructure.mcp.stdio_client import McpStdioClient
+from friday.infrastructure.process.stdio_jsonrpc import StdioJsonRpcSession, StdioSessionSettings
 from tests.infrastructure.mcp_fixture_server import (
     LEAKED_TOKEN,
     FixtureBehaviour,
@@ -182,6 +183,34 @@ def test_close_reaps_the_child(opened: list[McpStdioClient], tmp_path: Path) -> 
     assert pid is not None
 
     client.close()
+
+    assert not _alive(pid)
+
+
+def test_close_kills_sigterm_resistant_direct_child_when_killpg_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The non-POSIX fallback must KILL after its bounded TERM grace period."""
+    session = StdioJsonRpcSession(
+        StdioSessionSettings(
+            argv=(
+                sys.executable,
+                "-c",
+                "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "time.sleep(3600)",
+            ),
+            environment=dict(os.environ),
+            max_line_bytes=1024,
+        )
+    )
+    session.start()
+    pid = session.pid
+    monkeypatch.setattr(
+        "friday.infrastructure.process.stdio_jsonrpc.os.killpg",
+        lambda *_: (_ for _ in ()).throw(OSError()),
+    )
+
+    session.close()
 
     assert not _alive(pid)
 

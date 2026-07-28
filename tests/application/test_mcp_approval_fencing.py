@@ -11,7 +11,9 @@ rather than about a string the operator once wrote in a config file.
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
+from pathlib import Path
 
 from friday.application.tool_authorization import (
     FINGERPRINT_VERSION,
@@ -23,8 +25,12 @@ from friday.domain.approval import ApprovalCategory, ApprovalRequest, ApprovalSt
 from friday.domain.identifiers import ApprovalRequestId, RunId
 from friday.domain.json_value import JsonValue
 from friday.infrastructure.mcp.bindings import McpBoundTool, compute_binding_fingerprint
+from friday.infrastructure.mcp.client import McpClient
 from friday.infrastructure.mcp.config import McpServerConfig, McpToolBinding
+from friday.infrastructure.mcp.discovery import discover_server
 from friday.infrastructure.mcp.schema import normalize_input_schema
+from friday.infrastructure.mcp.stdio_client import McpStdioClient
+from tests.infrastructure.mcp_fixture_server import make_fixture_server
 
 NOW = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
 SCHEMA = {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}
@@ -185,3 +191,38 @@ def test_an_approval_does_not_cross_runs() -> None:
     scope = _scope()
     approval = _approved(RunId.new(), scope)
     assert _authorizes(approval, RunId.new(), scope) is False
+
+
+def test_real_credential_rotation_changes_binding_identity_without_leaking_secret(
+    tmp_path: Path,
+) -> None:
+    """The credential principal is opaque, but rotation revokes the grant."""
+
+    def discover(token: str) -> tuple[McpBoundTool, McpClient]:
+        server = _server(
+            command=make_fixture_server(tmp_path),
+            env_from=("FIXTURE_TOKEN",),
+        )
+        environment = dict(os.environ)
+        environment["FIXTURE_TOKEN"] = token
+        client = McpStdioClient(server, base_environment=environment)
+        result = discover_server(client, server)
+        assert len(result.available) == 1
+        return result.available[0], client
+
+    first, first_client = discover("value-A")
+    try:
+        second, second_client = discover("value-B")
+        try:
+            assert first.binding_fingerprint != second.binding_fingerprint
+            run_id = RunId.new()
+            approval = _approved(run_id, first.authorization_scope)
+            assert _authorizes(approval, run_id, first.authorization_scope)
+            assert not _authorizes(approval, run_id, second.authorization_scope)
+            durable_identity = str((first.binding_fingerprint, first.provenance, second.provenance))
+            assert "value-A" not in durable_identity
+            assert "value-B" not in durable_identity
+        finally:
+            second_client.close()
+    finally:
+        first_client.close()

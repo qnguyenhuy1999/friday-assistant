@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 
+from friday.domain.json_value import JsonValue
 from friday.infrastructure.mcp.bindings import McpBoundTool, compute_binding_fingerprint
 from friday.infrastructure.mcp.client import McpClient, McpRemoteTool
 from friday.infrastructure.mcp.config import McpServerConfig
@@ -37,6 +39,7 @@ def discover_server(client: McpClient, server: McpServerConfig) -> McpServerDisc
         client.connect()
         remote = _index(client.list_tools())
     except McpError as exc:
+        _close_quietly(client)
         return _empty(server.server_id, names, exc.code)
     available: list[McpBoundTool] = []
     unavailable: list[str] = []
@@ -55,18 +58,34 @@ def discover_server(client: McpClient, server: McpServerConfig) -> McpServerDisc
                 binding,
                 schema,
                 compute_binding_fingerprint(
-                    server=server, binding=binding, normalized_schema=schema
+                    server=server,
+                    binding=binding,
+                    normalized_schema=schema,
+                    execution_identity=_execution_identity(client),
                 ),
             )
         )
     allowed = {binding.remote_tool_name for binding in server.bindings}
-    return McpServerDiscovery(
+    discovery = McpServerDiscovery(
         server.server_id,
         tuple(available),
         tuple(sorted(unavailable)),
         sum(name not in allowed for name in remote),
         None,
     )
+    if not discovery.available:
+        _close_quietly(client)
+    return discovery
+
+
+def _execution_identity(client: McpClient) -> JsonValue | None:
+    identity = getattr(client, "execution_identity", None)
+    return identity() if callable(identity) else None
+
+
+def _close_quietly(client: McpClient) -> None:
+    with contextlib.suppress(Exception):
+        client.close()
 
 
 def _index(tools: tuple[McpRemoteTool, ...]) -> dict[str, McpRemoteTool]:

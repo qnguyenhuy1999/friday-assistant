@@ -6,6 +6,7 @@ Worker exists — no claim can ever happen without a real processor."""
 from __future__ import annotations
 
 import hashlib
+from contextlib import ExitStack
 from dataclasses import dataclass
 
 from sqlalchemy import Engine
@@ -335,7 +336,24 @@ def create_worker(
     if brain is None:
         verify_brain_only_support(claude_settings)  # raises BrainUnavailable
 
+    # Every external resource below is registered on this stack as it is
+    # acquired, and the stack is only defused once a Worker exists to own
+    # them. Until then, any failure — an unreadable MCP config, a duplicate
+    # local tool name across gateways, a broken driver — unwinds the whole
+    # composition: no orphan child process, no leaked connection pool.
+    with ExitStack() as resources:
+        return _compose_worker(settings, runtime, claude_settings, brain, resources)
+
+
+def _compose_worker(
+    settings: WorkerSettings,
+    runtime: RuntimeSettings,
+    claude_settings: ClaudeCliSettings,
+    brain: BrainRuntime | None,
+    resources: ExitStack,
+) -> Worker:
     engine = create_engine(settings.database_url)
+    resources.callback(engine.dispose)
     session_factory = create_session_factory(engine)
     uow_factory = create_unit_of_work_factory(session_factory)
     clock = SystemClock()
@@ -358,15 +376,21 @@ def create_worker(
             memory=memory.tool_settings,
         )
     )
-    gateways: list[ToolGateway] = [workspace_gateway]
     computer_gateway = _computer_gateway(runtime)  # raises ComputerUseUnavailable
     if computer_gateway is not None:
-        gateways.append(computer_gateway)
+        resources.callback(computer_gateway.close)
     mcp_gateway = _mcp_gateway()
+    if mcp_gateway is not None:
+        resources.callback(mcp_gateway.close)
+    gateways: list[ToolGateway] = [workspace_gateway]
+    if computer_gateway is not None:
+        gateways.append(computer_gateway)
     if mcp_gateway is not None:
         gateways.append(mcp_gateway)
     # ONE composite instance for both the brain manifest and execution: two
     # registries could disagree about which tools exist or what they cost.
+    # A duplicate local name raises here — after both child stacks are up,
+    # which is exactly the window the ExitStack above exists to cover.
     gateway = CompositeToolGateway(*gateways)
 
     runtime_brain = brain or ClaudeCliBrainRuntime(claude_settings)
@@ -421,7 +445,7 @@ def create_worker(
         maintenance_interval_seconds=settings.maintenance_interval_seconds,
         poll_interval_seconds=settings.poll_interval_seconds,
     )
-    return Worker(
+    worker = Worker(
         engine=engine,
         settings=settings,
         loop=loop,
@@ -429,3 +453,7 @@ def create_worker(
         computer_gateway=computer_gateway,
         mcp_gateway=mcp_gateway,
     )
+    # ownership transfers here and only here: from now on Worker.close() is
+    # what releases these, so the unwind must not also fire
+    resources.pop_all()
+    return worker

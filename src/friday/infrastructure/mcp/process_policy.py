@@ -25,6 +25,7 @@ SHELL_INTERPRETERS = frozenset(
         "pwsh.exe",
     }
 )
+_WRAPPERS = frozenset({"env", "command", "nohup", "setsid"})
 
 
 def validate_server_command(command: tuple[str, ...]) -> None:
@@ -35,3 +36,8 @@ def validate_server_command(command: tuple[str, ...]) -> None:
     executable = command[0].replace("\\", "/").rsplit("/", maxsplit=1)[-1].strip().casefold()
     if executable in SHELL_INTERPRETERS:
         raise McpConfigInvalid("command must not use a shell interpreter as its executable")
+    # A wrapper does not make a shell safe.  Supporting all wrapper grammars
+    # would turn this policy into a shell parser, so reject known launchers
+    # outright rather than accidentally accepting `env bash -c ...`.
+    if executable in _WRAPPERS:
+        raise McpConfigInvalid("command must not use an interpreter wrapper")

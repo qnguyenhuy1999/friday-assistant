@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from friday.application.errors import ToolInputInvalid, ToolNotFound
+from friday.application.errors import ToolExecutionAmbiguous, ToolInputInvalid, ToolNotFound
 from friday.application.ports import Clock
 from friday.application.tool_gateway import (
     ToolCall,
@@ -22,8 +22,8 @@ from friday.infrastructure.mcp.bindings import McpBindingRegistry, McpBoundTool
 from friday.infrastructure.mcp.client import McpClient
 from friday.infrastructure.mcp.config import McpServerConfig
 from friday.infrastructure.mcp.discovery import McpServerDiscovery
-from friday.infrastructure.mcp.errors import McpError
-from friday.infrastructure.mcp.health import McpServerHealth
+from friday.infrastructure.mcp.errors import McpError, McpRemoteError
+from friday.infrastructure.mcp.health import McpServerHealth, McpServerStatus
 from friday.infrastructure.mcp.output import OutputBounds, normalize_call_result
 from friday.infrastructure.mcp.schema import validate_input
 
@@ -131,6 +131,15 @@ class McpToolGateway:
             output = normalize_call_result(raw, bounds=OutputBounds.from_server(state.stack.config))
         except McpError as exc:
             state.failure_code = exc.code
+            # Once tools/call has been dispatched, a transport-level error is
+            # not evidence that a mutating remote operation did not happen.
+            # Leave its durable invocation RUNNING; the executor will refuse
+            # blind replay and surface an ambiguous outcome.
+            if not tool.binding.read_only and not isinstance(exc, McpRemoteError):
+                raise ToolExecutionAmbiguous(
+                    "the external mutating MCP operation may have completed; "
+                    "refusing to record failure or retry it automatically"
+                ) from exc
             return self._failure(exc.code, read_only=tool.binding.read_only)
         state.last_success = self._clock.now()
         state.failure_code = None
@@ -140,7 +149,7 @@ class McpToolGateway:
         return tuple(
             McpServerHealth(
                 server_id=state.stack.config.server_id,
-                status=state.stack.discovery.status,
+                status=self._status(state),
                 configured_binding_count=len(state.stack.config.bindings),
                 available_binding_count=len(state.stack.discovery.available),
                 last_success=state.last_success,
@@ -148,6 +157,18 @@ class McpToolGateway:
             )
             for state in self._states
         )
+
+    @staticmethod
+    def _status(state: _ServerState) -> McpServerStatus:
+        """Startup discovery is a snapshot; a runtime failure is newer news.
+
+        Reporting `available` next to a live `failure_code` tells an operator
+        the server is fine while every call to it is failing, which is worse
+        than saying nothing.
+        """
+        if state.failure_code is None:
+            return state.stack.discovery.status
+        return "unavailable" if not state.stack.discovery.available else "degraded"
 
     def close(self) -> None:
         if self._closed:

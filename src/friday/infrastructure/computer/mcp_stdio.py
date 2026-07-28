@@ -26,21 +26,25 @@ absolute paths, usernames, and window contents.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
-import queue
-import subprocess
-import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import IO, Protocol
+from typing import Protocol
 
 from friday.domain.json_value import JsonValue
 from friday.infrastructure.computer.errors import (
     ComputerDriverFailed,
     ComputerDriverTimeout,
     ComputerDriverUnavailable,
+)
+from friday.infrastructure.process.stdio_jsonrpc import (
+    StdioJsonRpcSession,
+    StdioSessionProtocolError,
+    StdioSessionRemoteError,
+    StdioSessionSettings,
+    StdioSessionTimeout,
+    StdioSessionUnavailable,
 )
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -49,8 +53,6 @@ CLIENT_VERSION = "1"
 
 DEFAULT_TIMEOUT_SECONDS = 15.0
 DEFAULT_MAX_RESPONSE_BYTES = 16_000_000
-_MAX_STDERR_BYTES = 8_000
-_SHUTDOWN_GRACE_SECONDS = 2.0
 
 ENVIRONMENT_ALLOWLIST = ("HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR")
 """Mirrors the brain runtime's allowlist: the driver needs a home directory and
@@ -122,49 +124,40 @@ class McpToolResult:
 class McpStdioTransport:
     def __init__(self, settings: McpStdioSettings) -> None:
         self._settings = settings
-        self._process: subprocess.Popen[bytes] | None = None
-        self._lines: queue.Queue[bytes | None] = queue.Queue()
-        self._next_id = 0
         self._started = False
+        self._session: StdioJsonRpcSession | None = None
 
     # --- lifecycle --------------------------------------------------------
 
     def start(self) -> None:
         if self._started:
             return
-        try:
-            process = subprocess.Popen(  # noqa: S603 - argv list, never a shell
-                list(self._settings.argv),
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=self._environment(),
-                bufsize=0,
+        environment = self._environment()
+        session = StdioJsonRpcSession(
+            StdioSessionSettings(
+                argv=self._settings.argv,
+                environment=environment,
+                max_line_bytes=self._settings.max_response_bytes,
             )
-        except (OSError, ValueError) as exc:
+        )
+        try:
+            self._session = session
+            session.start(handshake=self._handshake)
+        except (StdioSessionUnavailable, StdioSessionProtocolError, StdioSessionRemoteError) as exc:
+            self._session = None
             raise ComputerDriverUnavailable("the computer-use driver could not be started") from exc
-        self._process = process
-        _spawn_daemon(self._pump_stdout, name="friday-mcp-stdout")
-        _spawn_daemon(self._drain_stderr, name="friday-mcp-stderr")
+        except StdioSessionTimeout as exc:
+            self._session = None
+            raise ComputerDriverTimeout("the computer-use driver did not connect in time") from exc
         self._started = True
-        self._handshake()
 
     def close(self) -> None:
-        process = self._process
-        self._process = None
-        self._started = False
-        if process is None:
+        if self._session is not None:
+            session, self._session = self._session, None
+            self._started = False
+            session.close()
             return
-        for stream in (process.stdin, process.stdout, process.stderr):
-            if stream is not None:
-                with contextlib.suppress(OSError):
-                    stream.close()
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=_SHUTDOWN_GRACE_SECONDS)
-            except subprocess.TimeoutExpired:
-                process.kill()
+        self._started = False
 
     def _environment(self) -> dict[str, str]:
         allowed = (*ENVIRONMENT_ALLOWLIST, *_DISPLAY_VARIABLES)
@@ -255,110 +248,42 @@ class McpStdioTransport:
     # --- JSON-RPC ---------------------------------------------------------
 
     def _request(self, method: str, params: Mapping[str, JsonValue]) -> JsonValue:
-        self._next_id += 1
-        request_id = self._next_id
-        self._write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": dict(params)})
-        return self._await_response(request_id)
+        if self._session is not None:
+            try:
+                return self._session.request(
+                    method, params, timeout_seconds=self._settings.timeout_seconds
+                )
+            except StdioSessionTimeout as exc:
+                raise ComputerDriverTimeout(
+                    "the computer-use driver did not respond in time"
+                ) from exc
+            except StdioSessionUnavailable as exc:
+                raise ComputerDriverUnavailable(
+                    "the computer-use driver exited unexpectedly"
+                ) from exc
+            except (StdioSessionProtocolError, StdioSessionRemoteError) as exc:
+                raise ComputerDriverFailed(
+                    "the computer-use driver returned an unusable response"
+                ) from exc
+        raise ComputerDriverUnavailable("the computer-use driver is not running")
 
     def _notify(self, method: str, params: Mapping[str, JsonValue]) -> None:
-        self._write({"jsonrpc": "2.0", "method": method, "params": dict(params)})
-
-    def _write(self, message: Mapping[str, JsonValue]) -> None:
-        process = self._process
-        if process is None or process.stdin is None:
-            raise ComputerDriverUnavailable("the computer-use driver is not running")
-        payload = json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n"
-        try:
-            process.stdin.write(payload)
-            process.stdin.flush()
-        except (BrokenPipeError, OSError) as exc:
-            raise ComputerDriverUnavailable(
-                "the computer-use driver stopped accepting input"
-            ) from exc
-
-    def _await_response(self, request_id: int) -> JsonValue:
-        """Read until the matching response arrives, the budget expires, or the
-        process dies. Notifications and server-initiated requests are skipped
-        rather than treated as answers."""
-        while True:
-            line = self._next_line()
+        if self._session is not None:
             try:
-                message = json.loads(line)
-            except (UnicodeDecodeError, ValueError) as exc:
-                raise ComputerDriverFailed(
-                    "the computer-use driver sent a malformed message"
+                self._session.notify(method, params, timeout_seconds=self._settings.timeout_seconds)
+                return
+            except StdioSessionTimeout as exc:
+                raise ComputerDriverTimeout(
+                    "the computer-use driver did not accept input in time"
                 ) from exc
-            if not isinstance(message, dict):
-                raise ComputerDriverFailed("the computer-use driver sent a malformed message")
-            if message.get("id") != request_id:
-                continue
-            if "error" in message:
-                raise ComputerDriverFailed("the computer-use driver returned an error response")
-            if "result" not in message:
-                raise ComputerDriverFailed("the computer-use driver returned no result")
-            result: JsonValue = message["result"]
-            return result
-
-    def _next_line(self) -> bytes:
-        try:
-            line = self._lines.get(timeout=self._settings.timeout_seconds)
-        except queue.Empty:
-            raise ComputerDriverTimeout("the computer-use driver did not respond in time") from None
-        if line is None:
-            raise ComputerDriverUnavailable("the computer-use driver exited unexpectedly")
-        return line
-
-    # --- background readers ----------------------------------------------
-
-    def _pump_stdout(self) -> None:
-        process = self._process
-        stream = process.stdout if process is not None else None
-        if stream is None:
-            self._lines.put(None)
-            return
-        limit = self._settings.max_response_bytes
-        try:
-            while True:
-                line = stream.readline(limit)
-                if not line:
-                    break
-                if not line.endswith(b"\n"):
-                    # either the stream ended mid-line or the line exceeded the
-                    # response ceiling; both mean this connection is unusable
-                    break
-                stripped = line.strip()
-                if stripped:
-                    self._lines.put(stripped)
-        except (OSError, ValueError):
-            pass
-        self._lines.put(None)
-
-    def _drain_stderr(self) -> None:
-        process = self._process
-        stream = process.stderr if process is not None else None
-        if stream is None:
-            return
-        _drain(stream)
-
-
-def _drain(stream: IO[bytes]) -> None:
-    """Consume and discard stderr so the child never blocks on a full pipe.
-
-    Discarded rather than captured: driver diagnostics are exactly the text
-    that must not reach the brain, and Friday has no use for them that would
-    justify holding them in memory.
-    """
-    try:
-        while stream.read(_MAX_STDERR_BYTES):
-            pass
-    except (OSError, ValueError):
-        pass
-
-
-def _spawn_daemon(target: object, *, name: str) -> None:
-    assert callable(target)
-    thread = threading.Thread(target=target, name=name, daemon=True)
-    thread.start()
+            except StdioSessionUnavailable as exc:
+                raise ComputerDriverUnavailable(
+                    "the computer-use driver stopped accepting input"
+                ) from exc
+            except (StdioSessionProtocolError, StdioSessionRemoteError) as exc:
+                raise ComputerDriverFailed(
+                    "the computer-use driver returned an unusable response"
+                ) from exc
 
 
 def _decode_text_content_or_none(content: JsonValue) -> JsonValue | None:

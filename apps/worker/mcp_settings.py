@@ -24,6 +24,11 @@ from friday.infrastructure.tools.mcp_composition import McpConfigurationInvalid,
 
 MCP_ENV = ("FRIDAY_MCP_ENABLED", "FRIDAY_MCP_CONFIG_PATH")
 MAX_CONFIG_BYTES = 1_000_000
+MAX_SERVERS = 32
+MAX_ENABLED_SERVERS = 16
+MAX_TOTAL_BINDINGS = 256
+MAX_TOTAL_DISCOVERY_BYTES = 16_000_000
+MAX_AGGREGATE_STARTUP_SECONDS = 120.0
 _TOP = frozenset({"servers"})
 _SERVER = frozenset(
     {
@@ -73,22 +78,47 @@ class McpSettings:
         if self.config_path is None:
             raise McpConfigurationInvalid("FRIDAY_MCP_CONFIG_PATH is required when MCP is enabled")
         try:
-            raw = self.config_path.read_bytes()
+            size = self.config_path.stat().st_size
         except OSError as exc:
             raise McpConfigurationInvalid("MCP config file could not be read") from exc
-        if len(raw) > MAX_CONFIG_BYTES:
+        if size > MAX_CONFIG_BYTES:
             raise McpConfigurationInvalid("MCP config file exceeded configured bytes")
         try:
-            document = json.loads(raw)
+            with self.config_path.open("rb") as config_file:
+                raw = config_file.read(MAX_CONFIG_BYTES + 1)
+            if len(raw) > MAX_CONFIG_BYTES:
+                raise McpConfigurationInvalid("MCP config file exceeded configured bytes")
+            document = json.loads(raw, object_pairs_hook=_no_duplicate_keys)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise McpConfigurationInvalid("MCP config file must be valid JSON") from exc
         if not isinstance(document, dict):
             raise McpConfigurationInvalid("MCP config root must be an object")
         _reject_unknown(document, _TOP, "MCP config")
         entries = document.get("servers")
-        if not isinstance(entries, list) or not entries:
+        if not isinstance(entries, list) or not entries or len(entries) > MAX_SERVERS:
             raise McpConfigurationInvalid("MCP config requires at least one server")
-        return McpGatewayConfig(True, tuple(_server(entry) for entry in entries))
+        servers = tuple(_server(entry) for entry in entries)
+        if sum(server.enabled for server in servers) > MAX_ENABLED_SERVERS:
+            raise McpConfigurationInvalid("MCP config exceeded enabled server limit")
+        if sum(len(server.bindings) for server in servers) > MAX_TOTAL_BINDINGS:
+            raise McpConfigurationInvalid("MCP config exceeded binding limit")
+        if sum(server.discovery_byte_budget for server in servers) > MAX_TOTAL_DISCOVERY_BYTES:
+            raise McpConfigurationInvalid("MCP config exceeded aggregate discovery bytes")
+        if (
+            sum(server.connect_timeout_seconds for server in servers if server.enabled)
+            > MAX_AGGREGATE_STARTUP_SECONDS
+        ):
+            raise McpConfigurationInvalid("MCP config exceeded aggregate startup time")
+        return McpGatewayConfig(True, servers)
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise McpConfigurationInvalid("MCP config must not contain duplicate object keys")
+        result[key] = value
+    return result
 
 
 def _server(entry: Any) -> McpServerConfig:

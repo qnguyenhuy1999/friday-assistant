@@ -23,6 +23,7 @@ MAX_SCHEMA_BYTES_CEILING = 262_144
 MAX_OUTPUT_BYTES_CEILING = 1_048_576
 MAX_CONTENT_ITEMS_CEILING = 256
 MAX_TEXT_CHARS_CEILING = 200_000
+MAX_DISCOVERY_BYTES_CEILING = 512_000
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 15.0
 DEFAULT_CALL_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_DISCOVERED_TOOLS = 200
@@ -127,7 +128,16 @@ class McpServerConfig:
 
     @property
     def discovery_byte_budget(self) -> int:
-        return (
+        """How many bytes one `tools/list` reply may occupy.
+
+        The per-tool product is what a worst-case allowed reply *could* be, but
+        it is not what a real server sends, and the ceiling exists so a hostile
+        server cannot make Friday hold an arbitrarily large document in memory.
+        Capped, so the default of 200 tools × 32 KiB does not silently license
+        a 6 MB reply.
+        """
+        return min(
             self.max_discovery_bytes
-            or self.max_schema_bytes * self.max_discovered_tools + 64 * 1024
+            or self.max_schema_bytes * self.max_discovered_tools + 64 * 1024,
+            MAX_DISCOVERY_BYTES_CEILING,
         )

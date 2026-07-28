@@ -1,4 +1,4 @@
-"""Sanitize untrusted schemas and locally reject obviously invalid calls."""
+"""Small, enforced and deliberately fail-closed MCP input-schema subset."""
 
 from __future__ import annotations
 
@@ -6,14 +6,14 @@ import json
 from typing import cast
 
 from friday.application.errors import ToolInputInvalid
-from friday.domain.errors import DomainValidationError
-from friday.domain.json_value import JsonValue, ensure_json_value
+from friday.domain.json_value import JsonValue
 from friday.infrastructure.mcp.errors import McpProtocolError
 
 MAX_SCHEMA_DEPTH = 8
 MAX_SCHEMA_PROPERTIES = 64
 MAX_SCHEMA_ENUM_VALUES = 64
-STRUCTURAL_KEYS = frozenset(
+_TYPES = frozenset({"object", "array", "string", "boolean", "integer", "number", "null"})
+_KEYS = frozenset(
     {
         "type",
         "properties",
@@ -27,11 +27,9 @@ STRUCTURAL_KEYS = frozenset(
         "maxLength",
         "minItems",
         "maxItems",
-        "pattern",
-        "format",
     }
 )
-ANNOTATION_KEYS = frozenset(
+_ANNOTATIONS = frozenset(
     {
         "description",
         "title",
@@ -41,51 +39,85 @@ ANNOTATION_KEYS = frozenset(
         "deprecated",
         "readOnly",
         "writeOnly",
+        "format",
+        "pattern",
     }
 )
-FORBIDDEN_KEYS = frozenset(
-    {"$ref", "$defs", "definitions", "$dynamicRef", "$dynamicAnchor", "$anchor"}
-)
 
 
-def normalize_input_schema(raw: JsonValue, *, max_bytes: int) -> dict[str, JsonValue]:
-    if raw is None:
-        return {"type": "object"}
+def normalize_input_schema(raw: object, *, max_bytes: int) -> dict[str, JsonValue]:
     if not isinstance(raw, dict):
         raise McpProtocolError("an MCP input schema must be a JSON object")
-    try:
-        ensure_json_value(raw, path="$.inputSchema")
-    except DomainValidationError as exc:
-        raise McpProtocolError("an MCP input schema must be JSON-safe") from exc
-    if len(json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()) > max_bytes:
+    if _json_bytes(raw) > max_bytes:
         raise McpProtocolError("an MCP input schema exceeded its configured bytes")
-    return _walk(raw, 1)
+    schema = _walk(raw, 1)
+    if schema.get("type") != "object":
+        raise McpProtocolError("an MCP input schema root must be an object schema")
+    return schema
 
 
-def _walk(node: JsonValue, depth: int) -> dict[str, JsonValue]:
-    if depth > MAX_SCHEMA_DEPTH:
+def _walk(node: object, depth: int) -> dict[str, JsonValue]:
+    if depth > MAX_SCHEMA_DEPTH or not isinstance(node, dict):
         raise McpProtocolError("an MCP input schema exceeded maximum depth")
-    if not isinstance(node, dict):
-        raise McpProtocolError("an MCP input schema member must be an object")
-    if FORBIDDEN_KEYS.intersection(node):
-        raise McpProtocolError("an MCP input schema used a reference keyword")
-    out: dict[str, JsonValue] = {}
-    for key, value in node.items():
-        if key not in STRUCTURAL_KEYS:
-            continue
-        if key == "properties":
-            if not isinstance(value, dict):
-                raise McpProtocolError("properties must be an object")
-            if len(value) > MAX_SCHEMA_PROPERTIES:
-                raise McpProtocolError("schema has too many properties")
-            out[key] = {name: _walk(schema, depth + 1) for name, schema in sorted(value.items())}
-        elif key == "items":
-            out[key] = _walk(value, depth + 1)
-        elif key == "enum":
-            if not isinstance(value, list) or len(value) > MAX_SCHEMA_ENUM_VALUES:
-                raise McpProtocolError("schema enum exceeds bound")
-            out[key] = value
+    unknown = set(node) - _KEYS - _ANNOTATIONS
+    if unknown:
+        raise McpProtocolError("an MCP input schema used an unsupported keyword")
+    declared = node.get("type")
+    if not isinstance(declared, str) or declared not in _TYPES:
+        raise McpProtocolError("an MCP input schema used an unsupported type")
+    out: dict[str, JsonValue] = {"type": declared}
+    if "properties" in node:
+        properties = node["properties"]
+        if not isinstance(properties, dict) or len(properties) > MAX_SCHEMA_PROPERTIES:
+            raise McpProtocolError("schema properties are malformed or exceeded their bound")
+        if any(not isinstance(name, str) or not name for name in properties):
+            raise McpProtocolError("schema property names must be non-empty strings")
+        out["properties"] = {
+            name: _walk(value, depth + 1) for name, value in sorted(properties.items())
+        }
+    if "required" in node:
+        required = node["required"]
+        if not isinstance(required, list) or any(not isinstance(name, str) for name in required):
+            raise McpProtocolError("schema required must be an array of strings")
+        if len(set(required)) != len(required):
+            raise McpProtocolError("schema required must not contain duplicates")
+        properties = cast(dict[str, object], node.get("properties", {}))
+        if any(name not in properties for name in required):
+            raise McpProtocolError("schema required contains an unknown property")
+        out["required"] = cast(JsonValue, list(required))
+    if "items" in node:
+        out["items"] = _walk(node["items"], depth + 1)
+    if declared == "object" and "additionalProperties" not in node:
+        # JSON Schema's default is "anything else is allowed". Friday's is not:
+        # an unstated member is an unvalidated member reaching a remote service,
+        # so an object schema that does not say otherwise closes.
+        out["additionalProperties"] = False
+    if "additionalProperties" in node:
+        extra = node["additionalProperties"]
+        if isinstance(extra, bool):
+            out["additionalProperties"] = extra
+        elif isinstance(extra, dict):
+            out["additionalProperties"] = _walk(extra, depth + 1)
         else:
+            raise McpProtocolError("schema additionalProperties must be a boolean or schema")
+    if "enum" in node:
+        values = node["enum"]
+        if not isinstance(values, list) or not values or len(values) > MAX_SCHEMA_ENUM_VALUES:
+            raise McpProtocolError("schema enum exceeded its bound")
+        for value in values:
+            _json_value(value, depth + 1)
+        out["enum"] = cast(JsonValue, values)
+    for key in ("minimum", "maximum"):
+        if key in node:
+            value = node[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise McpProtocolError(f"schema {key} must be numeric")
+            out[key] = value
+    for key in ("minLength", "maxLength", "minItems", "maxItems"):
+        if key in node:
+            value = node[key]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise McpProtocolError(f"schema {key} must be a non-negative integer")
             out[key] = value
     return out
 
@@ -97,42 +129,54 @@ def validate_input(schema: JsonValue, value: JsonValue) -> None:
 
 
 def _check(schema: JsonValue, value: JsonValue, path: str) -> None:
-    if not isinstance(schema, dict):
-        return
-    declared = schema.get("type")
-    if isinstance(declared, str) and not _matches(declared, value):
+    if not isinstance(schema, dict) or not isinstance(schema.get("type"), str):
+        raise ToolInputInvalid(f"{path}: invalid tool schema")
+    declared = cast(str, schema["type"])
+    if not _matches(declared, value):
         raise ToolInputInvalid(f"{path}: expected {declared}")
     if isinstance((enum := schema.get("enum")), list) and value not in enum:
         raise ToolInputInvalid(f"{path}: not an allowed value")
     if isinstance(value, dict):
-        properties = (
-            cast(dict[str, JsonValue], schema["properties"])
-            if isinstance(schema.get("properties"), dict)
-            else {}
-        )
-        required = schema.get("required")
-        if isinstance(required, list):
-            for name in required:
-                if isinstance(name, str) and name not in value:
-                    raise ToolInputInvalid(f"{path}: missing required property {name}")
+        properties = cast(dict[str, JsonValue], schema.get("properties", {}))
+        for name in cast(list[str], schema.get("required", [])):
+            if name not in value:
+                raise ToolInputInvalid(f"{path}: missing required property {name}")
+        # JSON Schema defaults to allowing additional members.  An explicit
+        # false must work even when properties is empty.
+        extra = schema.get("additionalProperties", True)
         for name, item in value.items():
             if name in properties:
                 _check(properties[name], item, f"{path}.{name}")
-            elif properties and schema.get("additionalProperties") is not True:
+            elif extra is False:
                 raise ToolInputInvalid(f"{path}: unknown property {name}")
-    elif isinstance(value, list) and "items" in schema:
-        for index, item in enumerate(value):
-            _check(schema["items"], item, f"{path}[{index}]")
+            elif isinstance(extra, dict):
+                _check(extra, item, f"{path}.{name}")
+    elif isinstance(value, list):
+        _bounded(value, schema, "minItems", "maxItems", path)
+        if isinstance(schema.get("items"), dict):
+            for index, item in enumerate(value):
+                _check(schema["items"], item, f"{path}[{index}]")
     elif isinstance(value, str):
-        if isinstance((maximum := schema.get("maxLength")), int) and len(value) > maximum:
-            raise ToolInputInvalid(f"{path}: too long")
+        _bounded(value, schema, "minLength", "maxLength", path)
     elif isinstance(value, (int, float)) and not isinstance(value, bool):
         minimum = schema.get("minimum")
         maximum = schema.get("maximum")
-        if isinstance(minimum, (int, float)) and value < minimum:
+        if isinstance(minimum, (int, float)) and not isinstance(minimum, bool) and value < minimum:
             raise ToolInputInvalid(f"{path}: violates minimum")
-        if isinstance(maximum, (int, float)) and value > maximum:
+        if isinstance(maximum, (int, float)) and not isinstance(maximum, bool) and value > maximum:
             raise ToolInputInvalid(f"{path}: violates maximum")
+
+
+def _bounded(
+    value: object, schema: dict[str, JsonValue], minimum: str, maximum: str, path: str
+) -> None:
+    if not isinstance(value, (str, list)):
+        raise ToolInputInvalid(f"{path}: invalid bounded value")
+    size = len(value)
+    if isinstance(schema.get(minimum), int) and size < cast(int, schema[minimum]):
+        raise ToolInputInvalid(f"{path}: too short")
+    if isinstance(schema.get(maximum), int) and size > cast(int, schema[maximum]):
+        raise ToolInputInvalid(f"{path}: too long")
 
 
 def _matches(kind: str, value: JsonValue) -> bool:
@@ -144,4 +188,28 @@ def _matches(kind: str, value: JsonValue) -> bool:
         "integer": isinstance(value, int) and not isinstance(value, bool),
         "number": isinstance(value, (int, float)) and not isinstance(value, bool),
         "null": value is None,
-    }.get(kind, True)
+    }[kind]
+
+
+def _json_bytes(value: object) -> int:
+    try:
+        return len(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise McpProtocolError("an MCP input schema must be JSON-safe") from exc
+
+
+def _json_value(value: object, depth: int) -> None:
+    if depth > MAX_SCHEMA_DEPTH:
+        raise McpProtocolError("an MCP input schema exceeded maximum depth")
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return
+    if isinstance(value, list):
+        for child in value:
+            _json_value(child, depth + 1)
+    elif isinstance(value, dict):
+        if any(not isinstance(k, str) for k in value):
+            raise McpProtocolError("an MCP input schema must be JSON-safe")
+        for child in value.values():
+            _json_value(child, depth + 1)
+    else:
+        raise McpProtocolError("an MCP input schema must be JSON-safe")

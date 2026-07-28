@@ -49,6 +49,7 @@ from friday.application.lifecycle_events import LifecycleEvents
 from friday.application.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from friday.application.tool_authorization import (
     compute_authorization_fingerprint,
+    compute_legacy_authorization_fingerprint,
     find_authorizing_approval,
 )
 from friday.application.tool_gateway import (
@@ -149,7 +150,7 @@ class ExecuteToolAction(LifecycleEvents):
             approval_id = None
             if risk.approval_required:
                 approvals = uow.approvals.list_for_run(run_id)
-                replay = self._find_replay(uow, approvals, fingerprint)
+                replay = self._find_replay(uow, approvals, fingerprint, run_id, step_id, call)
                 if replay is not None:
                     uow.commit()
                     return ToolActionOutcome.executed(
@@ -291,20 +292,35 @@ class ExecuteToolAction(LifecycleEvents):
         uow: UnitOfWork,
         approvals: list[ApprovalRequest],
         fingerprint: str,
+        run_id: RunId,
+        step_id: RunStepId | None,
+        call: ToolCall,
     ) -> tuple[ToolInvocationId, ToolExecutionResult] | None:
         """Durable replay detection for protected actions (see module doc)."""
+        legacy = compute_legacy_authorization_fingerprint(run_id=run_id, step_id=step_id, call=call)
         consumed = [
             approval
             for approval in approvals
             if approval.status is ApprovalStatus.APPROVED
-            and approval.authorization_fingerprint == fingerprint
             and approval.is_consumed
+            and (
+                approval.authorization_fingerprint == fingerprint
+                or approval.authorization_fingerprint == legacy
+            )
         ]
         if not consumed:
             return None
         for approval in consumed:
             for invocation in uow.tool_invocations.list_for_run(approval.run_id):
                 if invocation.approval_request_id != approval.id:
+                    continue
+                # v1's scope could not bind external MCP identity. Only retain
+                # replay safety for legacy local invocations, never authorize
+                # an MCP call through it.
+                if (
+                    approval.authorization_fingerprint == legacy
+                    and invocation.provenance is not None
+                ):
                     continue
                 if invocation.status is ToolInvocationStatus.SUCCEEDED:
                     return invocation.id, ToolExecutionResult.succeeded(invocation.output)

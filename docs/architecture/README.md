@@ -104,7 +104,7 @@ reverse.
 
 ## Status
 
-Implemented through **Phase 17 — Conversational Voice Interface**:
+Implemented through **Phase 18 — Friday-owned MCP & External Integrations**:
 
 - **Phase 4–5** — framework-independent domain model, application ports, JSON
   Schema contracts, and the SQLite persistence adapter (see
@@ -126,10 +126,12 @@ Implemented through **Phase 17 — Conversational Voice Interface**:
 - **Phase 17** — durable conversational turns, bounded Run-scoped context,
   and browser-native voice delivery (see
   [conversation-interface.md](conversation-interface.md)).
+- **Phase 18** — Friday-owned, allow-listed MCP integrations behind the
+  existing tool gateway and approval model (see
+  [mcp-integrations.md](mcp-integrations.md)).
 
-Later phases add Friday-owned MCP and external integrations, a messaging
-gateway, skills and self-improvement, and multi-agent delegation. None of
-those are implemented yet.
+Later phases add a messaging gateway, skills and self-improvement, and
+multi-agent delegation. None of those are implemented yet.
 The adapter and migration behavior are covered by `tests/persistence`.
 
 Later phases add the FastAPI delivery boundary, leased worker coordination,

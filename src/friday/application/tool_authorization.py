@@ -70,6 +70,20 @@ def compute_authorization_fingerprint(
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def compute_legacy_authorization_fingerprint(
+    *, run_id: RunId, step_id: RunStepId | None, call: ToolCall
+) -> str:
+    """Phase-11 v1 form, solely for consumed non-MCP replay fencing.
+
+    It is intentionally never accepted as an authorizing pending approval.
+    """
+    canonical_input = json.dumps(call.tool_input, sort_keys=True, separators=(",", ":"))
+    material = "\n".join(
+        ["1", str(run_id), str(step_id) if step_id is not None else "", call.tool, canonical_input]
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 def find_authorizing_approval(
     approvals: Sequence[ApprovalRequest], *, fingerprint: str
 ) -> ApprovalRequest | None:

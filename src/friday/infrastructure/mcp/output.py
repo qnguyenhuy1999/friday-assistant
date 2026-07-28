@@ -4,8 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import cast
 
-from friday.domain.errors import DomainValidationError
-from friday.domain.json_value import JsonValue, ensure_json_value
+from friday.domain.json_value import JsonValue
 from friday.infrastructure.mcp.client import McpCallResult
 from friday.infrastructure.mcp.config import McpServerConfig
 from friday.infrastructure.mcp.errors import McpInvalidOutput
@@ -26,12 +25,14 @@ class OutputBounds:
 
 
 def normalize_call_result(result: McpCallResult, *, bounds: OutputBounds) -> JsonValue:
+    if result.total_content_items > bounds.max_content_items:
+        raise McpInvalidOutput("the MCP result exceeded its content-item bound")
     if result.structured_content is not None:
         try:
-            ensure_json_value(result.structured_content, path="$.structuredContent")
-        except DomainValidationError as exc:
+            _json_bytes(result.structured_content)
+            _depth(result.structured_content, bounds.max_depth, 1)
+        except (TypeError, ValueError, RecursionError) as exc:
             raise McpInvalidOutput("the MCP result was not JSON-safe") from exc
-        _depth(result.structured_content, bounds.max_depth, 1)
     text = [
         block[: bounds.max_text_chars] for block in result.text_blocks[: bounds.max_content_items]
     ]
@@ -40,15 +41,13 @@ def normalize_call_result(result: McpCallResult, *, bounds: OutputBounds) -> Jso
         "text": cast(list[JsonValue], text),
         "omitted_block_kinds": cast(list[JsonValue], list(result.omitted_block_kinds)),
         "truncated": len(text) < len(result.text_blocks)
+        or result.total_content_items > len(result.text_blocks)
         or any(
             len(block) > bounds.max_text_chars
             for block in result.text_blocks[: bounds.max_content_items]
         ),
     }
-    if (
-        len(json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode())
-        > bounds.max_result_bytes
-    ):
+    if _json_bytes(envelope) > bounds.max_result_bytes:
         raise McpInvalidOutput("the MCP result exceeded its configured bytes")
     return envelope
 
@@ -62,3 +61,7 @@ def _depth(value: JsonValue, limit: int, current: int) -> None:
     elif isinstance(value, list):
         for member in value:
             _depth(member, limit, current + 1)
+
+
+def _json_bytes(value: JsonValue) -> int:
+    return len(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())

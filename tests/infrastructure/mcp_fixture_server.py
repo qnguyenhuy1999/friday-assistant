@@ -34,6 +34,10 @@ class FixtureBehaviour:
     stderr_flood_bytes: int = 0
     echo_environment: bool = False
     exit_on_call: bool = False
+    echo_token: bool = False
+    notification_flood: int = 0
+    """Unsolicited JSON-RPC notifications emitted before every answer. Line
+    size bounds one message; only a queue bound stops an endless stream."""
 
 
 DEFAULT_BEHAVIOUR = FixtureBehaviour()
@@ -62,12 +66,13 @@ def call(p):
  if B['malformed_result']: return 'bad'
  if B['binary_block']: return {'content':[{'type':'image','data':base64.b64encode(b'0'*200000).decode(),'mimeType':'image/png'}]}
  if B['huge_text_chars']: return {'content':[{'type':'text','text':'x'*B['huge_text_chars']}]}
- if B['huge_json_keys']: return {'structuredContent':{'k%s'%i:'v'*100 for i in range(B['huge_json_keys'])}}
- if B['json_depth']: return {'structuredContent':nested(B['json_depth'])}
- if B['echo_environment']: return {'structuredContent':{'env':sorted(os.environ)}}
+ if B['huge_json_keys']: return {'content':[],'structuredContent':{'k%s'%i:'v'*100 for i in range(B['huge_json_keys'])}}
+ if B['json_depth']: return {'content':[],'structuredContent':nested(B['json_depth'])}
+ if B['echo_environment']: return {'content':[],'structuredContent':{'env':sorted(os.environ)}}
+ if B['echo_token']: return {'content':[{'type':'text','text':'token is '+os.environ.get('FIXTURE_TOKEN','')}],'structuredContent':{'echoed':os.environ.get('FIXTURE_TOKEN','')}}
  a=p.get('arguments') or {}; name=p.get('name')
- if name=='write': STATE[a.get('key')]=a.get('value'); return {'structuredContent':{'written':a.get('key')}}
- if name=='read': return {'structuredContent':{'key':a.get('key'),'value':STATE.get(a.get('key'))}}
+ if name=='write': STATE[a.get('key')]=a.get('value'); return {'content':[],'structuredContent':{'written':a.get('key')}}
+ if name=='read': return {'content':[],'structuredContent':{'key':a.get('key'),'value':STATE.get(a.get('key'))}}
  return {'isError':True,'content':[{'type':'text','text':'unknown'}]}
 if B['stderr_flood_bytes']: sys.stderr.write('e'*B['stderr_flood_bytes']); sys.stderr.flush()
 for line in sys.stdin:
@@ -76,6 +81,9 @@ for line in sys.stdin:
  if 'id' not in m: continue
  if B['malformed_framing']: print('{no'); sys.stdout.flush(); continue
  method=m.get('method')
+ if method != 'initialize':
+  for _ in range(B['notification_flood']): print(json.dumps({'jsonrpc':'2.0','method':'notifications/message','params':{'noise':'x'}}))
+  if B['notification_flood']: sys.stdout.flush()
  if method=='initialize':
   if B['hang_on_start']: time.sleep(3600)
   result={'protocolVersion':B['protocol_version'] or m.get('params',{}).get('protocolVersion'),'capabilities':{'tools':{}},'serverInfo':{'name':'fixture','version':'1'}}

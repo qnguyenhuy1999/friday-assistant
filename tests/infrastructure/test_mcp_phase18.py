@@ -9,12 +9,22 @@ from friday.application.tool_gateway import ToolCall, ToolExecutionRequest
 from friday.domain.approval import ApprovalCategory
 from friday.domain.identifiers import RunId, ToolInvocationId
 from friday.domain.json_value import JsonValue
-from friday.infrastructure.mcp.bindings import McpBindingRegistry, compute_binding_fingerprint
+from friday.infrastructure.mcp.bindings import (
+    McpBindingRegistry,
+    compute_binding_fingerprint,
+    compute_transport_identity,
+)
 from friday.infrastructure.mcp.client import McpCallResult, McpRemoteTool
 from friday.infrastructure.mcp.config import McpServerConfig, McpToolBinding
 from friday.infrastructure.mcp.discovery import discover_server
-from friday.infrastructure.mcp.errors import McpConfigInvalid, McpUnavailable
+from friday.infrastructure.mcp.errors import (
+    McpCallTimeout,
+    McpConfigInvalid,
+    McpProtocolError,
+    McpUnavailable,
+)
 from friday.infrastructure.mcp.output import OutputBounds, normalize_call_result
+from friday.infrastructure.mcp.redaction import SensitiveValueRedactor
 from friday.infrastructure.mcp.schema import normalize_input_schema, validate_input
 from friday.infrastructure.tools.mcp_gateway import McpServerStack, McpToolGateway
 
@@ -101,8 +111,11 @@ def test_binding_fingerprint_and_discovery_are_allowlist_only() -> None:
     discovery = discover_server(client, server)
     assert tuple(tool.local_name for tool in discovery.available) == ("fixture.read",)
     assert discovery.ignored_remote_tool_count == 1
+    # the fingerprint binds the *normalized* schema, not the advertised one:
+    # a bare object schema closes to additionalProperties=false on the way in
+    normalized = normalize_input_schema({"type": "object"}, max_bytes=1000)
     first = compute_binding_fingerprint(
-        server=server, binding=server.bindings[0], normalized_schema={"type": "object"}
+        server=server, binding=server.bindings[0], normalized_schema=normalized
     )
     assert first == discovery.available[0].binding_fingerprint
     assert McpBindingRegistry(discovery.available).get("fixture.read") is not None
@@ -119,7 +132,8 @@ def test_output_is_bounded() -> None:
 
 def test_gateway_uses_frozen_risk_and_normalized_result() -> None:
     server = _server()
-    client = _Client((McpRemoteTool(name="read", input_schema={"type": "object"}),))
+    schema = {"type": "object", "properties": {"key": {"type": "string"}}}
+    client = _Client((McpRemoteTool(name="read", input_schema=schema),))
     discovery = discover_server(client, server)
     gateway = McpToolGateway((McpServerStack(server, client, discovery),))
     call = ToolCall(tool="fixture.read", tool_input={"key": "a"})
@@ -139,3 +153,78 @@ def test_offline_discovery_is_unavailable() -> None:
 
     discovery = discover_server(Offline(), _server())
     assert discovery.failure_code == "mcp_unavailable"
+
+
+def test_execution_identity_and_canonical_serialization_fence_approvals() -> None:
+    binding = _binding()
+    first = compute_binding_fingerprint(
+        server=_server(command=("a", "b\x1fc")),
+        binding=binding,
+        normalized_schema={"type": "object"},
+        execution_identity={
+            "principal": "account-a",
+            "cwd": "/one",
+            "protocol_version": "2025-06-18",
+        },
+    )
+    second = compute_binding_fingerprint(
+        server=_server(command=("a\x1fb", "c")),
+        binding=binding,
+        normalized_schema={"type": "object"},
+        execution_identity={
+            "principal": "account-b",
+            "cwd": "/two",
+            "protocol_version": "2025-03-26",
+        },
+    )
+    assert first != second
+    assert compute_transport_identity(_server()) != compute_transport_identity(
+        _server(), {"principal": "different-token"}
+    )
+
+
+def test_schema_is_fail_closed_and_annotations_never_survive() -> None:
+    with pytest.raises(McpProtocolError):
+        normalize_input_schema(None, max_bytes=1000)
+    with pytest.raises(McpProtocolError):
+        normalize_input_schema({"type": "object", "oneOf": []}, max_bytes=1000)
+    with pytest.raises(McpProtocolError):
+        normalize_input_schema({"type": "wat"}, max_bytes=1000)
+    schema = normalize_input_schema(
+        {"type": "object", "additionalProperties": {"type": "string", "description": "ignore"}},
+        max_bytes=1000,
+    )
+    assert "description" not in repr(schema)
+    validate_input(schema, {"safe": "yes"})
+
+
+def test_sensitive_values_are_removed_from_nested_remote_material() -> None:
+    secret = "ghp_very_secret_token"
+    value = SensitiveValueRedactor.from_values((secret,)).redact(
+        {secret: [{"text": f"Bearer {secret}"}]}
+    )
+    assert secret not in repr(value)
+
+
+def test_mutating_transport_timeout_is_ambiguous_not_ordinary_failure() -> None:
+    from friday.application.errors import ToolExecutionAmbiguous
+
+    class TimeoutClient(_Client):
+        def call_tool(self, *args: object, **kwargs: object) -> McpCallResult:
+            raise McpCallTimeout("never expose peer error")
+
+    binding = _binding(
+        local_name="fixture.write",
+        remote_tool_name="write",
+        read_only=False,
+        approval_required=True,
+    )
+    server = _server(bindings=(binding,))
+    client = TimeoutClient((McpRemoteTool(name="write", input_schema={"type": "object"}),))
+    gateway = McpToolGateway((McpServerStack(server, client, discover_server(client, server)),))
+    with pytest.raises(ToolExecutionAmbiguous):
+        gateway.execute(
+            ToolExecutionRequest(
+                ToolInvocationId.new(), RunId.new(), None, ToolCall("fixture.write", {})
+            )
+        )

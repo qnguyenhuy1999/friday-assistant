@@ -6,39 +6,47 @@ import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import cast
 
 from friday.domain.json_value import JsonValue
 from friday.domain.tool_provenance import ToolProvenance
 from friday.infrastructure.mcp.config import McpServerConfig, McpToolBinding
 from friday.infrastructure.mcp.errors import McpConfigInvalid
 
-BINDING_FINGERPRINT_VERSION = 1
+BINDING_FINGERPRINT_VERSION = 2
 PROVENANCE_KIND = "mcp"
-_UNIT_SEPARATOR = "\x1f"
 
 
-def compute_transport_identity(server: McpServerConfig) -> str:
-    material = _UNIT_SEPARATOR.join(
-        [server.transport, *server.command, _UNIT_SEPARATOR.join(sorted(server.env_from))]
-    )
-    return _sha256(material)
+def compute_transport_identity(
+    server: McpServerConfig, execution_identity: JsonValue | None = None
+) -> str:
+    material: dict[str, JsonValue] = {
+        "transport": server.transport,
+        "argv": cast(list[JsonValue], list(server.command)),
+        "env_names": cast(list[JsonValue], sorted(server.env_from)),
+        "execution": execution_identity or {},
+    }
+    return _sha256_json(material)
 
 
 def compute_binding_fingerprint(
-    *, server: McpServerConfig, binding: McpToolBinding, normalized_schema: JsonValue
+    *,
+    server: McpServerConfig,
+    binding: McpToolBinding,
+    normalized_schema: JsonValue,
+    execution_identity: JsonValue | None = None,
 ) -> str:
-    material = "\n".join(
-        [
-            str(BINDING_FINGERPRINT_VERSION),
-            server.server_id,
-            binding.local_name,
-            binding.remote_tool_name,
-            compute_transport_identity(server),
-            _schema_identity(normalized_schema),
-            binding.risk_policy,
-        ]
+    return _sha256_json(
+        {
+            "version": BINDING_FINGERPRINT_VERSION,
+            "server_id": server.server_id,
+            "local_name": binding.local_name,
+            "remote_tool_name": binding.remote_tool_name,
+            "transport_identity": compute_transport_identity(server, execution_identity),
+            "schema_identity": _schema_identity(normalized_schema),
+            "risk_policy": binding.risk_policy,
+        }
     )
-    return _sha256(material)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,8 +115,12 @@ def normalization_token(local_name: str) -> str:
 
 
 def _schema_identity(schema: JsonValue) -> str:
-    return _sha256(json.dumps(schema, sort_keys=True, separators=(",", ":")))
+    return _sha256_json(schema)
 
 
 def _sha256(material: str) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _sha256_json(material: JsonValue) -> str:
+    return _sha256(json.dumps(material, sort_keys=True, separators=(",", ":")))

@@ -51,6 +51,8 @@ MAX_IGNORED_MESSAGES_PER_REQUEST = 128
 _STDERR_CHUNK_BYTES = 8_000
 _SHUTDOWN_GRACE_SECONDS = 2.0
 _POLL_SECONDS = 0.05
+_MAX_JSON_DEPTH = 64
+_MALFORMED_MESSAGE = "the child sent a malformed message"
 
 
 class StdioSessionError(Exception):
@@ -97,6 +99,10 @@ class StdioJsonRpcSession:
     def __init__(self, settings: StdioSessionSettings) -> None:
         self._settings = settings
         self._process: subprocess.Popen[bytes] | None = None
+        # `start_new_session=True` makes the child pid the process-group id on
+        # POSIX.  Keep that value while we own the session: asking the kernel
+        # for it later fails precisely in the parent-exits-first race.
+        self._process_group_id: int | None = None
         self._lines: queue.Queue[bytes | None] = queue.Queue(maxsize=settings.max_pending_messages)
         self._next_id = 0
         self._flooded = False
@@ -136,6 +142,7 @@ class StdioJsonRpcSession:
             self._process = None
             raise StdioSessionUnavailable("the child process could not be started") from exc
         process = self._process
+        self._process_group_id = process.pid
         _spawn_daemon(lambda: self._pump_stdout(process), name="friday-stdio-out")
         _spawn_daemon(lambda: self._drain_stderr(process), name="friday-stdio-err")
         if handshake is None:
@@ -148,22 +155,22 @@ class StdioJsonRpcSession:
 
     def close(self) -> None:
         process, self._process = self._process, None
+        group_id, self._process_group_id = self._process_group_id, None
         if process is None:
             return
         for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None:
                 with contextlib.suppress(OSError):
                     stream.close()
-        if process.poll() is None:
-            # the whole process group: a server that spawned helpers must not
-            # leave them holding the pipe after the parent is reaped
-            _signal_group(process, signal.SIGTERM)
-            try:
+        # Signal our *recorded* group even when poll() already reaped the
+        # leader.  Descendants can otherwise survive stdin EOF indefinitely.
+        _signal_group(process, group_id, signal.SIGTERM)
+        try:
+            process.wait(timeout=_SHUTDOWN_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            _signal_group(process, group_id, signal.SIGKILL)
+            with contextlib.suppress(subprocess.TimeoutExpired):
                 process.wait(timeout=_SHUTDOWN_GRACE_SECONDS)
-            except subprocess.TimeoutExpired:
-                _signal_group(process, signal.SIGKILL)
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=_SHUTDOWN_GRACE_SECONDS)
 
     # --- JSON-RPC ---------------------------------------------------------
 
@@ -174,6 +181,7 @@ class StdioJsonRpcSession:
         *,
         timeout_seconds: float,
         cancelled: Callable[[], bool] | None = None,
+        cancellation_notification: Callable[[int], Mapping[str, JsonValue]] | None = None,
     ) -> JsonValue:
         with self._request_lock:
             self._next_id += 1
@@ -183,7 +191,7 @@ class StdioJsonRpcSession:
                 {"jsonrpc": "2.0", "id": request_id, "method": method, "params": dict(params)},
                 deadline,
             )
-            return self._await_response(request_id, deadline, cancelled)
+            return self._await_response(request_id, deadline, cancelled, cancellation_notification)
 
     def notify(
         self, method: str, params: Mapping[str, JsonValue], *, timeout_seconds: float
@@ -195,7 +203,11 @@ class StdioJsonRpcSession:
             )
 
     def _await_response(
-        self, request_id: int, deadline: float, cancelled: Callable[[], bool] | None
+        self,
+        request_id: int,
+        deadline: float,
+        cancelled: Callable[[], bool] | None,
+        cancellation_notification: Callable[[int], Mapping[str, JsonValue]] | None,
     ) -> JsonValue:
         """Read until the matching response arrives, the budget expires, or the
         child dies. Notifications and server-initiated requests are skipped
@@ -205,21 +217,11 @@ class StdioJsonRpcSession:
             if self._flooded:
                 raise StdioSessionProtocolError("the child exceeded its pending-message budget")
             if cancelled is not None and cancelled():
-                # Best effort only: cancellation races with a completed remote
-                # mutation. Callers therefore poison the connection and treat
-                # mutating post-dispatch cancellation as ambiguous.
-                with contextlib.suppress(StdioSessionError):
-                    self._write(
-                        {
-                            "jsonrpc": "2.0",
-                            "method": "notifications/cancelled",
-                            "params": {"requestId": request_id, "reason": "cancelled"},
-                        },
-                        time.monotonic() + min(0.1, max(0.0, deadline - time.monotonic())),
-                    )
+                self._best_effort_cancel(request_id, cancellation_notification)
                 raise StdioSessionTimeout("the request was cancelled")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                self._best_effort_cancel(request_id, cancellation_notification)
                 raise StdioSessionTimeout("the child did not respond in time")
             try:
                 line = self._lines.get(timeout=min(remaining, _POLL_SECONDS))
@@ -252,7 +254,10 @@ class StdioJsonRpcSession:
         process = self._process
         if process is None or process.stdin is None:
             raise StdioSessionUnavailable("the child is not running")
-        payload = json.dumps(message, separators=(",", ":")).encode() + b"\n"
+        try:
+            payload = json.dumps(message, separators=(",", ":"), allow_nan=False).encode() + b"\n"
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise StdioSessionProtocolError("the local message was not JSON-safe") from exc
         try:
             descriptor = process.stdin.fileno()
             os.set_blocking(descriptor, False)
@@ -298,7 +303,23 @@ class StdioJsonRpcSession:
         to prevent, and silently dropping messages would let a flood hide the
         real answer."""
         self._flooded = True
-        _signal_group(process, signal.SIGKILL)
+        _signal_group(process, self._process_group_id, signal.SIGKILL)
+
+    def _best_effort_cancel(
+        self,
+        request_id: int,
+        factory: Callable[[int], Mapping[str, JsonValue]] | None,
+    ) -> None:
+        """An optional protocol-owned cancellation notification.
+
+        The shared transport never knows which methods are cancellable; the
+        caller supplies the fully formed notification.  A blocked peer cannot
+        turn this courtesy into an unbounded second timeout.
+        """
+        if factory is None:
+            return
+        with contextlib.suppress(StdioSessionError):
+            self._write(factory(request_id), time.monotonic() + 0.1)
 
     def _drain_stderr(self, process: subprocess.Popen[bytes]) -> None:
         """Consume and discard stderr so the child never blocks on a full pipe.
@@ -331,12 +352,41 @@ def allowlisted_environment(
 
 def _decode(line: bytes) -> dict[str, JsonValue]:
     try:
-        message = json.loads(line)
+        message = json.loads(
+            line,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_no_duplicate_keys,
+        )
+        _require_json_depth(message, 1)
     except (UnicodeDecodeError, ValueError, RecursionError) as exc:
-        raise StdioSessionProtocolError("the child sent a malformed message") from exc
+        raise StdioSessionProtocolError(_MALFORMED_MESSAGE) from exc
     if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
-        raise StdioSessionProtocolError("the child sent a malformed message")
+        raise StdioSessionProtocolError(_MALFORMED_MESSAGE)
     return cast(dict[str, JsonValue], message)
+
+
+def _reject_json_constant(_: str) -> None:
+    raise ValueError("non-standard JSON constant")
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, JsonValue]]) -> dict[str, JsonValue]:
+    result: dict[str, JsonValue] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+def _require_json_depth(value: object, depth: int) -> None:
+    if depth > _MAX_JSON_DEPTH:
+        raise ValueError("JSON nesting exceeded")
+    if isinstance(value, dict):
+        for item in value.values():
+            _require_json_depth(item, depth + 1)
+    elif isinstance(value, list):
+        for item in value:
+            _require_json_depth(item, depth + 1)
 
 
 def _require_error_object(error: JsonValue) -> None:
@@ -349,11 +399,13 @@ def _require_error_object(error: JsonValue) -> None:
         raise StdioSessionProtocolError("the child sent a malformed error")
 
 
-def _signal_group(process: subprocess.Popen[bytes], number: int) -> None:
+def _signal_group(process: subprocess.Popen[bytes], group_id: int | None, number: int) -> None:
     """Signal the child's own process group, falling back to the child alone
     when the group is already gone or the platform has no process groups."""
     try:
-        os.killpg(os.getpgid(process.pid), number)
+        if group_id is None:
+            raise OSError("no owned process group")
+        os.killpg(group_id, number)
         return
     except (OSError, AttributeError, PermissionError):
         pass

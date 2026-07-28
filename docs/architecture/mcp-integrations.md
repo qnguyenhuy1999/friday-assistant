@@ -72,14 +72,19 @@ binding fingerprint version
 server_id
 local tool name
 remote tool name
-transport identity      (sha256 of transport + argv + sorted env_from *names*)
+transport identity      (sha256 of transport + canonical argv/env-name identity + resolved execution identity)
 schema identity         (sha256 of the canonical normalized input schema)
 risk policy             ("ro"|"rw" : approval_required : approval_category)
 ```
 
 `transport identity` is a hash, so no argv path text is ever persisted or shown.
-`env_from` contributes variable *names* only; resolved values are never hashed,
-logged, or stored.
+It includes the resolved executable, resolved working directory, negotiated
+protocol version, and a secret-free principal digest derived from configured
+credential values. The digest fences approvals across credential rotation while
+never storing or publishing the credential material itself. `env_from` remains
+the configuration surface for credential names; operators should supply secrets
+there rather than placing them in argv. Friday does not claim to detect every
+literal secret an operator may embed in arbitrary argv.
 
 The gateway reports `authorization_scope = "mcp:<binding_fingerprint>"`, and
 `compute_authorization_fingerprint` folds that scope into the exact-action
@@ -152,8 +157,9 @@ Discovery happens at construction, before any Run can be claimed;
 - Configuration stores variable *names* (`env_from`), never values. A literal
   secret in the config file is a startup error.
 - Only named variables plus a minimal base allowlist reach the child.
-- Resolved values are never logged, never hashed into a fingerprint, never
-  placed in `ToolProvenance`, and never included in a `Failure`.
+- Resolved values are never logged, placed in `ToolProvenance`, or included in
+  a `Failure`. A one-way, secret-free credential/principal digest participates
+  in binding identity so credential rotation invalidates old approvals.
 - `apps/worker/operational_logging.py` uses a field allowlist, so an MCP log
   record can only ever carry the fields named there.
 - The child's stderr is drained and discarded, never captured.

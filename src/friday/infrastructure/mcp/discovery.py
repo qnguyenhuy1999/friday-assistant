@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import contextlib
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any, cast
 
 from friday.domain.json_value import JsonValue
 from friday.infrastructure.mcp.bindings import McpBoundTool, compute_binding_fingerprint
@@ -31,13 +34,37 @@ class McpServerDiscovery:
         )
 
 
-def discover_server(client: McpClient, server: McpServerConfig) -> McpServerDiscovery:
+def discover_server(
+    client: McpClient,
+    server: McpServerConfig,
+    *,
+    startup_deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> McpServerDiscovery:
     names = tuple(sorted(binding.local_name for binding in server.bindings))
     if not server.enabled:
         return _empty(server.server_id, names, None)
     try:
-        client.connect()
-        remote = _index(client.list_tools())
+        if startup_deadline is None:
+            client.connect()
+            remote = _index(client.list_tools())
+        else:
+            remaining = startup_deadline - monotonic()
+            # The concrete stdio client accepts the remaining global budget;
+            # test doubles and non-stdio clients retain the small protocol.
+            connect = cast(Any, client.connect)
+            try:
+                connect(timeout_seconds=remaining)
+            except TypeError:
+                # Compatibility for deliberately tiny test/alternate clients;
+                # production McpStdioClient always receives the global budget.
+                connect()
+            remaining = startup_deadline - monotonic()
+            list_tools = cast(Any, client.list_tools)
+            try:
+                remote = _index(list_tools(timeout_seconds=remaining))
+            except TypeError:
+                remote = _index(list_tools())
     except McpError as exc:
         _close_quietly(client)
         return _empty(server.server_id, names, exc.code)

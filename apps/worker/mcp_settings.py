@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,7 +89,11 @@ class McpSettings:
                 raw = config_file.read(MAX_CONFIG_BYTES + 1)
             if len(raw) > MAX_CONFIG_BYTES:
                 raise McpConfigurationInvalid("MCP config file exceeded configured bytes")
-            document = json.loads(raw, object_pairs_hook=_no_duplicate_keys)
+            document = json.loads(
+                raw,
+                object_pairs_hook=_no_duplicate_keys,
+                parse_constant=lambda _: (_ for _ in ()).throw(ValueError("non-standard JSON")),
+            )
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise McpConfigurationInvalid("MCP config file must be valid JSON") from exc
         if not isinstance(document, dict):
@@ -190,7 +195,7 @@ def _bool(entry: dict[str, Any], name: str, default: bool | None) -> bool:
 
 def _number(entry: dict[str, Any], name: str, default: float) -> float:
     value = entry.get(name, default)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise McpConfigurationInvalid(f"{name} must be a number")
     return float(value)
 

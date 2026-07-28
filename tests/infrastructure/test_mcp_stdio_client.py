@@ -292,6 +292,53 @@ def test_a_malformed_result_is_a_protocol_error(
         client.call_tool("read", {"key": "a"}, timeout_seconds=5.0)
 
 
+@pytest.mark.parametrize(
+    "behaviour",
+    [
+        FixtureBehaviour(result_nan=True),
+        FixtureBehaviour(result_infinity=True),
+        FixtureBehaviour(duplicate_result_key=True),
+    ],
+)
+def test_non_standard_or_duplicate_json_is_a_protocol_failure(
+    opened: list[McpStdioClient], tmp_path: Path, behaviour: FixtureBehaviour
+) -> None:
+    client = _client(opened, tmp_path, behaviour)
+    client.connect()
+
+    with pytest.raises(McpProtocolError):
+        client.call_tool("read", {"key": "a"}, timeout_seconds=5.0)
+
+
+@pytest.mark.parametrize(
+    "behaviour",
+    [FixtureBehaviour(duplicate_schema_key=True), FixtureBehaviour(schema_nan_minimum=True)],
+)
+def test_unsafe_schema_json_is_unavailable_during_discovery(
+    opened: list[McpStdioClient], tmp_path: Path, behaviour: FixtureBehaviour
+) -> None:
+    from friday.infrastructure.mcp.discovery import discover_server
+
+    client = _client(opened, tmp_path, behaviour)
+    config = McpServerConfig(
+        server_id="fixture",
+        enabled=True,
+        command=make_fixture_server(tmp_path, behaviour),
+        bindings=(BINDING,),
+    )
+    discovery = discover_server(client, config)
+
+    assert discovery.available == ()
+
+
+def test_malformed_content_block_fails_closed(opened: list[McpStdioClient], tmp_path: Path) -> None:
+    client = _client(opened, tmp_path, FixtureBehaviour(malformed_content_block=True))
+    client.connect()
+
+    with pytest.raises(McpProtocolError):
+        client.call_tool("read", {"key": "a"}, timeout_seconds=5.0)
+
+
 def test_a_server_that_floods_stderr_still_answers(
     opened: list[McpStdioClient], tmp_path: Path
 ) -> None:

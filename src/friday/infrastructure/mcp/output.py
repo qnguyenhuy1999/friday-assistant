@@ -64,4 +64,4 @@ def _depth(value: JsonValue, limit: int, current: int) -> None:
 
 
 def _json_bytes(value: JsonValue) -> int:
-    return len(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
+    return len(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode())

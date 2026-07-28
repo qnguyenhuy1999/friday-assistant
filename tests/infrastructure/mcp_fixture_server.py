@@ -36,6 +36,17 @@ class FixtureBehaviour:
     exit_on_call: bool = False
     echo_token: bool = False
     notification_flood: int = 0
+    write_then_is_error: bool = False
+    write_then_jsonrpc_error: bool = False
+    write_then_hang: bool = False
+    write_then_exit: bool = False
+    result_nan: bool = False
+    result_infinity: bool = False
+    duplicate_result_key: bool = False
+    duplicate_schema_key: bool = False
+    schema_nan_minimum: bool = False
+    malformed_content_block: bool = False
+    helper_descendant: bool = False
     """Unsolicited JSON-RPC notifications emitted before every answer. Line
     size bounds one message; only a queue bound stops an endless stream."""
 
@@ -43,13 +54,17 @@ class FixtureBehaviour:
 DEFAULT_BEHAVIOUR = FixtureBehaviour()
 
 
-_SCRIPT = r"""import base64, json, os, sys, time
+_SCRIPT = r"""import base64, json, os, subprocess, sys, time
 B = __BEHAVIOUR__
 STATE = {}
+if B['helper_descendant']:
+ subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(3600)'])
 def tools():
  d = __INJECTION__ if B['injection_descriptions'] else 'Fixture tool.'
  s = {'type':'object','properties':{'key':{'type':'string'}},'required':['key']}
  if B['recursive_schema']: s = {'$ref':'#/$defs/x'}
+ if B['duplicate_schema_key']: s = '__DUPLICATE_SCHEMA__'
+ if B['schema_nan_minimum']: s = {'type':'object','minimum':float('nan')}
  if B['huge_schema_properties']: s = {'type':'object','properties':{'k%s'%i:{'type':'string'} for i in range(B['huge_schema_properties'])}}
  out=[{'name':'read','description':d,'inputSchema':s},{'name':'write','description':d,'inputSchema':{'type':'object','properties':{'key':{'type':'string'},'value':{'type':'string'}},'required':['key','value']}}]
  if B['duplicate_tool_name']: out.append({'name':'read','description':d,'inputSchema':s})
@@ -60,6 +75,13 @@ def nested(n):
  for _ in range(n): x={'child':x}
  return x
 def call(p):
+ a=p.get('arguments') or {}; name=p.get('name')
+ if name=='write' and (B['write_then_is_error'] or B['write_then_jsonrpc_error'] or B['write_then_hang'] or B['write_then_exit']):
+  STATE[a.get('key')]=a.get('value')
+  if B['write_then_hang']: time.sleep(3600)
+  if B['write_then_exit']: os._exit(0)
+  if B['write_then_is_error']: return {'isError':True,'content':[{'type':'text','text':'written then failed'}]}
+  if B['write_then_jsonrpc_error']: return '__JSONRPC_ERROR__'
  if B['hang_on_call']: time.sleep(3600)
  if B['exit_on_call']: os._exit(0)
  if B['remote_error']: return {'isError':True,'content':[{'type':'text','text':'Bearer __TOKEN__' if B['error_leaks_token'] else 'remote failure'}]}
@@ -70,7 +92,9 @@ def call(p):
  if B['json_depth']: return {'content':[],'structuredContent':nested(B['json_depth'])}
  if B['echo_environment']: return {'content':[],'structuredContent':{'env':sorted(os.environ)}}
  if B['echo_token']: return {'content':[{'type':'text','text':'token is '+os.environ.get('FIXTURE_TOKEN','')}],'structuredContent':{'echoed':os.environ.get('FIXTURE_TOKEN','')}}
- a=p.get('arguments') or {}; name=p.get('name')
+ if B['result_nan']: return {'content':[],'structuredContent':{'value':float('nan')}}
+ if B['result_infinity']: return {'content':[],'structuredContent':{'value':float('inf')}}
+ if B['malformed_content_block']: return {'content':[{}]}
  if name=='write': STATE[a.get('key')]=a.get('value'); return {'content':[],'structuredContent':{'written':a.get('key')}}
  if name=='read': return {'content':[],'structuredContent':{'key':a.get('key'),'value':STATE.get(a.get('key'))}}
  return {'isError':True,'content':[{'type':'text','text':'unknown'}]}
@@ -90,7 +114,11 @@ for line in sys.stdin:
  elif method=='tools/list': result={'tools':tools()}
  elif method=='tools/call': result=call(m.get('params') or {})
  else: print(json.dumps({'jsonrpc':'2.0','id':m['id'],'error':{'code':-32601}})); sys.stdout.flush(); continue
- print(json.dumps({'jsonrpc':'2.0','id':m['id'],'result':result})); sys.stdout.flush()
+ if method=='tools/list' and result['tools'][0]['inputSchema'] == '__DUPLICATE_SCHEMA__': print('{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"read","inputSchema":{"type":"object","type":"string"}}]}}' % m['id'])
+ elif method=='tools/call' and result == '__JSONRPC_ERROR__': print(json.dumps({'jsonrpc':'2.0','id':m['id'],'error':{'code':-32603,'message':'written then error'}}))
+ elif method=='tools/call' and B['duplicate_result_key']: print('{"jsonrpc":"2.0","id":%s,"result":{},"result":{}}' % m['id'])
+ else: print(json.dumps({'jsonrpc':'2.0','id':m['id'],'result':result,}, allow_nan=True))
+ sys.stdout.flush()
 """
 
 

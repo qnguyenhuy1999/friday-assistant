@@ -22,7 +22,7 @@ from friday.infrastructure.mcp.bindings import McpBindingRegistry, McpBoundTool
 from friday.infrastructure.mcp.client import McpClient
 from friday.infrastructure.mcp.config import McpServerConfig
 from friday.infrastructure.mcp.discovery import McpServerDiscovery
-from friday.infrastructure.mcp.errors import McpError, McpRemoteError
+from friday.infrastructure.mcp.errors import McpError
 from friday.infrastructure.mcp.health import McpServerHealth, McpServerStatus
 from friday.infrastructure.mcp.output import OutputBounds, normalize_call_result
 from friday.infrastructure.mcp.schema import validate_input
@@ -135,7 +135,7 @@ class McpToolGateway:
             # not evidence that a mutating remote operation did not happen.
             # Leave its durable invocation RUNNING; the executor will refuse
             # blind replay and surface an ambiguous outcome.
-            if not tool.binding.read_only and not isinstance(exc, McpRemoteError):
+            if not tool.binding.read_only:
                 raise ToolExecutionAmbiguous(
                     "the external mutating MCP operation may have completed; "
                     "refusing to record failure or retry it automatically"

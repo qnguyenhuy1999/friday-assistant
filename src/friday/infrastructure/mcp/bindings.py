@@ -123,4 +123,8 @@ def _sha256(material: str) -> str:
 
 
 def _sha256_json(material: JsonValue) -> str:
-    return _sha256(json.dumps(material, sort_keys=True, separators=(",", ":")))
+    try:
+        canonical = json.dumps(material, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise McpConfigInvalid("MCP binding identity must be JSON-safe") from exc
+    return _sha256(canonical)

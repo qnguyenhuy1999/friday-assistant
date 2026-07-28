@@ -314,9 +314,12 @@ def _computer_gateway(runtime: RuntimeSettings) -> ComputerToolGateway | None:
     )
 
 
-def _mcp_gateway() -> McpToolGateway | None:
+def _mcp_gateway(*gateways: ToolGateway) -> McpToolGateway | None:
     """Build the optional MCP gateway; transport details stay behind composition."""
-    return build_mcp_gateway(McpSettings.from_env().gateway_config())
+    return build_mcp_gateway(
+        McpSettings.from_env().gateway_config(),
+        existing_tool_names=(tool.name for gateway in gateways for tool in gateway.list_tools()),
+    )
 
 
 def create_worker(
@@ -379,7 +382,10 @@ def _compose_worker(
     computer_gateway = _computer_gateway(runtime)  # raises ComputerUseUnavailable
     if computer_gateway is not None:
         resources.callback(computer_gateway.close)
-    mcp_gateway = _mcp_gateway()
+    mcp_gateway = _mcp_gateway(
+        workspace_gateway,
+        *((computer_gateway,) if computer_gateway is not None else ()),
+    )
     if mcp_gateway is not None:
         resources.callback(mcp_gateway.close)
     gateways: list[ToolGateway] = [workspace_gateway]

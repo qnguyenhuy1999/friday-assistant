@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import cast
 
 from friday.application.errors import ToolInputInvalid
@@ -110,7 +111,11 @@ def _walk(node: object, depth: int) -> dict[str, JsonValue]:
     for key in ("minimum", "maximum"):
         if key in node:
             value = node[key]
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
                 raise McpProtocolError(f"schema {key} must be numeric")
             out[key] = value
     for key in ("minLength", "maxLength", "minItems", "maxItems"):
@@ -193,7 +198,9 @@ def _matches(kind: str, value: JsonValue) -> bool:
 
 def _json_bytes(value: object) -> int:
     try:
-        return len(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
+        return len(
+            json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        )
     except (TypeError, ValueError, RecursionError) as exc:
         raise McpProtocolError("an MCP input schema must be JSON-safe") from exc
 
@@ -201,7 +208,11 @@ def _json_bytes(value: object) -> int:
 def _json_value(value: object, depth: int) -> None:
     if depth > MAX_SCHEMA_DEPTH:
         raise McpProtocolError("an MCP input schema exceeded maximum depth")
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if value is None or isinstance(value, (str, int, bool)):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise McpProtocolError("an MCP input schema must be JSON-safe")
         return
     if isinstance(value, list):
         for child in value:

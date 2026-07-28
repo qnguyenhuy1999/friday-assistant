@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import cast
 
@@ -64,7 +65,7 @@ class McpStdioClient:
         # before spawn in case an operator intentionally rotates it meanwhile.
         self._environment()
 
-    def connect(self) -> str:
+    def connect(self, *, timeout_seconds: float | None = None) -> str:
         if self._protocol_version is not None:
             return self._protocol_version
         if self._closed:
@@ -79,11 +80,16 @@ class McpStdioClient:
                 ),
             )
         )
+        deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
         try:
             self._session = session
-            session.start(handshake=self._initialize)
+            session.start(handshake=lambda: self._initialize(self._remaining_startup(deadline)))
             assert self._protocol_version is not None
-            self._notify("notifications/initialized", {})
+            self._notify(
+                "notifications/initialized",
+                {},
+                timeout_seconds=self._remaining_startup(deadline),
+            )
             return self._protocol_version
         except McpError:
             self.close()
@@ -105,9 +111,9 @@ class McpStdioClient:
     def execution_identity(self) -> JsonValue:
         return dict(self._execution_identity)
 
-    def list_tools(self) -> tuple[McpRemoteTool, ...]:
+    def list_tools(self, *, timeout_seconds: float | None = None) -> tuple[McpRemoteTool, ...]:
         result = self._request(
-            "tools/list", {}, self._server.connect_timeout_seconds, McpConnectTimeout
+            "tools/list", {}, self._startup_timeout(timeout_seconds), McpConnectTimeout
         )
         if not isinstance(result, dict) or not isinstance((entries := result.get("tools")), list):
             raise McpProtocolError("the MCP server returned a malformed tool list")
@@ -142,6 +148,7 @@ class McpStdioClient:
             timeout_seconds,
             McpCallTimeout,
             cancelled,
+            self._cancel_notification,
         )
         if not isinstance(result, dict):
             raise McpProtocolError("the MCP server returned a malformed result")
@@ -160,7 +167,10 @@ class McpStdioClient:
         for block in content:
             if not isinstance(block, dict):
                 raise McpProtocolError("the MCP server returned a malformed result")
-            if block.get("type") == "text" and not isinstance(block.get("text"), str):
+            kind = block.get("type")
+            if not isinstance(kind, str) or not kind.strip() or len(kind) > 128:
+                raise McpProtocolError("the MCP server returned a malformed result")
+            if kind == "text" and not isinstance(block.get("text"), str):
                 raise McpProtocolError("the MCP server returned a malformed result")
             blocks.append(block)
         if is_error:
@@ -172,7 +182,7 @@ class McpStdioClient:
             len(content),
         )
 
-    def _initialize(self) -> None:
+    def _initialize(self, timeout_seconds: float | None = None) -> None:
         result = self._request(
             "initialize",
             {
@@ -180,7 +190,7 @@ class McpStdioClient:
                 "capabilities": {},
                 "clientInfo": {"name": CLIENT_NAME, "version": CLIENT_VERSION},
             },
-            self._server.connect_timeout_seconds,
+            self._startup_timeout(timeout_seconds),
             McpConnectTimeout,
         )
         if (
@@ -199,26 +209,37 @@ class McpStdioClient:
         timeout: float,
         timeout_error: type[McpError],
         cancelled: Callable[[], bool] | None = None,
+        cancellation_notification: Callable[[int], Mapping[str, JsonValue]] | None = None,
     ) -> JsonValue:
         if self._session is None:
             raise McpUnavailable("the MCP server is not connected")
         try:
             result = self._session.request(
-                method, params, timeout_seconds=timeout, cancelled=cancelled
+                method,
+                params,
+                timeout_seconds=timeout,
+                cancelled=cancelled,
+                cancellation_notification=cancellation_notification,
             )
         except StdioSessionError as exc:
             self.close()
             raise _translate(exc, timeout_error) from exc
         return self._redactor.redact(result)
 
-    def _notify(self, method: str, params: Mapping[str, JsonValue]) -> None:
+    def _notify(
+        self,
+        method: str,
+        params: Mapping[str, JsonValue],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> None:
         if self._session is None:
             raise McpUnavailable("the MCP server is not connected")
         try:
             self._session.notify(
                 method,
                 params,
-                timeout_seconds=self._server.connect_timeout_seconds,
+                timeout_seconds=self._startup_timeout(timeout_seconds),
             )
         except StdioSessionError as exc:
             self.close()
@@ -239,6 +260,26 @@ class McpStdioClient:
         }
         return environment
 
+    def _startup_timeout(self, remaining: float | None) -> float:
+        configured = self._server.connect_timeout_seconds
+        if remaining is None:
+            return configured
+        if remaining <= 0:
+            raise McpConnectTimeout("the MCP startup deadline expired")
+        return min(configured, remaining)
+
+    @staticmethod
+    def _remaining_startup(deadline: float | None) -> float | None:
+        return None if deadline is None else deadline - time.monotonic()
+
+    @staticmethod
+    def _cancel_notification(request_id: int) -> Mapping[str, JsonValue]:
+        return {
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": request_id, "reason": "cancelled"},
+        }
+
 
 def _translate(error: StdioSessionError, timeout: type[McpError]) -> McpError:
     if isinstance(error, StdioSessionTimeout):
@@ -255,7 +296,7 @@ def _credential_identity(values: tuple[str, ...], key: str | None) -> str:
     import hashlib
     import hmac
 
-    material = json.dumps(values, separators=(",", ":")).encode()
+    material = json.dumps(values, separators=(",", ":"), allow_nan=False).encode()
     return (
         hmac.new(key.encode(), material, hashlib.sha256).hexdigest()
         if key
@@ -265,7 +306,7 @@ def _credential_identity(values: tuple[str, ...], key: str | None) -> str:
 
 def _json_bytes(value: object) -> int:
     try:
-        return len(json.dumps(value, separators=(",", ":")).encode())
+        return len(json.dumps(value, separators=(",", ":"), allow_nan=False).encode())
     except (TypeError, ValueError, RecursionError) as exc:
         raise McpProtocolError("the MCP server returned malformed JSON") from exc
 

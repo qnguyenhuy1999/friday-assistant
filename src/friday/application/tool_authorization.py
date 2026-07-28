@@ -1,8 +1,9 @@
 """Exact-action approval binding.
 
 An approval authorizes exactly one tool action: the SHA-256 fingerprint
-below covers the fingerprint version, Run, optional RunStep, tool name, and
-the canonical JSON form of the tool input. Any change to any of these —
+below covers the fingerprint version, Run, optional RunStep, tool name, the
+canonical JSON form of the tool input, and the external authorization scope.
+Any change to any of these —
 another run, another step, another tool, a reordered-but-different input —
 produces a different fingerprint, and the approval no longer matches.
 
@@ -40,11 +41,15 @@ from friday.domain.identifiers import ApprovalRequestId, RunId, RunStepId
 from friday.domain.run import RunStatus
 from friday.domain.step import RunStep, RunStepStatus
 
-FINGERPRINT_VERSION = 1
+FINGERPRINT_VERSION = 2
 
 
 def compute_authorization_fingerprint(
-    *, run_id: RunId, step_id: RunStepId | None, call: ToolCall
+    *,
+    run_id: RunId,
+    step_id: RunStepId | None,
+    call: ToolCall,
+    authorization_scope: str | None = None,
 ) -> str:
     """Deterministic SHA-256 binding of one exact tool action to one Run.
 
@@ -59,7 +64,22 @@ def compute_authorization_fingerprint(
             str(step_id) if step_id is not None else "",
             call.tool,
             canonical_input,
+            authorization_scope or "",
         ]
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def compute_legacy_authorization_fingerprint(
+    *, run_id: RunId, step_id: RunStepId | None, call: ToolCall
+) -> str:
+    """Phase-11 v1 form, solely for consumed non-MCP replay fencing.
+
+    It is intentionally never accepted as an authorizing pending approval.
+    """
+    canonical_input = json.dumps(call.tool_input, sort_keys=True, separators=(",", ":"))
+    material = "\n".join(
+        ["1", str(run_id), str(step_id) if step_id is not None else "", call.tool, canonical_input]
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 

@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This document describes the implemented source organization through Phase 16:
+This document describes the implemented source organization through Phase 18:
 domain and application logic, SQLite persistence, API and worker delivery,
 Claude runtime, memory, computer use, contracts, SDK, web control plane, and
 durable scheduled automations.
@@ -33,6 +33,13 @@ durable scheduled automations.
   `infrastructure/tools/computer_gateway.py` and
   `infrastructure/tools/computer_composition.py`; the brain runtime,
   application layer, domain layer, and worker loop must never import it.
+- **`src/friday/infrastructure/mcp`** — the opt-in Friday-owned MCP
+  integration substrate behind `McpToolGateway` (see
+  [mcp-integrations.md](mcp-integrations.md)). Reachable only from
+  `infrastructure/tools/mcp_gateway.py` and
+  `infrastructure/tools/mcp_composition.py`; the brain runtime, application
+  layer, domain layer, and worker loop must never import it. MCP is a
+  transport behind Friday's authority model, not a second way to reach one.
 - **`apps/web`** — React/Vite browser control plane for tasks, runs,
   approvals, artifacts, events, final results, and schedules.
 - **`apps/web/src/voice`** — browser-native speech adapters and controller;
@@ -97,7 +104,7 @@ reverse.
 
 ## Status
 
-Implemented through **Phase 17 — Conversational Voice Interface**:
+Implemented through **Phase 18 — Friday-owned MCP & External Integrations**:
 
 - **Phase 4–5** — framework-independent domain model, application ports, JSON
   Schema contracts, and the SQLite persistence adapter (see
@@ -119,10 +126,12 @@ Implemented through **Phase 17 — Conversational Voice Interface**:
 - **Phase 17** — durable conversational turns, bounded Run-scoped context,
   and browser-native voice delivery (see
   [conversation-interface.md](conversation-interface.md)).
+- **Phase 18** — Friday-owned, allow-listed MCP integrations behind the
+  existing tool gateway and approval model (see
+  [mcp-integrations.md](mcp-integrations.md)).
 
-Later phases add Friday-owned MCP and external integrations, a messaging
-gateway, skills and self-improvement, and multi-agent delegation. None of
-those are implemented yet.
+Later phases add a messaging gateway, skills and self-improvement, and
+multi-agent delegation. None of those are implemented yet.
 The adapter and migration behavior are covered by `tests/persistence`.
 
 Later phases add the FastAPI delivery boundary, leased worker coordination,

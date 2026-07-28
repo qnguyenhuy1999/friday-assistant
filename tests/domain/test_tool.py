@@ -16,6 +16,7 @@ from friday.domain.tool import (
     ToolInvocation,
     ToolInvocationStatus,
 )
+from friday.domain.tool_provenance import ToolProvenance
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 T1 = datetime(2026, 1, 1, 1, tzinfo=UTC)
@@ -112,3 +113,25 @@ def test_terminal_statuses_are_actually_terminal(status: ToolInvocationStatus) -
         invocation.start(T1)
     with pytest.raises(InvalidStateTransition):
         invocation.cancel(T1)
+
+
+def test_invocation_defaults_to_no_provenance() -> None:
+    assert _new_invocation().provenance is None
+
+
+def test_invocation_retains_external_provenance() -> None:
+    provenance = ToolProvenance(
+        kind="mcp",
+        target="github",
+        remote_name="create_issue",
+        binding_fingerprint="b" * 64,
+    )
+    invocation = ToolInvocation.new(
+        id=ToolInvocationId.new(),
+        run_id=RunId.new(),
+        tool_name="github.create_issue",
+        requested_input={"title": "hi"},
+        requested_at=T0,
+        provenance=provenance,
+    )
+    assert invocation.provenance == provenance

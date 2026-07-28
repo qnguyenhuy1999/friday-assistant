@@ -87,7 +87,7 @@ from friday.application.tool_authorization import (
     RequestToolApproval,
     compute_authorization_fingerprint,
 )
-from friday.application.tool_gateway import ToolCall, ToolGateway
+from friday.application.tool_gateway import ToolCall, ToolGateway, ToolRiskAssessment
 from friday.application.worker_coordination import VerifyRunClaim
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
@@ -367,7 +367,7 @@ class AgentRunProcessor:
             reason=action.reason or "",
             requested_action=call.tool,
             requested_input=call.tool_input,
-            authorization_fingerprint=self._fingerprint(context, call),
+            authorization_fingerprint=self._fingerprint(context, call, risk),
         )
         try:
             approval = self._request_tool_approval.execute(
@@ -382,8 +382,13 @@ class AgentRunProcessor:
 
     # ------------------------------------------------------------- helpers
 
-    def _fingerprint(self, context: ClaimContext, call: ToolCall) -> str:
-        return compute_authorization_fingerprint(run_id=context.run_id, step_id=None, call=call)
+    def _fingerprint(self, context: ClaimContext, call: ToolCall, risk: ToolRiskAssessment) -> str:
+        return compute_authorization_fingerprint(
+            run_id=context.run_id,
+            step_id=None,
+            call=call,
+            authorization_scope=risk.authorization_scope,
+        )
 
     def _claim_holds(self, context: ClaimContext) -> bool:
         if context.is_lease_lost():

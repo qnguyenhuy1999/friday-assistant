@@ -1,0 +1,26 @@
+{
+  "servers": [
+    {
+      "server_id": "fixture",
+      "enabled": false,
+      "transport": "stdio",
+      "command": ["fixture-mcp-server", "--stdio"],
+      "env_from": [],
+      "connect_timeout_seconds": 15,
+      "call_timeout_seconds": 30,
+      "max_discovered_tools": 200,
+      "max_schema_bytes": 32768,
+      "max_output_bytes": 65536,
+      "bindings": [
+        {
+          "local_name": "fixture.read",
+          "remote_tool_name": "read",
+          "trusted_description": "Fixture: read one key by name.",
+          "read_only": true,
+          "approval_required": false,
+          "approval_category": "network_access"
+        }
+      ]
+    }
+  ]
+}

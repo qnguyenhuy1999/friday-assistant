@@ -182,13 +182,12 @@ Domain never depends outward. See [docs/architecture/README.md](docs/architectur
 Completed core foundations through:
 
 ```text
-Phase 17 — Conversational Voice Interface
+Phase 18 — Friday-owned MCP & External Integrations
 ```
 
 Remaining v1 phases:
 
 ```text
-Phase 18 — Friday-owned MCP & External Integrations
 Phase 19 — Messaging Gateway & Scheduled Delivery
 Phase 20 — Skills & Self-Improvement Loop
 Phase 21 — Agents, Workflows & Delegation
@@ -230,4 +229,4 @@ See `justfile` for the complete command set and `docs/` for architecture, govern
 
 Friday is actively developed and should still be treated as pre-release software.
 
-The core execution/runtime foundations are implemented through Phase 17; external MCP integrations, messaging, skills/self-improvement, and multi-agent workflows remain upcoming work.
+The core execution/runtime foundations and Friday-owned MCP integrations are implemented through Phase 18; messaging, skills/self-improvement, and multi-agent workflows remain upcoming work.

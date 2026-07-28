@@ -23,6 +23,7 @@ from friday.domain import (
     ToolInvocation,
     ToolInvocationId,
 )
+from friday.domain.tool_provenance import ToolProvenance
 from friday.infrastructure.persistence.mappers import (
     approval_from_row,
     approval_to_row,
@@ -41,6 +42,32 @@ from friday.infrastructure.persistence.mappers import (
 )
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def test_tool_invocation_provenance_round_trips() -> None:
+    provenance = ToolProvenance(
+        kind="mcp", target="github", remote_name="create_issue", binding_fingerprint="c" * 64
+    )
+    invocation = ToolInvocation.new(
+        id=ToolInvocationId.new(),
+        run_id=RunId.new(),
+        tool_name="github.create_issue",
+        requested_input={"title": "hi"},
+        requested_at=T0,
+        provenance=provenance,
+    )
+    assert tool_invocation_from_row(tool_invocation_to_row(invocation)).provenance == provenance
+
+
+def test_tool_invocation_without_provenance_round_trips_as_none() -> None:
+    invocation = ToolInvocation.new(
+        id=ToolInvocationId.new(),
+        run_id=RunId.new(),
+        tool_name="workspace.read_text",
+        requested_input={"path": "a.txt"},
+        requested_at=T0,
+    )
+    assert tool_invocation_from_row(tool_invocation_to_row(invocation)).provenance is None
 
 
 def test_task_round_trips_through_terminal_state() -> None:

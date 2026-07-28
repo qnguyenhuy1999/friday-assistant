@@ -165,12 +165,22 @@ class StdioJsonRpcSession:
         # Signal our *recorded* group even when poll() already reaped the
         # leader.  Descendants can otherwise survive stdin EOF indefinitely.
         _signal_group(process, group_id, signal.SIGTERM)
-        try:
-            process.wait(timeout=_SHUTDOWN_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            _signal_group(process, group_id, signal.SIGKILL)
+        # The leader is not a reliable proxy for its process group: it can
+        # exit immediately after SIGTERM while a descendant deliberately
+        # ignores it.  Always finish the grace period by killing our recorded
+        # group, then reap the direct child.  The recorded PGID is established
+        # by start_new_session=True, so it can never be Friday's own group.
+        deadline = time.monotonic() + _SHUTDOWN_GRACE_SECONDS
+        while _group_exists(group_id) and time.monotonic() < deadline:
+            # Reap the leader if it already exited, but never mistake that for
+            # proof that descendants have gone away.
             with contextlib.suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=_SHUTDOWN_GRACE_SECONDS)
+                process.wait(timeout=0)
+            time.sleep(_POLL_SECONDS)
+        if _group_exists(group_id):
+            _signal_group(process, group_id, signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=_SHUTDOWN_GRACE_SECONDS)
 
     # --- JSON-RPC ---------------------------------------------------------
 
@@ -414,6 +424,21 @@ def _signal_group(process: subprocess.Popen[bytes], group_id: int | None, number
             process.kill()
         else:
             process.terminate()
+
+
+def _group_exists(group_id: int | None) -> bool:
+    """Whether the recorded, owned POSIX group still has a member.
+
+    This is intentionally independent from Popen.wait(): the direct child may
+    be gone while a descendant remains in its session.
+    """
+    if group_id is None:
+        return False
+    try:
+        os.killpg(group_id, 0)
+    except (OSError, AttributeError, PermissionError):
+        return False
+    return True
 
 
 def _drain(stream: IO[bytes]) -> None:

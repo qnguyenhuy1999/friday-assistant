@@ -47,6 +47,7 @@ BASE_ENVIRONMENT_ALLOWLIST = (
     "LC_CTYPE",
     "TMPDIR",
 )
+_CANCELLATION_DELIVERY_GRACE_SECONDS = 0.05
 
 
 class McpStdioClient:
@@ -222,6 +223,12 @@ class McpStdioClient:
                 cancellation_notification=cancellation_notification,
             )
         except StdioSessionError as exc:
+            # A tools/call timeout/cancellation invalidates the session, but
+            # leave one tiny bounded scheduling window for the protocol-owned
+            # cancellation notification to reach a responsive child before
+            # tearing down its pipes and process group.
+            if cancellation_notification is not None and isinstance(exc, StdioSessionTimeout):
+                time.sleep(_CANCELLATION_DELIVERY_GRACE_SECONDS)
             self.close()
             raise _translate(exc, timeout_error) from exc
         return self._redactor.redact(result)

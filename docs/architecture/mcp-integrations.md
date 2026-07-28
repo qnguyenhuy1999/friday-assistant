@@ -154,8 +154,11 @@ Discovery happens at construction, before any Run can be claimed;
 
 ## Secret handling
 
-- Configuration stores variable *names* (`env_from`), never values. A literal
-  secret in the config file is a startup error.
+- Configuration stores variable *names* (`env_from`), never values, and
+  provides no inline credential-value field. Credentials should be supplied by
+  environment reference. Friday does not inspect arbitrary argv or trusted
+  prose, so it cannot guarantee an operator did not place a literal secret
+  there.
 - Only named variables plus a minimal base allowlist reach the child.
 - Resolved values are never logged, placed in `ToolProvenance`, or included in
   a `Failure`. A one-way, secret-free credential/principal digest participates

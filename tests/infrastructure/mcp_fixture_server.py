@@ -47,6 +47,9 @@ class FixtureBehaviour:
     schema_nan_minimum: bool = False
     malformed_content_block: bool = False
     helper_descendant: bool = False
+    helper_descendant_ignores_sigterm: bool = False
+    descendant_pid_file: str | None = None
+    notification_marker_file: str | None = None
     """Unsolicited JSON-RPC notifications emitted before every answer. Line
     size bounds one message; only a queue bound stops an endless stream."""
 
@@ -58,7 +61,10 @@ _SCRIPT = r"""import base64, json, os, subprocess, sys, time
 B = __BEHAVIOUR__
 STATE = {}
 if B['helper_descendant']:
- subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(3600)'])
+ child = "import signal, time; " + ("signal.signal(signal.SIGTERM, signal.SIG_IGN); " if B['helper_descendant_ignores_sigterm'] else "") + "time.sleep(3600)"
+ helper = subprocess.Popen([sys.executable, '-c', child])
+ if B['descendant_pid_file']:
+  with open(B['descendant_pid_file'], 'w', encoding='ascii') as f: f.write(str(helper.pid))
 def tools():
  d = __INJECTION__ if B['injection_descriptions'] else 'Fixture tool.'
  s = {'type':'object','properties':{'key':{'type':'string'}},'required':['key']}
@@ -78,11 +84,11 @@ def call(p):
  a=p.get('arguments') or {}; name=p.get('name')
  if name=='write' and (B['write_then_is_error'] or B['write_then_jsonrpc_error'] or B['write_then_hang'] or B['write_then_exit']):
   STATE[a.get('key')]=a.get('value')
-  if B['write_then_hang']: time.sleep(3600)
+  if B['write_then_hang']: return '__HANG__'
   if B['write_then_exit']: os._exit(0)
   if B['write_then_is_error']: return {'isError':True,'content':[{'type':'text','text':'written then failed'}]}
   if B['write_then_jsonrpc_error']: return '__JSONRPC_ERROR__'
- if B['hang_on_call']: time.sleep(3600)
+ if B['hang_on_call']: return '__HANG__'
  if B['exit_on_call']: os._exit(0)
  if B['remote_error']: return {'isError':True,'content':[{'type':'text','text':'Bearer __TOKEN__' if B['error_leaks_token'] else 'remote failure'}]}
  if B['malformed_result']: return 'bad'
@@ -102,7 +108,10 @@ if B['stderr_flood_bytes']: sys.stderr.write('e'*B['stderr_flood_bytes']); sys.s
 for line in sys.stdin:
  try: m=json.loads(line)
  except ValueError: continue
- if 'id' not in m: continue
+ if 'id' not in m:
+  if m.get('method') == 'notifications/cancelled' and B['notification_marker_file']:
+   with open(B['notification_marker_file'], 'a', encoding='utf-8') as f: f.write('cancelled\n')
+  continue
  if B['malformed_framing']: print('{no'); sys.stdout.flush(); continue
  method=m.get('method')
  if method != 'initialize':
@@ -115,6 +124,7 @@ for line in sys.stdin:
  elif method=='tools/call': result=call(m.get('params') or {})
  else: print(json.dumps({'jsonrpc':'2.0','id':m['id'],'error':{'code':-32601}})); sys.stdout.flush(); continue
  if method=='tools/list' and result['tools'][0]['inputSchema'] == '__DUPLICATE_SCHEMA__': print('{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"read","inputSchema":{"type":"object","type":"string"}}]}}' % m['id'])
+ elif method=='tools/call' and result == '__HANG__': continue
  elif method=='tools/call' and result == '__JSONRPC_ERROR__': print(json.dumps({'jsonrpc':'2.0','id':m['id'],'error':{'code':-32603,'message':'written then error'}}))
  elif method=='tools/call' and B['duplicate_result_key']: print('{"jsonrpc":"2.0","id":%s,"result":{},"result":{}}' % m['id'])
  else: print(json.dumps({'jsonrpc':'2.0','id':m['id'],'result':result,}, allow_nan=True))

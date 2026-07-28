@@ -49,11 +49,9 @@ def build_mcp_gateway(
         for server in config.servers:
             if not server.enabled:
                 continue
-            # Do not even construct a client once the aggregate budget is
-            # exhausted: construction is intentionally side-effect free, but
-            # discovery/spawn is not.
-            if monotonic() >= global_deadline:
-                break
+            # Construction is side-effect free. Keep an unavailable stack even
+            # after the aggregate deadline, so health still represents every
+            # enabled configured server; discover_server enforces no spawn.
             client = McpStdioClient(server)
             clients.append(client)
             stacks.append(

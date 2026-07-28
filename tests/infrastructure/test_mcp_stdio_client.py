@@ -16,6 +16,8 @@ nothing would report it.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -184,6 +186,87 @@ def test_close_reaps_the_child(opened: list[McpStdioClient], tmp_path: Path) -> 
     assert not _alive(pid)
 
 
+def _descendant_pid(path: Path) -> int:
+    for _ in range(100):
+        if path.exists():
+            return int(path.read_text(encoding="ascii"))
+        time.sleep(0.01)
+    raise AssertionError("fixture did not publish its test-owned descendant pid")
+
+
+def test_close_reaps_parent_and_descendant(opened: list[McpStdioClient], tmp_path: Path) -> None:
+    pid_file = tmp_path / "descendant.pid"
+    client = _client(
+        opened,
+        tmp_path,
+        FixtureBehaviour(helper_descendant=True, descendant_pid_file=str(pid_file)),
+    )
+    client.connect()
+    parent, descendant = client.child_pid(), _descendant_pid(pid_file)
+
+    client.close()
+
+    assert not _alive(parent)
+    assert not _alive(descendant)
+
+
+def test_close_kills_a_sigterm_resistant_descendant(
+    opened: list[McpStdioClient], tmp_path: Path
+) -> None:
+    pid_file = tmp_path / "resistant-descendant.pid"
+    client = _client(
+        opened,
+        tmp_path,
+        FixtureBehaviour(
+            helper_descendant=True,
+            helper_descendant_ignores_sigterm=True,
+            descendant_pid_file=str(pid_file),
+        ),
+    )
+    client.connect()
+    descendant = _descendant_pid(pid_file)
+
+    client.close()
+
+    assert not _alive(descendant)
+
+
+def test_failed_handshake_reaps_parent_and_descendant(
+    opened: list[McpStdioClient], tmp_path: Path
+) -> None:
+    pid_file = tmp_path / "failed-descendant.pid"
+    client = _client(
+        opened,
+        tmp_path,
+        FixtureBehaviour(
+            helper_descendant=True, descendant_pid_file=str(pid_file), hang_on_start=True
+        ),
+        connect_timeout_seconds=0.1,
+    )
+
+    with pytest.raises(McpConnectTimeout):
+        client.connect()
+
+    assert not _alive(_descendant_pid(pid_file))
+
+
+def test_close_twice_never_signals_an_unrelated_process(
+    opened: list[McpStdioClient], tmp_path: Path
+) -> None:
+    client = _client(opened, tmp_path)
+    unrelated = subprocess.Popen(
+        [os.environ.get("PYTHON", sys.executable), "-c", "import time; time.sleep(30)"]
+    )
+    try:
+        client.connect()
+        client.close()
+        client.close()
+        assert _alive(unrelated.pid)
+    finally:
+        unrelated.terminate()
+        unrelated.wait(timeout=5)
+
+
 # --- bounds ---------------------------------------------------------------
 
 
@@ -258,6 +341,44 @@ def test_a_cancelled_call_does_not_hang(opened: list[McpStdioClient], tmp_path: 
 
     with pytest.raises(McpCallTimeout):
         client.call_tool("read", {"key": "a"}, timeout_seconds=30.0, cancelled=lambda: True)
+
+
+def test_cancelled_calls_notify_the_server(opened: list[McpStdioClient], tmp_path: Path) -> None:
+    marker = tmp_path / "cancelled"
+    client = _client(
+        opened,
+        tmp_path,
+        FixtureBehaviour(hang_on_call=True, notification_marker_file=str(marker)),
+    )
+    client.connect()
+
+    with pytest.raises(McpCallTimeout):
+        client.call_tool("read", {"key": "a"}, timeout_seconds=30.0, cancelled=lambda: True)
+
+    for _ in range(50):
+        if marker.exists():
+            break
+        time.sleep(0.01)
+    assert marker.read_text(encoding="utf-8") == "cancelled\n"
+
+
+def test_call_deadline_notifies_the_server(opened: list[McpStdioClient], tmp_path: Path) -> None:
+    marker = tmp_path / "deadline-cancelled"
+    client = _client(
+        opened,
+        tmp_path,
+        FixtureBehaviour(hang_on_call=True, notification_marker_file=str(marker)),
+    )
+    client.connect()
+
+    with pytest.raises(McpCallTimeout):
+        client.call_tool("read", {"key": "a"}, timeout_seconds=0.1)
+
+    for _ in range(50):
+        if marker.exists():
+            break
+        time.sleep(0.01)
+    assert marker.read_text(encoding="utf-8") == "cancelled\n"
 
 
 def test_a_server_that_exits_mid_call_is_unavailable(

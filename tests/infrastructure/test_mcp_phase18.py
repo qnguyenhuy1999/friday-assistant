@@ -59,10 +59,12 @@ class _Client:
         self.called = False
         self.closed = False
 
-    def connect(self) -> str:
+    def connect(self, *, timeout_seconds: float | None = None) -> str:
+        del timeout_seconds
         return "2025-06-18"
 
-    def list_tools(self) -> tuple[McpRemoteTool, ...]:
+    def list_tools(self, *, timeout_seconds: float | None = None) -> tuple[McpRemoteTool, ...]:
+        del timeout_seconds
         return self.tools
 
     def call_tool(
@@ -148,7 +150,8 @@ def test_gateway_uses_frozen_risk_and_normalized_result() -> None:
 
 def test_offline_discovery_is_unavailable() -> None:
     class Offline(_Client):
-        def connect(self) -> str:
+        def connect(self, *, timeout_seconds: float | None = None) -> str:
+            del timeout_seconds
             raise McpUnavailable("not forwarded")
 
     discovery = discover_server(Offline(), _server())

@@ -4,13 +4,12 @@ import contextlib
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, cast
 
 from friday.domain.json_value import JsonValue
 from friday.infrastructure.mcp.bindings import McpBoundTool, compute_binding_fingerprint
 from friday.infrastructure.mcp.client import McpClient, McpRemoteTool
 from friday.infrastructure.mcp.config import McpServerConfig
-from friday.infrastructure.mcp.errors import McpError, McpProtocolError
+from friday.infrastructure.mcp.errors import McpConnectTimeout, McpError, McpProtocolError
 from friday.infrastructure.mcp.health import McpServerStatus
 from friday.infrastructure.mcp.schema import normalize_input_schema
 
@@ -50,21 +49,13 @@ def discover_server(
             remote = _index(client.list_tools())
         else:
             remaining = startup_deadline - monotonic()
-            # The concrete stdio client accepts the remaining global budget;
-            # test doubles and non-stdio clients retain the small protocol.
-            connect = cast(Any, client.connect)
-            try:
-                connect(timeout_seconds=remaining)
-            except TypeError:
-                # Compatibility for deliberately tiny test/alternate clients;
-                # production McpStdioClient always receives the global budget.
-                connect()
+            if remaining <= 0:
+                raise McpConnectTimeout("the aggregate MCP startup budget expired")
+            client.connect(timeout_seconds=remaining)
             remaining = startup_deadline - monotonic()
-            list_tools = cast(Any, client.list_tools)
-            try:
-                remote = _index(list_tools(timeout_seconds=remaining))
-            except TypeError:
-                remote = _index(list_tools())
+            if remaining <= 0:
+                raise McpConnectTimeout("the aggregate MCP startup budget expired")
+            remote = _index(client.list_tools(timeout_seconds=remaining))
     except McpError as exc:
         _close_quietly(client)
         return _empty(server.server_id, names, exc.code)

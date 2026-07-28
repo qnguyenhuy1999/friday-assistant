@@ -94,7 +94,7 @@ class McpSettings:
                 object_pairs_hook=_no_duplicate_keys,
                 parse_constant=lambda _: (_ for _ in ()).throw(ValueError("non-standard JSON")),
             )
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             raise McpConfigurationInvalid("MCP config file must be valid JSON") from exc
         if not isinstance(document, dict):
             raise McpConfigurationInvalid("MCP config root must be an object")

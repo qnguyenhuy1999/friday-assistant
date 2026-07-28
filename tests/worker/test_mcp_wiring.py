@@ -21,6 +21,7 @@ import pytest
 
 from apps.worker.app import create_worker
 from friday.domain.approval import ApprovalCategory
+from friday.infrastructure.mcp.client import McpRemoteTool
 from friday.infrastructure.mcp.config import McpServerConfig, McpToolBinding
 from friday.infrastructure.mcp.errors import McpConfigInvalid
 from friday.infrastructure.mcp.stdio_client import McpStdioClient
@@ -81,6 +82,63 @@ def test_disabled_mcp_composition_performs_no_construction() -> None:
     assert build_mcp_gateway(McpGatewayConfig(enabled=False, servers=())) is None
 
 
+def test_aggregate_deadline_keeps_unattempted_server_in_health(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    constructed: list[object] = []
+    connected: list[str] = []
+
+    class Client:
+        def __init__(self, server: McpServerConfig) -> None:
+            self.server = server
+            constructed.append(self)
+
+        def connect(self, *, timeout_seconds: float | None = None) -> str:
+            del timeout_seconds
+            connected.append(self.server.server_id)
+            return "2025-06-18"
+
+        def list_tools(self, *, timeout_seconds: float | None = None) -> tuple[McpRemoteTool, ...]:
+            del timeout_seconds
+            return ()
+
+        def call_tool(self, *args: object, **kwargs: object) -> object:
+            raise AssertionError("unavailable server must not execute")
+
+        def close(self) -> None:
+            pass
+
+    ticks = iter((0.0, 0.0, 121.0, 121.0))
+    monkeypatch.setattr("friday.infrastructure.tools.mcp_composition.McpStdioClient", Client)
+    gateway = build_mcp_gateway(
+        McpGatewayConfig(
+            enabled=True,
+            servers=(
+                _server(tmp_path, "first", "first.read"),
+                _server(tmp_path, "second", "second.read"),
+            ),
+        ),
+        monotonic=lambda: next(ticks),
+    )
+
+    assert gateway is not None
+    assert connected == ["first"]
+    assert len(constructed) == 2
+    assert [
+        (
+            health.server_id,
+            health.status,
+            health.configured_binding_count,
+            health.available_binding_count,
+            health.failure_code,
+        )
+        for health in gateway.health()
+    ] == [
+        ("first", "unavailable", 1, 0, "mcp_connect_timeout"),
+        ("second", "unavailable", 1, 0, "mcp_connect_timeout"),
+    ]
+
+
 def test_a_built_gateway_owns_live_children_and_close_reaps_them(tmp_path: Path) -> None:
     gateway = build_mcp_gateway(
         McpGatewayConfig(enabled=True, servers=(_server(tmp_path, "fixture"),))
@@ -113,8 +171,8 @@ def _record_spawned_children(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     pids: list[int] = []
     original = McpStdioClient.connect
 
-    def connect(self: McpStdioClient) -> str:
-        version = original(self)
+    def connect(self: McpStdioClient, *, timeout_seconds: float | None = None) -> str:
+        version = original(self, timeout_seconds=timeout_seconds)
         pid = self.child_pid()
         if pid is not None:
             pids.append(pid)

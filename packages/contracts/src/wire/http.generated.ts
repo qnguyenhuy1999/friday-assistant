@@ -167,6 +167,9 @@ export interface Schedule {
   next_fire_at: string | null;
   created_at: string;
   updated_at: string;
+  delivery_route_id: string | null;
+  delivery_route_description: string | null;
+  delivery_enabled: boolean | null;
 }
 
 export interface ScheduleFire {
@@ -684,6 +687,9 @@ const schema = {
         "next_fire_at",
         "created_at",
         "updated_at",
+        "delivery_route_id",
+        "delivery_route_description",
+        "delivery_enabled",
       ],
       properties: {
         id: {
@@ -715,6 +721,15 @@ const schema = {
         },
         updated_at: {
           type: "string",
+        },
+        delivery_route_id: {
+          type: ["string", "null"],
+        },
+        delivery_route_description: {
+          type: ["string", "null"],
+        },
+        delivery_enabled: {
+          type: ["boolean", "null"],
         },
       },
     },

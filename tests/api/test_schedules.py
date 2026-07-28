@@ -9,6 +9,7 @@ from starlette.testclient import TestClient
 from friday.domain.identifiers import RunId, ScheduleFireId, ScheduleId
 from friday.domain.run import Run
 from friday.domain.schedule_fire import ScheduleFire
+from friday.infrastructure.messaging.config import MessagingRoute, MessagingRoutes
 from tests.api.conftest import NOW, seed_active_run
 
 
@@ -83,6 +84,41 @@ def test_schedule_controls_and_invalid_transitions(app: FastAPI) -> None:
     assert resumed.json()["status"] == "active"
     assert cancelled.json()["status"] == "cancelled"
     assert conflict.status_code == 409
+
+
+def test_schedule_exposes_only_safe_delivery_route_metadata(app: FastAPI) -> None:
+    seeded = seed_active_run(app)
+    app.state.clock = _Clock(NOW)
+    app.state.messaging_routes = MessagingRoutes(
+        (
+            MessagingRoute(
+                route_id="personal.notifications",
+                trusted_description="Personal notification channel",
+                principal_id="operator",
+                endpoint="https://example.test/credential-in-url",
+            ),
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/v1/tasks/{seeded.task_id}/schedules",
+            json={
+                "kind": "cron",
+                "cron": "0 9 * * *",
+                "timezone": "UTC",
+                "delivery_route_id": "personal.notifications",
+            },
+        )
+        assert response.status_code == 201, response.text
+        fetched = client.get(f"/v1/tasks/{seeded.task_id}/schedules/{response.json()['id']}")
+
+    assert fetched.status_code == 200
+    body = fetched.json()
+    assert body["delivery_route_id"] == "personal.notifications"
+    assert body["delivery_route_description"] == "Personal notification channel"
+    assert body["delivery_enabled"] is True
+    assert "credential-in-url" not in fetched.text
 
 
 def test_schedule_validation_parent_fencing_and_fire_listing(app: FastAPI) -> None:

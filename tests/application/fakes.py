@@ -27,6 +27,8 @@ from friday.application.ports import (
     RunStepRepository,
     RunWorkItemView,
     RunWorkQueue,
+    ScheduleDeliveryPolicyRepository,
+    ScheduleFireDeliveryPlanRepository,
     ScheduleFireRepository,
     ScheduleRepository,
     TaskEventStore,
@@ -46,6 +48,7 @@ from friday.domain.identifiers import (
     DeliveryId,
     RunId,
     RunStepId,
+    ScheduleFireId,
     ScheduleId,
     TaskId,
     ToolInvocationId,
@@ -54,6 +57,7 @@ from friday.domain.outbound_delivery import DeliveryStatus, OutboundDelivery
 from friday.domain.run import Run
 from friday.domain.schedule import Schedule, ScheduleStatus
 from friday.domain.schedule_fire import ScheduleFire
+from friday.domain.scheduled_delivery import ScheduleDeliveryPolicy, ScheduleFireDeliveryPlan
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES, RunStep
 from friday.domain.task import Task
 from friday.domain.task_event import TaskEvent
@@ -477,6 +481,7 @@ class FakeToolInvocationRepository:
 class FakeOutboundDeliveryRepository:
     def __init__(self) -> None:
         self.items: dict[DeliveryId, OutboundDelivery] = {}
+        self._schedule_fires: FakeScheduleFireRepository | None = None
 
     def add(self, delivery: OutboundDelivery) -> None:
         from friday.application.errors import EntityConflict
@@ -486,10 +491,32 @@ class FakeOutboundDeliveryRepository:
             for item in self.items.values()
         ):
             raise EntityConflict("write violated a uniqueness or state constraint")
+        if delivery.source_schedule_fire_id is not None and any(
+            item.source_schedule_fire_id == delivery.source_schedule_fire_id
+            for item in self.items.values()
+        ):
+            raise EntityConflict("write violated a uniqueness or state constraint")
         self.items[delivery.id] = delivery
 
     def get(self, delivery_id: DeliveryId) -> OutboundDelivery | None:
-        return self.items.get(delivery_id)
+        delivery = self.items.get(delivery_id)
+        return replace(delivery) if delivery is not None else None
+
+    def get_by_source_tool_invocation(
+        self, invocation_id: ToolInvocationId
+    ) -> OutboundDelivery | None:
+        for delivery in self.items.values():
+            if delivery.source_tool_invocation_id == invocation_id:
+                return replace(delivery)
+        return None
+
+    def get_by_source_schedule_fire(
+        self, schedule_fire_id: ScheduleFireId
+    ) -> OutboundDelivery | None:
+        for delivery in self.items.values():
+            if delivery.source_schedule_fire_id == schedule_fire_id:
+                return replace(delivery)
+        return None
 
     def save(self, delivery: OutboundDelivery) -> None:
         self.items[delivery.id] = delivery
@@ -500,9 +527,143 @@ class FakeOutboundDeliveryRepository:
             for delivery in self.items.values()
             if delivery.status is DeliveryStatus.QUEUED and delivery.available_at <= now
         ]
-        return sorted(deliveries, key=lambda delivery: (delivery.available_at, str(delivery.id)))[
-            :limit
+        return [
+            replace(delivery)
+            for delivery in sorted(
+                deliveries, key=lambda delivery: (delivery.available_at, str(delivery.id))
+            )[:limit]
         ]
+
+    def list_for_run(self, run_id: RunId) -> list[OutboundDelivery]:
+        return [
+            replace(delivery)
+            for delivery in self.items.values()
+            if delivery.source_run_id == run_id
+        ]
+
+    def list_for_schedule(self, schedule_id: ScheduleId) -> list[OutboundDelivery]:
+        if self._schedule_fires is None:
+            return []
+        fires = {fire.id for fire in self._schedule_fires.items if fire.schedule_id == schedule_id}
+        return [
+            replace(delivery)
+            for delivery in self.items.values()
+            if delivery.source_schedule_fire_id in fires
+        ]
+
+    def latest_for_route(self, route_id: str) -> OutboundDelivery | None:
+        matches = [delivery for delivery in self.items.values() if delivery.route_id == route_id]
+        latest = max(
+            matches, key=lambda delivery: (delivery.updated_at, str(delivery.id)), default=None
+        )
+        return replace(latest) if latest is not None else None
+
+    def cancel_if_queued(self, delivery_id: DeliveryId, at: datetime) -> OutboundDelivery | None:
+        delivery = self.items.get(delivery_id)
+        if delivery is None or delivery.status is not DeliveryStatus.QUEUED:
+            return None
+        delivery.cancel(at=at)
+        return replace(delivery)
+
+    def try_claim(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> int | None:
+        delivery = self.items.get(delivery_id)
+        if (
+            delivery is None
+            or delivery.status is not DeliveryStatus.QUEUED
+            or delivery.available_at > now
+        ):
+            return None
+        delivery.mark_sending(
+            at=now,
+            claim_owner=worker_id,
+            claim_token=claim_token,
+            claim_expires_at=lease_expires_at,
+        )
+        return delivery.claim_generation
+
+    def is_claim_active(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        delivery = self.items.get(delivery_id)
+        return bool(
+            delivery
+            and delivery.status is DeliveryStatus.SENDING
+            and delivery.claim_owner == worker_id
+            and delivery.claim_token == claim_token
+            and delivery.claim_generation == claim_generation
+            and delivery.claim_expires_at is not None
+            and delivery.claim_expires_at > now
+        )
+
+    def save_if_claimed(
+        self,
+        delivery: OutboundDelivery,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        if not self.is_claim_active(delivery.id, worker_id, claim_token, claim_generation, now):
+            return False
+        self.items[delivery.id] = delivery
+        return True
+
+    def recover_expired_sending(self, now: datetime) -> int:
+        recovered = 0
+        for delivery in self.items.values():
+            if (
+                delivery.status is DeliveryStatus.SENDING
+                and delivery.claim_expires_at is not None
+                and delivery.claim_expires_at <= now
+            ):
+                delivery.mark_ambiguous(
+                    at=now,
+                    failure_code="delivery_lease_expired",
+                    failure_message="delivery outcome is unknown after its worker lease expired",
+                )
+                recovered += 1
+        return recovered
+
+
+class FakeScheduleDeliveryPolicyRepository:
+    def __init__(self) -> None:
+        self.items: dict[ScheduleId, ScheduleDeliveryPolicy] = {}
+
+    def get(self, schedule_id: ScheduleId) -> ScheduleDeliveryPolicy | None:
+        return self.items.get(schedule_id)
+
+    def save(self, policy: ScheduleDeliveryPolicy) -> None:
+        self.items[policy.schedule_id] = policy
+
+    def delete(self, schedule_id: ScheduleId) -> None:
+        self.items.pop(schedule_id, None)
+
+
+class FakeScheduleFireDeliveryPlanRepository:
+    def __init__(self) -> None:
+        self.items: dict[RunId, ScheduleFireDeliveryPlan] = {}
+
+    def add(self, plan: ScheduleFireDeliveryPlan) -> None:
+        from friday.application.errors import EntityConflict
+
+        if plan.execution_id in self.items:
+            raise EntityConflict("write violated a uniqueness or state constraint")
+        self.items[plan.execution_id] = plan
+
+    def get_by_execution(self, execution_id: RunId) -> ScheduleFireDeliveryPlan | None:
+        return self.items.get(execution_id)
 
 
 class FakeApprovalRepository:
@@ -881,6 +1042,9 @@ class FakeUnitOfWork:
         self.step_repo = FakeRunStepRepository()
         self.tool_repo = FakeToolInvocationRepository()
         self.delivery_repo = FakeOutboundDeliveryRepository()
+        self.delivery_repo._schedule_fires = self.schedule_fire_repo
+        self.schedule_delivery_policy_repo = FakeScheduleDeliveryPolicyRepository()
+        self.schedule_fire_delivery_plan_repo = FakeScheduleFireDeliveryPlanRepository()
         self.approval_repo = FakeApprovalRepository()
         self.artifact_repo = FakeArtifactRepository()
         self.work_queue_repo = FakeRunWorkQueue()
@@ -933,6 +1097,14 @@ class FakeUnitOfWork:
     @property
     def deliveries(self) -> OutboundDeliveryRepository:
         return self.delivery_repo
+
+    @property
+    def schedule_delivery_policies(self) -> ScheduleDeliveryPolicyRepository:
+        return self.schedule_delivery_policy_repo
+
+    @property
+    def schedule_fire_delivery_plans(self) -> ScheduleFireDeliveryPlanRepository:
+        return self.schedule_fire_delivery_plan_repo
 
     @property
     def events(self) -> RunEventStore:

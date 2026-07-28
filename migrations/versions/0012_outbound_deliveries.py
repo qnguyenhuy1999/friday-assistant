@@ -40,6 +40,9 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "source_tool_invocation_id", name="uq_outbound_deliveries_source_tool_invocation_id"
         ),
+        sa.UniqueConstraint(
+            "source_schedule_fire_id", name="uq_outbound_deliveries_source_schedule_fire_id"
+        ),
         sa.CheckConstraint(
             "status IN ('queued', 'sending', 'delivered', 'failed', 'ambiguous', 'cancelled')",
             name="ck_outbound_deliveries_status",

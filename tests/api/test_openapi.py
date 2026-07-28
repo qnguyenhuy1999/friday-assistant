@@ -11,6 +11,7 @@ from apps.api.settings import ApiSettings
 EXPECTED_OPERATIONS = {
     ("GET", "/health", "getHealth"),
     ("GET", "/ready", "getReadiness"),
+    ("GET", "/v1/messaging/routes", "listMessagingRoutes"),
     ("POST", "/v1/conversations", "createConversation"),
     ("GET", "/v1/conversations/{conversation_id}", "getConversation"),
     ("GET", "/v1/conversations/{conversation_id}/turns", "listConversationTurns"),
@@ -25,6 +26,7 @@ EXPECTED_OPERATIONS = {
     ("POST", "/v1/tasks/{task_id}/schedules/{schedule_id}/pause", "pauseSchedule"),
     ("POST", "/v1/tasks/{task_id}/schedules/{schedule_id}/resume", "resumeSchedule"),
     ("POST", "/v1/tasks/{task_id}/schedules/{schedule_id}/cancel", "cancelSchedule"),
+    ("POST", "/v1/tasks/{task_id}/schedules/{schedule_id}/delivery", "setScheduleDelivery"),
     ("GET", "/v1/tasks/{task_id}/schedules/{schedule_id}/fires", "listScheduleFires"),
     ("GET", "/v1/tasks/{task_id}/runs", "listRunsForTask"),
     ("POST", "/v1/tasks/{task_id}/cancel", "cancelTask"),
@@ -33,6 +35,7 @@ EXPECTED_OPERATIONS = {
     ("GET", "/v1/tasks/{task_id}/events", "listTaskEvents"),
     ("GET", "/v1/runs/{run_id}", "getRun"),
     ("GET", "/v1/runs/{run_id}/result", "getRunResult"),
+    ("GET", "/v1/runs/{run_id}/deliveries", "listRunDeliveries"),
     ("GET", "/v1/runs/{run_id}/execution", "listRunsByExecution"),
     ("GET", "/v1/runs/{run_id}/latest-in-execution", "getLatestRunForExecution"),
     ("POST", "/v1/runs/{run_id}/start", "startQueuedRun"),
@@ -68,6 +71,9 @@ EXPECTED_OPERATIONS = {
     ("POST", "/v1/tool-invocations/{invocation_id}/fail", "markToolInvocationFailed"),
     ("POST", "/v1/tool-invocations/{invocation_id}/cancel", "cancelToolInvocation"),
     ("GET", "/v1/artifacts/{artifact_id}", "getArtifact"),
+    ("GET", "/v1/deliveries/{delivery_id}", "getDelivery"),
+    ("POST", "/v1/deliveries/{delivery_id}/cancel", "cancelDelivery"),
+    ("GET", "/v1/schedules/{schedule_id}/deliveries", "listScheduleDeliveries"),
 }
 
 

@@ -11,6 +11,7 @@ class CreateScheduleBody(BaseModel):
     cron: str | None = None
     run_at: datetime | None = None
     timezone: str = Field(default="UTC", min_length=1)
+    delivery_route_id: str | None = Field(default=None, min_length=1, max_length=64)
 
     @model_validator(mode="after")
     def valid_shape(self) -> CreateScheduleBody:
@@ -32,6 +33,13 @@ class ScheduleResponse(BaseModel):
     next_fire_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    delivery_route_id: str | None
+    delivery_route_description: str | None
+    delivery_enabled: bool | None
+
+
+class SetScheduleDeliveryBody(BaseModel):
+    delivery_route_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class SchedulePageResponse(BaseModel):

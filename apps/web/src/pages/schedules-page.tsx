@@ -5,6 +5,7 @@ import {
   useScheduleFires,
   useSchedules,
 } from "../hooks/use-schedules";
+import { useMessagingRoutes } from "../hooks/use-messaging-routes";
 
 function ScheduleRow({
   taskId,
@@ -20,6 +21,9 @@ function ScheduleRow({
     timezone: string;
     status: string;
     next_fire_at: string | null;
+    delivery_route_id?: string | null;
+    delivery_route_description?: string | null;
+    delivery_enabled?: boolean | null;
   };
   onInspect: (id: string) => void;
 }) {
@@ -31,6 +35,14 @@ function ScheduleRow({
       {schedule.kind === "cron"
         ? ` (${schedule.cron})`
         : ` (${schedule.run_at})`}
+      {schedule.delivery_route_id && (
+        <span>
+          {" "}
+          — delivery:{" "}
+          {schedule.delivery_route_description ?? schedule.delivery_route_id}
+          {schedule.delivery_enabled === false ? " (disabled)" : ""}
+        </span>
+      )}
       <button onClick={() => onInspect(schedule.id)}>Inspect fires</button>
       {schedule.status === "active" && (
         <button
@@ -72,10 +84,12 @@ export function SchedulesPage({
 }) {
   const schedules = useSchedules(taskId);
   const create = useCreateSchedule(taskId);
+  const messagingRoutes = useMessagingRoutes();
   const [kind, setKind] = useState<"once" | "cron">("once");
   const [runAt, setRunAt] = useState("");
   const [cron, setCron] = useState("0 9 * * 1-5");
   const [timezone, setTimezone] = useState("UTC");
+  const [deliveryRouteId, setDeliveryRouteId] = useState("");
   const [inspectedId, setInspectedId] = useState<string | null>(null);
   const fires = useScheduleFires(taskId, inspectedId);
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -83,9 +97,23 @@ export function SchedulesPage({
     if (kind === "once" && runAt)
       // datetime-local is wall time. Keep it raw; the API interprets it in
       // the selected IANA zone instead of accidentally applying browser TZ.
-      create.mutate({ kind, run_at: runAt, timezone });
+      create.mutate({
+        kind,
+        run_at: runAt,
+        timezone,
+        ...(deliveryRouteId.trim()
+          ? { delivery_route_id: deliveryRouteId.trim() }
+          : {}),
+      });
     if (kind === "cron" && cron.trim())
-      create.mutate({ kind, cron: cron.trim(), timezone });
+      create.mutate({
+        kind,
+        cron: cron.trim(),
+        timezone,
+        ...(deliveryRouteId.trim()
+          ? { delivery_route_id: deliveryRouteId.trim() }
+          : {}),
+      });
   }
   return (
     <section>
@@ -135,6 +163,24 @@ export function SchedulesPage({
             required
           />
         </label>
+        <label>
+          Delivery route (optional){" "}
+          <select
+            aria-label="Delivery route"
+            value={deliveryRouteId}
+            onChange={(event) => setDeliveryRouteId(event.target.value)}
+          >
+            <option value="">No automatic delivery</option>
+            {messagingRoutes.data?.items?.map((route) => (
+              <option key={route.route_id} value={route.route_id}>
+                {route.trusted_description} ({route.route_id})
+              </option>
+            ))}
+          </select>
+        </label>
+        {messagingRoutes.isError && (
+          <p role="alert">Failed to load available delivery routes.</p>
+        )}
         <button type="submit" disabled={create.isPending}>
           Create schedule
         </button>

@@ -266,6 +266,10 @@ class OutboundDeliveryRow(Base):
             "source_tool_invocation_id",
             name="uq_outbound_deliveries_source_tool_invocation_id",
         ),
+        UniqueConstraint(
+            "source_schedule_fire_id",
+            name="uq_outbound_deliveries_source_schedule_fire_id",
+        ),
         Index("ix_outbound_deliveries_due", "status", "available_at", "id"),
         CheckConstraint(
             "status IN ('queued', 'sending', 'delivered', 'failed', 'ambiguous', 'cancelled')",
@@ -313,6 +317,52 @@ class OutboundDeliveryRow(Base):
     created_at: Mapped[datetime]
     updated_at: Mapped[datetime]
     delivered_at: Mapped[datetime | None]
+
+
+class DeliveryAttemptRow(Base):
+    """Immutable claim audit with a fenced, safe final outcome."""
+
+    __tablename__ = "delivery_attempts"
+    __table_args__ = (
+        Index("ix_delivery_attempts_delivery_id", "delivery_id"),
+        CheckConstraint("attempt_number > 0", name="ck_delivery_attempts_attempt_number"),
+        CheckConstraint("claim_generation > 0", name="ck_delivery_attempts_claim_generation"),
+        CheckConstraint(
+            "outcome IN ('delivered', 'failed', 'ambiguous', 'queued') OR outcome IS NULL",
+            name="ck_delivery_attempts_outcome",
+        ),
+    )
+
+    delivery_id: Mapped[str] = mapped_column(ForeignKey("outbound_deliveries.id"), primary_key=True)
+    claim_generation: Mapped[int] = mapped_column(primary_key=True)
+    attempt_number: Mapped[int]
+    claim_owner: Mapped[str]
+    claimed_at: Mapped[datetime]
+    completed_at: Mapped[datetime | None]
+    outcome: Mapped[str | None]
+    failure_code: Mapped[str | None]
+
+
+class ScheduleDeliveryPolicyRow(Base):
+    __tablename__ = "schedule_delivery_policies"
+
+    schedule_id: Mapped[str] = mapped_column(ForeignKey("schedules.id"), primary_key=True)
+    route_id: Mapped[str]
+    route_fingerprint: Mapped[str]
+    enabled: Mapped[bool]
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+
+
+class ScheduleFireDeliveryPlanRow(Base):
+    __tablename__ = "schedule_fire_delivery_plans"
+    __table_args__ = (Index("ix_schedule_fire_delivery_plans_execution_id", "execution_id"),)
+
+    schedule_fire_id: Mapped[str] = mapped_column(ForeignKey("schedule_fires.id"), primary_key=True)
+    execution_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    route_id: Mapped[str]
+    route_fingerprint: Mapped[str]
+    created_at: Mapped[datetime]
 
 
 class RunEventRow(Base):

@@ -26,6 +26,7 @@
         "tool_execution",
         "filesystem_write",
         "network_access",
+        "external_communication",
         "computer_use",
         "other"
       ]

@@ -14,6 +14,7 @@ from sqlalchemy import Engine
 from apps.worker.computer_settings import ComputerSettings
 from apps.worker.mcp_settings import McpSettings
 from apps.worker.memory_settings import MemorySettings
+from apps.worker.messaging_settings import MessagingSettings
 from apps.worker.runtime_settings import RuntimeSettings
 from apps.worker.settings import WorkerSettings
 from apps.worker.worker_loop import WorkerLoop
@@ -21,6 +22,12 @@ from friday.application.agent_run_processor import AgentRunProcessor, RuntimeLim
 from friday.application.brain_runtime import BrainRuntime
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
 from friday.application.conversation_context import ConversationContextAssembler
+from friday.application.delivery_dispatcher import DeliveryDispatcher
+from friday.application.delivery_lifecycle import (
+    ClaimNextDelivery,
+    PersistDeliveryOutcome,
+    VerifyDeliveryClaim,
+)
 from friday.application.materialize_due_schedule import MaterializeDueSchedules
 from friday.application.memory.index_coordination import (
     BuildMemoryIndex,
@@ -66,6 +73,8 @@ from friday.infrastructure.memory.graphify_cli import GraphifyCliIndexBuilder, G
 from friday.infrastructure.memory.graphify_json import GraphifyJsonIndex, GraphifyJsonIndexSettings
 from friday.infrastructure.memory.lexical_index import LexicalIndexStore
 from friday.infrastructure.memory.obsidian_vault import ObsidianVaultStore
+from friday.infrastructure.messaging.message_tool_gateway import MessageToolGateway
+from friday.infrastructure.messaging.webhook_transport import WebhookTransport
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
 from friday.infrastructure.tools.composite import CompositeToolGateway
@@ -367,6 +376,8 @@ def _compose_worker(
         max_delay=settings.retry_max_delay,
     )
     memory = _memory_stack(uow_factory)
+    messaging = MessagingSettings.from_env()
+    messaging.validate_lease(settings.lease_duration)
     workspace_gateway = WorkspaceToolGateway(  # raises WorkspaceAccessDenied
         WorkspaceToolGatewaySettings(
             workspace_root=runtime.workspace_root,
@@ -382,15 +393,21 @@ def _compose_worker(
     computer_gateway = _computer_gateway(runtime)  # raises ComputerUseUnavailable
     if computer_gateway is not None:
         resources.callback(computer_gateway.close)
+    message_gateway = (
+        MessageToolGateway(uow_factory, clock, messaging.routes) if messaging.enabled else None
+    )
     mcp_gateway = _mcp_gateway(
         workspace_gateway,
         *((computer_gateway,) if computer_gateway is not None else ()),
+        *((message_gateway,) if message_gateway is not None else ()),
     )
     if mcp_gateway is not None:
         resources.callback(mcp_gateway.close)
     gateways: list[ToolGateway] = [workspace_gateway]
     if computer_gateway is not None:
         gateways.append(computer_gateway)
+    if message_gateway is not None:
+        gateways.append(message_gateway)
     if mcp_gateway is not None:
         gateways.append(mcp_gateway)
     # ONE composite instance for both the brain manifest and execution: two
@@ -442,6 +459,26 @@ def _compose_worker(
         materialize_due_schedules=(
             MaterializeDueSchedules(uow_factory, clock, batch_size=settings.maintenance_batch_size)
             if settings.scheduler_enabled
+            else None
+        ),
+        delivery_dispatcher=(
+            DeliveryDispatcher(
+                claim_next=ClaimNextDelivery(
+                    uow_factory,
+                    clock,
+                    worker_id=settings.worker_id,
+                    lease_duration=settings.lease_duration,
+                    candidate_limit=settings.candidate_limit,
+                ),
+                verify_claim=VerifyDeliveryClaim(uow_factory, clock),
+                persist_outcome=PersistDeliveryOutcome(uow_factory, clock),
+                uow_factory=uow_factory,
+                clock=clock,
+                routes=messaging.routes,
+                transport=WebhookTransport(),
+                retry_policy=retry_policy,
+            )
+            if messaging.enabled
             else None
         ),
         clock=clock,

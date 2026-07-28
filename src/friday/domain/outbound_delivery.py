@@ -255,6 +255,18 @@ class OutboundDelivery:
         self.updated_at = ensure_utc(at)
         self.status = DeliveryStatus.FAILED
 
+    def block(self, *, at: datetime, failure_code: str, failure_message: str) -> None:
+        """Record a policy refusal before dispatch; this is never retried."""
+        self._require_status(DeliveryStatus.QUEUED, target=DeliveryStatus.FAILED)
+        self.failure_code = _bounded(
+            failure_code, field="failure_code", maximum=MAX_FAILURE_CODE_LENGTH
+        )
+        self.failure_message = _bounded(
+            failure_message, field="failure_message", maximum=MAX_FAILURE_MESSAGE_LENGTH
+        )
+        self.updated_at = ensure_utc(at)
+        self.status = DeliveryStatus.FAILED
+
     def mark_ambiguous(self, *, at: datetime, failure_code: str, failure_message: str) -> None:
         self._require_status(DeliveryStatus.SENDING, target=DeliveryStatus.AMBIGUOUS)
         self.failure_code = _bounded(
@@ -265,6 +277,20 @@ class OutboundDelivery:
         )
         self.updated_at = ensure_utc(at)
         self.status = DeliveryStatus.AMBIGUOUS
+
+    def requeue(self, *, at: datetime, available_at: datetime) -> None:
+        """Retry only a failure proven to have occurred before dispatch."""
+        self._require_status(DeliveryStatus.SENDING, target=DeliveryStatus.QUEUED)
+        available = ensure_utc(available_at)
+        now = ensure_utc(at)
+        if available <= now:
+            raise DomainValidationError("OutboundDelivery retry availability must be in the future")
+        self.status = DeliveryStatus.QUEUED
+        self.available_at = available
+        self.claim_owner = None
+        self.claim_token = None
+        self.claim_expires_at = None
+        self.updated_at = now
 
     def cancel(self, *, at: datetime) -> None:
         self._require_status(DeliveryStatus.QUEUED, target=DeliveryStatus.CANCELLED)

@@ -29,6 +29,7 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "approval_requests",
             "artifacts",
             "tool_invocations",
+            "outbound_deliveries",
             "run_events",
             "run_work_items",
             "run_event_sequence_counters",
@@ -53,6 +54,16 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             check["name"] for check in inspector.get_check_constraints("conversation_turns")
         }
         assert "ck_conversation_turns_input_mode" in turn_checks
+        delivery_checks = {
+            check["name"] for check in inspector.get_check_constraints("outbound_deliveries")
+        }
+        assert {
+            "ck_outbound_deliveries_status",
+            "ck_outbound_deliveries_attempt_count",
+            "ck_outbound_deliveries_source_shape",
+            "ck_outbound_deliveries_route_fingerprint_hex",
+            "ck_outbound_deliveries_body_sha256_hex",
+        } <= delivery_checks
     finally:
         engine.dispose()
 

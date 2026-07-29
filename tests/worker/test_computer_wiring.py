@@ -358,6 +358,7 @@ def _worker_settings(tmp_path: Path) -> WorkerSettings:
         database_url=f"sqlite:///{tmp_path / 'wiring.db'}",
         worker_id="wiring-worker",
         lease_duration=timedelta(seconds=60),
+        delivery_lease_duration=timedelta(seconds=90),
         candidate_limit=10,
         poll_interval_seconds=0.01,
         heartbeat_interval_seconds=0.05,

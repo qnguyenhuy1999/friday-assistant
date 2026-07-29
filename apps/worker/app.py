@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from sqlalchemy import Engine
 
 from apps.worker.computer_settings import ComputerSettings
+from apps.worker.delivery_worker import DeliveryWorker
 from apps.worker.mcp_settings import McpSettings
 from apps.worker.memory_settings import MemorySettings
 from apps.worker.messaging_settings import MessagingSettings
@@ -22,6 +23,11 @@ from friday.application.agent_run_processor import AgentRunProcessor, RuntimeLim
 from friday.application.brain_runtime import BrainRuntime
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
 from friday.application.conversation_context import ConversationContextAssembler
+from friday.application.delivery_lifecycle import (
+    ClaimNextDelivery,
+    MarkDeliveryDispatchStarted,
+    PersistDeliveryOutcome,
+)
 from friday.application.materialize_due_schedule import MaterializeDueSchedules
 from friday.application.memory.index_coordination import (
     BuildMemoryIndex,
@@ -67,10 +73,12 @@ from friday.infrastructure.memory.graphify_cli import GraphifyCliIndexBuilder, G
 from friday.infrastructure.memory.graphify_json import GraphifyJsonIndex, GraphifyJsonIndexSettings
 from friday.infrastructure.memory.lexical_index import LexicalIndexStore
 from friday.infrastructure.memory.obsidian_vault import ObsidianVaultStore
+from friday.infrastructure.messaging.dispatcher import DeliveryDispatcher
 from friday.infrastructure.messaging.message_tool_gateway import (
     MessageToolGateway,
     MessageToolGatewaySettings,
 )
+from friday.infrastructure.messaging.webhook_transport import WebhookTransport
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
 from friday.infrastructure.tools.composite import CompositeToolGateway
@@ -389,6 +397,11 @@ def _compose_worker(
     if computer_gateway is not None:
         resources.callback(computer_gateway.close)
     messaging_routes = MessagingSettings.from_env().routes()
+    # Only enabled routes can consume delivery-lease time, so a disabled route
+    # (or messaging being off entirely) must not constrain worker configuration.
+    settings.validate_delivery_timeouts(
+        tuple(route.timeout_seconds for route in messaging_routes if route.enabled)
+    )
     message_gateway = (
         MessageToolGateway(
             MessageToolGatewaySettings(
@@ -462,6 +475,25 @@ def _compose_worker(
             MaterializeDueSchedules(uow_factory, clock, batch_size=settings.maintenance_batch_size)
             if settings.scheduler_enabled
             else None
+        ),
+        delivery_worker=DeliveryWorker(
+            DeliveryDispatcher(
+                claim_next=ClaimNextDelivery(
+                    uow_factory,
+                    clock,
+                    retry_policy,
+                    worker_id=settings.worker_id,
+                    # Delivery holds its own lease: a webhook round trip and an
+                    # agent run have nothing to do with each other's timing.
+                    lease_duration=settings.delivery_lease_duration,
+                    candidate_limit=settings.candidate_limit,
+                ),
+                dispatch_started=MarkDeliveryDispatchStarted(uow_factory, clock),
+                persist_outcome=PersistDeliveryOutcome(uow_factory, clock),
+                uow_factory=uow_factory,
+                routes=messaging_routes,
+                transport=WebhookTransport(),
+            )
         ),
         clock=clock,
         refresh_memory_index=memory.refresh_index,

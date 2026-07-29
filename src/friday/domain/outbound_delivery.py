@@ -363,6 +363,26 @@ class OutboundDelivery:
         self.updated_at = ensure_utc(at)
         self.status = DeliveryStatus.AMBIGUOUS
 
+    def mark_route_ambiguous(
+        self, *, at: datetime, failure_code: str, failure_message: str
+    ) -> None:
+        """Park a delivery whose approved route authority has changed.
+
+        Unlike ``mark_ambiguous``, this is a pre-dispatch safety stop: no
+        external effect is implied, but it would be unsafe to silently retarget
+        the already-approved intent.  The dispatch marker intentionally stays
+        unset so the audit trail distinguishes the two cases.
+        """
+        self._require_status(DeliveryStatus.SENDING, target=DeliveryStatus.AMBIGUOUS)
+        self.failure_code = _bounded(
+            failure_code, field="failure_code", maximum=MAX_FAILURE_CODE_LENGTH
+        )
+        self.failure_message = _bounded(
+            failure_message, field="failure_message", maximum=MAX_FAILURE_MESSAGE_LENGTH
+        )
+        self.updated_at = ensure_utc(at)
+        self.status = DeliveryStatus.AMBIGUOUS
+
     def cancel(self, *, at: datetime) -> None:
         self._require_status(DeliveryStatus.QUEUED, target=DeliveryStatus.CANCELLED)
         self.updated_at = ensure_utc(at)

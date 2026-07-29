@@ -30,6 +30,10 @@ class MemoryIndexRefresh(Protocol):
     def execute(self) -> object: ...
 
 
+class OutboundDeliveryWorker(Protocol):
+    def run_once(self) -> bool: ...
+
+
 class WorkerLoop:
     def __init__(
         self,
@@ -49,6 +53,7 @@ class WorkerLoop:
         refresh_memory_index: MemoryIndexRefresh | None = None,
         memory_index_maintenance_interval_seconds: float | None = None,
         materialize_due_schedules: MaterializeDueSchedules | None = None,
+        delivery_worker: OutboundDeliveryWorker | None = None,
     ) -> None:
         self._claim_next_run = claim_next_run
         self._renew_lease = renew_lease
@@ -59,6 +64,7 @@ class WorkerLoop:
         self._recover_expired_leases = recover_expired_leases
         self._expire_due_approvals = expire_due_approvals
         self._materialize_due_schedules = materialize_due_schedules
+        self._delivery_worker = delivery_worker
         self._clock = clock
         self._refresh_memory_index = refresh_memory_index
         self._memory_index_maintenance_interval_seconds = memory_index_maintenance_interval_seconds
@@ -72,9 +78,9 @@ class WorkerLoop:
         processor: RunProcessor | None,
         shutdown_event: threading.Event | None = None,
     ) -> bool:
-        if processor is None:
-            return False
         if shutdown_event is not None and shutdown_event.is_set():
+            return False
+        if processor is None:
             return False
         claim = self._claim_next_run.execute()
         if claim is None:
@@ -280,11 +286,39 @@ class WorkerLoop:
     def serve_forever(
         self, shutdown_event: threading.Event, processor: RunProcessor | None = None
     ) -> None:
+        stop_deliveries = threading.Event()
+        delivery_thread: threading.Thread | None = None
+        if self._delivery_worker is not None:
+            delivery_thread = threading.Thread(
+                target=self._serve_deliveries,
+                args=(shutdown_event, stop_deliveries),
+                name="delivery-dispatcher",
+            )
+            delivery_thread.start()
         last_maintenance = time.monotonic()
-        while not shutdown_event.is_set():
-            if time.monotonic() - last_maintenance >= self._maintenance_interval_seconds:
-                self.run_maintenance_tick()
-                last_maintenance = time.monotonic()
+        try:
+            while not shutdown_event.is_set():
+                if time.monotonic() - last_maintenance >= self._maintenance_interval_seconds:
+                    self.run_maintenance_tick()
+                    last_maintenance = time.monotonic()
 
-            if processor is None or not self.run_once(processor, shutdown_event):
-                shutdown_event.wait(timeout=self._poll_interval_seconds)
+                if not self.run_once(processor, shutdown_event):
+                    shutdown_event.wait(timeout=self._poll_interval_seconds)
+        finally:
+            stop_deliveries.set()
+            if delivery_thread is not None:
+                delivery_thread.join()
+
+    def _serve_deliveries(
+        self, shutdown_event: threading.Event, stop_deliveries: threading.Event
+    ) -> None:
+        """Keep delivery failures isolated from the agent-run worker loop."""
+        assert self._delivery_worker is not None
+        while not shutdown_event.is_set() and not stop_deliveries.is_set():
+            try:
+                worked = self._delivery_worker.run_once()
+            except Exception:  # noqa: BLE001 - delivery must not stop run processing
+                lifecycle_log(logger, logging.ERROR, "worker.delivery_dispatch_failed")
+                worked = False
+            if not worked:
+                stop_deliveries.wait(timeout=self._poll_interval_seconds)

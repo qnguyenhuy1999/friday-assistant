@@ -117,6 +117,26 @@ def test_run_once_returns_false_without_processor() -> None:
     assert loop.run_once(None) is False
 
 
+def test_delivery_loop_isolated_from_dispatcher_errors() -> None:
+    _, _, loop, _ = _run_and_loop(ProcessingOutcome.succeeded())
+    shutdown = Event()
+
+    class DeliveryWorker:
+        calls = 0
+
+        def run_once(self) -> bool:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("delivery database unavailable")
+            shutdown.set()
+            return False
+
+    delivery_worker = DeliveryWorker()
+    loop._delivery_worker = delivery_worker
+    loop.serve_forever(shutdown)
+    assert delivery_worker.calls == 2
+
+
 def test_run_once_returns_false_when_nothing_is_due() -> None:
     uow, _, loop, processor = _run_and_loop(ProcessingOutcome.succeeded())
     uow.work_queue_repo.enqueue(

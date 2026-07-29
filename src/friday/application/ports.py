@@ -333,6 +333,9 @@ class RunEventStore(Protocol):
 class OutboundDeliveryRepository(Protocol):
     def add(self, delivery: OutboundDelivery) -> None: ...
     def get(self, delivery_id: DeliveryId) -> OutboundDelivery | None: ...
+    def get_by_source_tool_invocation_id(
+        self, invocation_id: ToolInvocationId
+    ) -> OutboundDelivery | None: ...
 
     def list_due(self, now: datetime, limit: int) -> list[OutboundDelivery]:
         """Read-only QUEUED selection, ordered by available_at then id."""

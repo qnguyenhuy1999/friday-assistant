@@ -205,6 +205,51 @@ Bootstrap:
 just bootstrap
 ```
 
+### Running locally
+
+Friday runs as three processes against a local SQLite database. Apply
+migrations first, then start the API, worker, and web control plane.
+
+```bash
+# 1. Apply migrations (see note below on the injected database URL)
+uv run python -c "
+from alembic import command
+from alembic.config import Config
+c = Config('alembic.ini')
+c.set_main_option('sqlalchemy.url', 'sqlite:///./friday.db')
+command.upgrade(c, 'head')"
+
+# 2. API — binds to 127.0.0.1:8000
+uv run python -m apps.api.main
+
+# 3. Worker — the workspace root is mandatory and has no default
+export FRIDAY_WORKER_WORKSPACE_ROOT="$PWD/workspaces/local"
+just worker-check   # non-mutating preflight
+just worker
+
+# 4. Web control plane — http://localhost:5173
+pnpm --filter @friday/web dev
+```
+
+Two local-setup constraints are easy to trip over:
+
+- `alembic.ini` deliberately omits `sqlalchemy.url`, and `migrations/env.py`
+  reads only that ini option. Nothing injects `FRIDAY_API_DATABASE_URL`, so
+  `alembic upgrade head` on its own fails with `KeyError: 'url'`. Set the URL
+  explicitly as shown above.
+- `FRIDAY_WORKER_WORKSPACE_ROOT` has no default: tools are confined to it, so
+  worker startup and preflight both fail closed when it is unset. It is not
+  listed in `.env.example`.
+
+No dotenv file is loaded automatically. Copy `.env.example` and export the
+values you need; otherwise the safe local defaults apply — SQLite at
+`./friday.db`, loopback binding, and memory, computer use, and MCP disabled.
+
+Verify the stack is healthy with `GET /health` (liveness) and `GET /ready`
+(database reachable and migrated to the current Alembic head). See the
+[operations runbook](docs/operations-runbook.md) for startup, diagnosis, and
+safe configuration.
+
 Fast validation:
 
 ```bash

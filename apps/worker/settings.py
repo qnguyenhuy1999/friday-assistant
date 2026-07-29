@@ -8,7 +8,8 @@ from datetime import timedelta
 from math import isfinite
 
 _DEFAULT_DATABASE_URL = "sqlite:///./friday.db"
-_DEFAULT_LEASE_SECONDS = 60.0
+_DEFAULT_LEASE_SECONDS = 65.0
+_DELIVERY_LEASE_SAFETY_MARGIN_SECONDS = 5.0
 _DEFAULT_CANDIDATE_LIMIT = 10
 _DEFAULT_POLL_INTERVAL_SECONDS = 1.0
 _DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 20.0
@@ -82,6 +83,16 @@ class WorkerSettings:
             raise ValueError("retry_max_delay must be positive")
         if self.retry_max_delay < self.retry_base_delay:
             raise ValueError("retry_max_delay must be at least retry_base_delay")
+
+    def validate_delivery_timeouts(self, timeout_seconds: tuple[float, ...]) -> None:
+        """Require enough delivery-lease time for a webhook timeout and persistence."""
+        max_timeout = max(timeout_seconds, default=0.0)
+        required = max_timeout + _DELIVERY_LEASE_SAFETY_MARGIN_SECONDS
+        if self.lease_duration.total_seconds() <= required:
+            raise ValueError(
+                "lease_duration must exceed the longest webhook timeout by "
+                f"at least {_DELIVERY_LEASE_SAFETY_MARGIN_SECONDS:g} seconds"
+            )
 
     @classmethod
     def from_env(cls) -> WorkerSettings:

@@ -66,16 +66,25 @@ def test_posts_json_body_with_only_content_type(monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.parametrize(
-    ("error", "code"),
+    ("error", "code", "outcome"),
     [
-        (HTTPError("https://x", 404, "no", Message(), None), "webhook_http_4xx"),
-        (HTTPError("https://x", 503, "no", Message(), None), "webhook_http_5xx"),
-        (TimeoutError(), "webhook_timeout"),
-        (URLError("connection refused"), "webhook_connection_error"),
+        (
+            HTTPError("https://x", 404, "no", Message(), None),
+            "webhook_http_4xx",
+            TransportOutcome.FAILED,
+        ),
+        (
+            HTTPError("https://x", 503, "no", Message(), None),
+            "webhook_http_5xx",
+            TransportOutcome.FAILED,
+        ),
+        (TimeoutError(), "webhook_timeout", TransportOutcome.AMBIGUOUS),
+        (URLError("connection refused"), "webhook_connection_error", TransportOutcome.AMBIGUOUS),
+        (URLError(TimeoutError()), "webhook_timeout", TransportOutcome.AMBIGUOUS),
     ],
 )
 def test_expected_webhook_failures_are_mapped_without_details(
-    monkeypatch: pytest.MonkeyPatch, error: Exception, code: str
+    monkeypatch: pytest.MonkeyPatch, error: Exception, code: str, outcome: TransportOutcome
 ) -> None:
     def fail(*_: object, **__: object) -> _Response:
         raise error
@@ -84,5 +93,5 @@ def test_expected_webhook_failures_are_mapped_without_details(
         open = staticmethod(fail)
 
     result = WebhookTransport(Opener()).send(_request())
-    assert result.outcome is TransportOutcome.FAILED
+    assert result.outcome is outcome
     assert result.failure_code == code

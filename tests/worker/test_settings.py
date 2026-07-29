@@ -47,6 +47,13 @@ def test_valid_settings_construct_without_error() -> None:
     assert settings.worker_id == "worker-1"
 
 
+def test_delivery_timeout_must_leave_lease_safety_margin() -> None:
+    settings = WorkerSettings(**_valid_kwargs())
+    with pytest.raises(ValueError, match="longest webhook timeout"):
+        settings.validate_delivery_timeouts((56.0,))
+    settings.validate_delivery_timeouts((54.0,))
+
+
 def test_empty_worker_id_raises() -> None:
     kwargs = _valid_kwargs()
     kwargs["worker_id"] = ""

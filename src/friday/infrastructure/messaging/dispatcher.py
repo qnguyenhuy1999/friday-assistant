@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -37,6 +38,7 @@ _TRANSPORT_EXCEPTION_MESSAGE = "Webhook transport failed without a delivery resu
 
 class DispatchResult(StrEnum):
     IDLE = "idle"
+    CLAIM_LOST = "claim_lost"
     DELIVERED = "delivered"
     FAILED = "failed"
     AMBIGUOUS = "ambiguous"
@@ -63,29 +65,43 @@ class DeliveryDispatcher:
             return DispatchResult.IDLE
         delivery = self._load_claimed_delivery(claim.delivery_id)
         if delivery is None:
-            return DispatchResult.IDLE
+            return DispatchResult.CLAIM_LOST
         if delivery.dispatch_started_at is not None:
-            self.persist_outcome.mark_ambiguous(
-                claim, failure_code=ALREADY_DISPATCHED, failure_message=_ALREADY_DISPATCHED_MESSAGE
-            )
+            if not self._persist(
+                lambda: self.persist_outcome.mark_ambiguous(
+                    claim,
+                    failure_code=ALREADY_DISPATCHED,
+                    failure_message=_ALREADY_DISPATCHED_MESSAGE,
+                )
+            ):
+                return DispatchResult.CLAIM_LOST
             return DispatchResult.AMBIGUOUS
         route = next((item for item in self.routes if item.route_id == delivery.route_id), None)
         if route is None:
-            self.persist_outcome.fail(
-                claim, failure_code=ROUTE_MISSING, failure_message=_ROUTE_MISSING_MESSAGE
-            )
+            if not self._persist(
+                lambda: self.persist_outcome.fail(
+                    claim, failure_code=ROUTE_MISSING, failure_message=_ROUTE_MISSING_MESSAGE
+                )
+            ):
+                return DispatchResult.CLAIM_LOST
             return DispatchResult.FAILED
         if not route.enabled:
-            self.persist_outcome.fail(
-                claim, failure_code=ROUTE_DISABLED, failure_message=_ROUTE_DISABLED_MESSAGE
-            )
+            if not self._persist(
+                lambda: self.persist_outcome.fail(
+                    claim, failure_code=ROUTE_DISABLED, failure_message=_ROUTE_DISABLED_MESSAGE
+                )
+            ):
+                return DispatchResult.CLAIM_LOST
             return DispatchResult.FAILED
         if route.fingerprint != delivery.route_fingerprint:
-            self.persist_outcome.mark_route_ambiguous(
-                claim,
-                failure_code=ROUTE_FINGERPRINT_MISMATCH,
-                failure_message=_ROUTE_FINGERPRINT_MESSAGE,
-            )
+            if not self._persist(
+                lambda: self.persist_outcome.mark_route_ambiguous(
+                    claim,
+                    failure_code=ROUTE_FINGERPRINT_MISMATCH,
+                    failure_message=_ROUTE_FINGERPRINT_MESSAGE,
+                )
+            ):
+                return DispatchResult.CLAIM_LOST
             return DispatchResult.AMBIGUOUS
         try:
             self.dispatch_started.execute(claim)
@@ -94,21 +110,47 @@ class DeliveryDispatcher:
         try:
             result = self.transport.send(TransportRequest(route, delivery.body))
         except Exception:  # noqa: BLE001 - never expose transport exception details
-            self.persist_outcome.fail(
-                claim,
-                failure_code=TRANSPORT_EXCEPTION,
-                failure_message=_TRANSPORT_EXCEPTION_MESSAGE,
-            )
-            return DispatchResult.FAILED
+            if not self._persist(
+                lambda: self.persist_outcome.mark_ambiguous(
+                    claim,
+                    failure_code=TRANSPORT_EXCEPTION,
+                    failure_message=_TRANSPORT_EXCEPTION_MESSAGE,
+                )
+            ):
+                return DispatchResult.CLAIM_LOST
+            return DispatchResult.AMBIGUOUS
         if result.outcome is TransportOutcome.DELIVERED:
-            self.persist_outcome.deliver(claim)
+            if not self._persist(lambda: self.persist_outcome.deliver(claim)):
+                return DispatchResult.CLAIM_LOST
             return DispatchResult.DELIVERED
-        self.persist_outcome.fail(
-            claim,
-            failure_code=result.failure_code or "webhook_transport_error",
-            failure_message="Webhook delivery failed.",
-        )
+        if result.outcome is TransportOutcome.AMBIGUOUS:
+            if not self._persist(
+                lambda: self.persist_outcome.mark_ambiguous(
+                    claim,
+                    failure_code=result.failure_code or "webhook_transport_error",
+                    failure_message="Webhook delivery outcome is unknown.",
+                )
+            ):
+                return DispatchResult.CLAIM_LOST
+            return DispatchResult.AMBIGUOUS
+        if not self._persist(
+            lambda: self.persist_outcome.fail(
+                claim,
+                failure_code=result.failure_code or "webhook_transport_error",
+                failure_message="Webhook delivery failed.",
+            )
+        ):
+            return DispatchResult.CLAIM_LOST
         return DispatchResult.FAILED
+
+    @staticmethod
+    def _persist(action: Callable[[], None]) -> bool:
+        """Return false when recovery has fenced this worker out."""
+        try:
+            action()
+        except ClaimLost:
+            return False
+        return True
 
     def _load_claimed_delivery(self, delivery_id: DeliveryId) -> OutboundDelivery | None:
         with self.uow_factory() as uow:

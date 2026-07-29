@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from types import TracebackType
 from typing import Protocol, Self
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from friday.infrastructure.messaging.transport_models import TransportRequest, TransportResult
@@ -59,11 +59,15 @@ class WebhookTransport:
                 return TransportResult.failed("webhook_http_5xx")
             return TransportResult.failed("webhook_http_unexpected_response")
         except TimeoutError:
-            return TransportResult.failed("webhook_timeout")
+            return TransportResult.ambiguous("webhook_timeout")
+        except URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                return TransportResult.ambiguous("webhook_timeout")
+            return TransportResult.ambiguous("webhook_connection_error")
         except OSError:
-            return TransportResult.failed("webhook_connection_error")
+            return TransportResult.ambiguous("webhook_connection_error")
         except Exception:  # noqa: BLE001 - transport must not leak exception text
-            return TransportResult.failed("webhook_transport_error")
+            return TransportResult.ambiguous("webhook_transport_error")
         if 200 <= status < 300:
             return TransportResult.delivered()
         if 400 <= status < 500:

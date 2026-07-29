@@ -80,12 +80,11 @@ class WorkerLoop:
     ) -> bool:
         if shutdown_event is not None and shutdown_event.is_set():
             return False
-        delivered = self._delivery_worker.run_once() if self._delivery_worker is not None else False
         if processor is None:
-            return delivered
+            return False
         claim = self._claim_next_run.execute()
         if claim is None:
-            return delivered
+            return False
         fields = {
             "task_id": claim.task_id,
             "run_id": claim.run_id,
@@ -287,11 +286,39 @@ class WorkerLoop:
     def serve_forever(
         self, shutdown_event: threading.Event, processor: RunProcessor | None = None
     ) -> None:
+        stop_deliveries = threading.Event()
+        delivery_thread: threading.Thread | None = None
+        if self._delivery_worker is not None:
+            delivery_thread = threading.Thread(
+                target=self._serve_deliveries,
+                args=(shutdown_event, stop_deliveries),
+                name="delivery-dispatcher",
+            )
+            delivery_thread.start()
         last_maintenance = time.monotonic()
-        while not shutdown_event.is_set():
-            if time.monotonic() - last_maintenance >= self._maintenance_interval_seconds:
-                self.run_maintenance_tick()
-                last_maintenance = time.monotonic()
+        try:
+            while not shutdown_event.is_set():
+                if time.monotonic() - last_maintenance >= self._maintenance_interval_seconds:
+                    self.run_maintenance_tick()
+                    last_maintenance = time.monotonic()
 
-            if processor is None or not self.run_once(processor, shutdown_event):
-                shutdown_event.wait(timeout=self._poll_interval_seconds)
+                if not self.run_once(processor, shutdown_event):
+                    shutdown_event.wait(timeout=self._poll_interval_seconds)
+        finally:
+            stop_deliveries.set()
+            if delivery_thread is not None:
+                delivery_thread.join()
+
+    def _serve_deliveries(
+        self, shutdown_event: threading.Event, stop_deliveries: threading.Event
+    ) -> None:
+        """Keep delivery failures isolated from the agent-run worker loop."""
+        assert self._delivery_worker is not None
+        while not shutdown_event.is_set() and not stop_deliveries.is_set():
+            try:
+                worked = self._delivery_worker.run_once()
+            except Exception:  # noqa: BLE001 - delivery must not stop run processing
+                lifecycle_log(logger, logging.ERROR, "worker.delivery_dispatch_failed")
+                worked = False
+            if not worked:
+                stop_deliveries.wait(timeout=self._poll_interval_seconds)

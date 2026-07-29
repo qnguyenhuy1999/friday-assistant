@@ -397,6 +397,7 @@ def _compose_worker(
     if computer_gateway is not None:
         resources.callback(computer_gateway.close)
     messaging_routes = MessagingSettings.from_env().routes()
+    settings.validate_delivery_timeouts(tuple(route.timeout_seconds for route in messaging_routes))
     message_gateway = (
         MessageToolGateway(
             MessageToolGatewaySettings(

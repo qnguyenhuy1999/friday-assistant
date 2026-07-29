@@ -11,6 +11,7 @@ from friday.infrastructure.messaging.config import MessagingRoute
 class TransportOutcome(StrEnum):
     DELIVERED = "delivered"
     FAILED = "failed"
+    AMBIGUOUS = "ambiguous"
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,3 +34,8 @@ class TransportResult:
     @classmethod
     def failed(cls, failure_code: str) -> TransportResult:
         return cls(TransportOutcome.FAILED, failure_code)
+
+    @classmethod
+    def ambiguous(cls, failure_code: str) -> TransportResult:
+        """The request crossed the client boundary but no response was received."""
+        return cls(TransportOutcome.AMBIGUOUS, failure_code)

@@ -14,6 +14,7 @@ from friday.application.delivery_lifecycle import (
     MarkDeliveryDispatchStarted,
     PersistDeliveryOutcome,
 )
+from friday.application.errors import ClaimLost
 from friday.application.retry_policy import RetryPolicy
 from friday.domain.identifiers import DeliveryId, RunId, ToolInvocationId
 from friday.domain.outbound_delivery import DeliverySourceKind, DeliveryStatus, OutboundDelivery
@@ -122,11 +123,8 @@ def test_successful_delivery_marks_boundary_before_transport_and_delivers() -> N
     assert transport.requests is not None and transport.requests[0].body == SECRET_BODY
 
 
-@pytest.mark.parametrize(
-    "failure_code",
-    ["webhook_http_4xx", "webhook_http_5xx", "webhook_timeout", "webhook_connection_error"],
-)
-def test_transport_failures_are_terminal_without_retries(failure_code: str) -> None:
+@pytest.mark.parametrize("failure_code", ["webhook_http_4xx", "webhook_http_5xx"])
+def test_response_failures_are_terminal_without_retries(failure_code: str) -> None:
     uow, clock, route = FakeUnitOfWork(), FakeClock(T0), _route()
     delivery = _delivery(route)
     uow.deliveries.add(delivery)
@@ -137,6 +135,24 @@ def test_transport_failures_are_terminal_without_retries(failure_code: str) -> N
     assert dispatcher.dispatch_once() is DispatchResult.FAILED
     stored = uow.deliveries.get(delivery.id)
     assert stored is not None and stored.status is DeliveryStatus.FAILED
+    assert stored.failure_code == failure_code and stored.dispatch_started_at == T0
+
+
+@pytest.mark.parametrize("failure_code", ["webhook_timeout", "webhook_connection_error"])
+def test_no_response_transport_failures_are_ambiguous(failure_code: str) -> None:
+    uow, clock, route = FakeUnitOfWork(), FakeClock(T0), _route()
+    delivery = _delivery(route)
+    uow.deliveries.add(delivery)
+    dispatcher = _dispatcher(
+        uow,
+        clock,
+        RecordingTransport(TransportResult.ambiguous(failure_code)),
+        (route,),
+    )
+
+    assert dispatcher.dispatch_once() is DispatchResult.AMBIGUOUS
+    stored = uow.deliveries.get(delivery.id)
+    assert stored is not None and stored.status is DeliveryStatus.AMBIGUOUS
     assert stored.failure_code == failure_code and stored.dispatch_started_at == T0
 
 
@@ -203,7 +219,7 @@ def test_already_dispatched_delivery_is_never_sent() -> None:
     assert transport.requests is None
 
 
-def test_transport_exception_is_failed_without_exception_text_leakage() -> None:
+def test_transport_exception_is_ambiguous_without_exception_text_leakage() -> None:
     uow, clock, route = FakeUnitOfWork(), FakeClock(T0), _route()
     delivery = _delivery(route)
     uow.deliveries.add(delivery)
@@ -214,11 +230,43 @@ def test_transport_exception_is_failed_without_exception_text_leakage() -> None:
         (route,),
     )
 
-    assert dispatcher.dispatch_once() is DispatchResult.FAILED
+    assert dispatcher.dispatch_once() is DispatchResult.AMBIGUOUS
     stored = uow.deliveries.get(delivery.id)
-    assert stored is not None and stored.failure_code == TRANSPORT_EXCEPTION
+    assert stored is not None and stored.status is DeliveryStatus.AMBIGUOUS
+    assert stored.failure_code == TRANSPORT_EXCEPTION
     assert SECRET_ENDPOINT not in (stored.failure_message or "")
     assert SECRET_BODY not in (stored.failure_message or "")
+
+
+def test_lost_outcome_claim_is_contained() -> None:
+    uow, clock, route = FakeUnitOfWork(), FakeClock(T0), _route()
+    delivery = _delivery(route)
+    uow.deliveries.add(delivery)
+
+    class LostOutcome:
+        def deliver(self, _: DeliveryClaim) -> None:
+            raise ClaimLost("outcome fenced")
+
+    factory = CountingUnitOfWorkFactory(uow)
+    dispatcher = DeliveryDispatcher(
+        ClaimNextDelivery(
+            factory,
+            clock,
+            RETRY,
+            worker_id="delivery-worker",
+            lease_duration=LEASE,
+            candidate_limit=10,
+        ),
+        MarkDeliveryDispatchStarted(factory, clock),
+        cast(PersistDeliveryOutcome, LostOutcome()),
+        factory,
+        (route,),
+        RecordingTransport(),
+    )
+
+    assert dispatcher.dispatch_once() is DispatchResult.CLAIM_LOST
+    stored = uow.deliveries.get(delivery.id)
+    assert stored is not None and stored.status is DeliveryStatus.SENDING
 
 
 def test_secret_values_are_not_exposed_by_transport_models_or_routes() -> None:

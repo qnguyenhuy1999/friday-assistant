@@ -750,6 +750,257 @@ class OutboundDeliveryRepository:
         )
         return [outbound_delivery_from_row(row) for row in self._session.execute(stmt).scalars()]
 
+    def find_expired_claims(self, now: object, limit: int) -> list[OutboundDelivery]:
+        stmt = (
+            select(OutboundDeliveryRow)
+            .where(
+                OutboundDeliveryRow.status == DeliveryStatus.SENDING.value,
+                OutboundDeliveryRow.claim_expires_at.is_not(None),
+                OutboundDeliveryRow.claim_expires_at <= now,
+            )
+            .order_by(OutboundDeliveryRow.claim_expires_at, OutboundDeliveryRow.id)
+            .limit(limit)
+        )
+        return [outbound_delivery_from_row(row) for row in self._session.execute(stmt).scalars()]
+
+    def try_claim(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        now: object,
+        lease_expires_at: object,
+    ) -> int | None:
+        """Atomically claim one due QUEUED delivery; return its new generation.
+
+        Claiming is a single fenced UPDATE, never read-modify-write: two
+        workers racing on the same row produce exactly one `rowcount == 1`.
+        """
+        stmt = (
+            update(OutboundDeliveryRow)
+            .where(
+                OutboundDeliveryRow.id == str(delivery_id),
+                OutboundDeliveryRow.status == DeliveryStatus.QUEUED.value,
+                OutboundDeliveryRow.available_at <= now,
+            )
+            .values(
+                status=DeliveryStatus.SENDING.value,
+                claim_owner=worker_id,
+                claim_token=claim_token,
+                claim_generation=OutboundDeliveryRow.claim_generation + 1,
+                claim_expires_at=lease_expires_at,
+                attempt_count=OutboundDeliveryRow.attempt_count + 1,
+                updated_at=now,
+            )
+            .returning(OutboundDeliveryRow.claim_generation)
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        generations = result.scalars().all()
+        return cast(int, generations[0]) if len(generations) == 1 else None
+
+    def _active_claim_predicate(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        generation: int,
+        now: object,
+    ) -> tuple[Any, ...]:
+        return (
+            OutboundDeliveryRow.id == str(delivery_id),
+            OutboundDeliveryRow.status == DeliveryStatus.SENDING.value,
+            OutboundDeliveryRow.claim_owner == worker_id,
+            OutboundDeliveryRow.claim_token == claim_token,
+            OutboundDeliveryRow.claim_generation == generation,
+            OutboundDeliveryRow.claim_expires_at.is_not(None),
+            OutboundDeliveryRow.claim_expires_at > now,
+        )
+
+    def is_claim_active(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: object,
+    ) -> bool:
+        stmt = select(func.count()).where(
+            *self._active_claim_predicate(
+                delivery_id, worker_id, claim_token, claim_generation, now
+            )
+        )
+        return bool(self._session.execute(stmt).scalar_one())
+
+    def mark_dispatch_started(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: object,
+    ) -> bool:
+        """Durably cross the external side-effect boundary, once, under claim."""
+        stmt = (
+            update(OutboundDeliveryRow)
+            .where(
+                *self._active_claim_predicate(
+                    delivery_id, worker_id, claim_token, claim_generation, now
+                ),
+                OutboundDeliveryRow.dispatch_started_at.is_(None),
+            )
+            .values(dispatch_started_at=now, updated_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
+
+    def save_claimed_lifecycle(
+        self,
+        delivery: OutboundDelivery,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: object,
+    ) -> bool:
+        """Persist lifecycle state only, fenced by an exact unexpired claim.
+
+        Authority and content columns (route binding, subject, body, digest,
+        source identity) are never in the SET clause, so no worker — current
+        or stale — can retarget a delivery through an outcome write.
+        `attempt_count`, `claim_generation` and `dispatch_started_at` are
+        excluded too: they change only via `try_claim` and
+        `mark_dispatch_started`.
+        """
+        stmt = (
+            update(OutboundDeliveryRow)
+            .where(
+                *self._active_claim_predicate(
+                    delivery_id=delivery.id,
+                    worker_id=worker_id,
+                    claim_token=claim_token,
+                    generation=claim_generation,
+                    now=now,
+                )
+            )
+            .values(
+                status=delivery.status.value,
+                available_at=delivery.available_at,
+                claim_owner=delivery.claim_owner,
+                claim_token=delivery.claim_token,
+                claim_expires_at=delivery.claim_expires_at,
+                provider_message_id=delivery.provider_message_id,
+                failure_code=delivery.failure_code,
+                failure_message=delivery.failure_message,
+                delivered_at=delivery.delivered_at,
+                updated_at=delivery.updated_at,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
+
+    def _expired_claim_predicate(
+        self, delivery_id: DeliveryId, claim_generation: int, now: object
+    ) -> tuple[Any, ...]:
+        return (
+            OutboundDeliveryRow.id == str(delivery_id),
+            OutboundDeliveryRow.status == DeliveryStatus.SENDING.value,
+            OutboundDeliveryRow.claim_generation == claim_generation,
+            OutboundDeliveryRow.claim_expires_at.is_not(None),
+            OutboundDeliveryRow.claim_expires_at <= now,
+        )
+
+    def requeue_expired_pre_dispatch(
+        self, delivery_id: DeliveryId, claim_generation: int, now: object, available_at: object
+    ) -> bool:
+        """Requeue an expired claim whose dispatch boundary was never crossed.
+
+        `dispatch_started_at IS NULL` is the whole safety argument for this
+        transition: no external message can exist yet, so a retry cannot
+        duplicate one. `attempt_count` and `claim_generation` are preserved.
+        """
+        stmt = (
+            update(OutboundDeliveryRow)
+            .where(
+                *self._expired_claim_predicate(delivery_id, claim_generation, now),
+                OutboundDeliveryRow.dispatch_started_at.is_(None),
+            )
+            .values(
+                status=DeliveryStatus.QUEUED.value,
+                available_at=available_at,
+                claim_owner=None,
+                claim_token=None,
+                claim_expires_at=None,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
+
+    def fail_expired_pre_dispatch(
+        self,
+        delivery_id: DeliveryId,
+        claim_generation: int,
+        now: object,
+        failure_code: str,
+        failure_message: str,
+    ) -> bool:
+        """Terminally fail an expired pre-dispatch claim with no retry budget."""
+        stmt = (
+            update(OutboundDeliveryRow)
+            .where(
+                *self._expired_claim_predicate(delivery_id, claim_generation, now),
+                OutboundDeliveryRow.dispatch_started_at.is_(None),
+            )
+            .values(
+                status=DeliveryStatus.FAILED.value,
+                claim_owner=None,
+                claim_token=None,
+                claim_expires_at=None,
+                failure_code=failure_code,
+                failure_message=failure_message,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
+
+    def mark_expired_post_dispatch_ambiguous(
+        self,
+        delivery_id: DeliveryId,
+        claim_generation: int,
+        now: object,
+        failure_code: str,
+        failure_message: str,
+    ) -> bool:
+        """Park an expired claim that may already have sent an external message.
+
+        `dispatch_started_at IS NOT NULL` means the side effect cannot be
+        ruled out, so this is terminal: never requeued automatically.
+        """
+        stmt = (
+            update(OutboundDeliveryRow)
+            .where(
+                *self._expired_claim_predicate(delivery_id, claim_generation, now),
+                OutboundDeliveryRow.dispatch_started_at.is_not(None),
+            )
+            .values(
+                status=DeliveryStatus.AMBIGUOUS.value,
+                claim_owner=None,
+                claim_token=None,
+                claim_expires_at=None,
+                failure_code=failure_code,
+                failure_message=failure_message,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
+
 
 class RunEventStore:
     def __init__(self, session: Session) -> None:

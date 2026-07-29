@@ -339,6 +339,93 @@ class OutboundDeliveryRepository(Protocol):
         """Read-only QUEUED selection, ordered by available_at then id."""
         ...
 
+    def find_expired_claims(self, now: datetime, limit: int) -> list[OutboundDelivery]:
+        """Read-only SENDING selection whose claim lease has expired."""
+        ...
+
+    def try_claim(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> int | None:
+        """Atomically claim a due QUEUED delivery.
+
+        Returns the new claim_generation when exactly one row moved to
+        SENDING, else None. Must be one fenced UPDATE, not read-then-write.
+        """
+        ...
+
+    def is_claim_active(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        """Durably verify an exact, unexpired SENDING claim. Fails closed."""
+        ...
+
+    def mark_dispatch_started(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        """Cross the durable external side-effect boundary exactly once."""
+        ...
+
+    def save_claimed_lifecycle(
+        self,
+        delivery: OutboundDelivery,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        """Persist lifecycle fields only, fenced by an exact unexpired claim.
+
+        Authority, content and source columns must never be written here.
+        """
+        ...
+
+    def requeue_expired_pre_dispatch(
+        self,
+        delivery_id: DeliveryId,
+        claim_generation: int,
+        now: datetime,
+        available_at: datetime,
+    ) -> bool:
+        """Requeue an expired claim with dispatch_started_at IS NULL."""
+        ...
+
+    def fail_expired_pre_dispatch(
+        self,
+        delivery_id: DeliveryId,
+        claim_generation: int,
+        now: datetime,
+        failure_code: str,
+        failure_message: str,
+    ) -> bool:
+        """Terminally fail an expired pre-dispatch claim out of retry budget."""
+        ...
+
+    def mark_expired_post_dispatch_ambiguous(
+        self,
+        delivery_id: DeliveryId,
+        claim_generation: int,
+        now: datetime,
+        failure_code: str,
+        failure_message: str,
+    ) -> bool:
+        """Park an expired claim with dispatch_started_at IS NOT NULL."""
+        ...
+
 
 class TaskEventStore(Protocol):
     def append(self, event: TaskEvent) -> None: ...

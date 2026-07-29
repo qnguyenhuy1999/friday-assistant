@@ -72,6 +72,45 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             ("source_tool_invocation_id",),
             ("source_schedule_fire_id",),
         }
+        delivery_columns = {
+            column["name"]: column for column in inspector.get_columns("outbound_deliveries")
+        }
+        # 0013: the durable dispatch boundary marker. Nullable by design —
+        # NULL means the external side effect definitely has not begun.
+        assert "dispatch_started_at" in delivery_columns
+        assert delivery_columns["dispatch_started_at"]["nullable"] is True
+    finally:
+        engine.dispose()
+
+
+def test_delivery_claim_fencing_revision_is_reversible(tmp_path: Path) -> None:
+    """0013 must add and drop dispatch_started_at without losing the table."""
+    db_path = tmp_path / "migrate-0013.db"
+    config = _alembic_config(db_path)
+    command.upgrade(config, "0013")
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        columns = {column["name"] for column in inspect(engine).get_columns("outbound_deliveries")}
+        assert "dispatch_started_at" in columns
+    finally:
+        engine.dispose()
+
+    command.downgrade(config, "0012")
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        inspector = inspect(engine)
+        assert "outbound_deliveries" in inspector.get_table_names()
+        columns = {column["name"] for column in inspector.get_columns("outbound_deliveries")}
+        assert "dispatch_started_at" not in columns
+        assert "body_sha256" in columns
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "0013")
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        columns = {column["name"] for column in inspect(engine).get_columns("outbound_deliveries")}
+        assert "dispatch_started_at" in columns
     finally:
         engine.dispose()
 

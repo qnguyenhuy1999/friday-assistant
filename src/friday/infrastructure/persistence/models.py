@@ -317,6 +317,7 @@ class OutboundDeliveryRow(Base):
     created_at: Mapped[datetime]
     updated_at: Mapped[datetime]
     delivered_at: Mapped[datetime | None]
+    dispatch_started_at: Mapped[datetime | None]
 
 
 class RunEventRow(Base):

@@ -96,6 +96,7 @@ class OutboundDelivery:
     created_at: datetime
     updated_at: datetime
     delivered_at: datetime | None
+    dispatch_started_at: datetime | None = None
     _authority_frozen: bool = field(init=False, default=False, repr=False)
 
     _AUTHORITY_FIELDS = frozenset(
@@ -163,6 +164,7 @@ class OutboundDelivery:
             created_at=created,
             updated_at=created,
             delivered_at=None,
+            dispatch_started_at=None,
         )
 
     def __post_init__(self) -> None:
@@ -215,6 +217,9 @@ class OutboundDelivery:
         self.updated_at = ensure_utc(self.updated_at)
         self.claim_expires_at = ensure_utc(self.claim_expires_at) if self.claim_expires_at else None
         self.delivered_at = ensure_utc(self.delivered_at) if self.delivered_at else None
+        self.dispatch_started_at = (
+            ensure_utc(self.dispatch_started_at) if self.dispatch_started_at else None
+        )
         self._authority_frozen = True
 
     def _validate_source_shape(self) -> None:
@@ -257,8 +262,55 @@ class OutboundDelivery:
 
     claim = mark_sending
 
+    def mark_dispatch_started(self, *, at: datetime) -> None:
+        """Cross the durable external side-effect boundary, exactly once.
+
+        After this point a crash can no longer be interpreted as "nothing was
+        sent": recovery must treat the delivery as AMBIGUOUS rather than
+        requeue it.  The marker is one-way — it is never moved backward and
+        never cleared.
+        """
+        self._require_status(DeliveryStatus.SENDING, target=DeliveryStatus.SENDING)
+        if self.dispatch_started_at is not None:
+            raise InvalidStateTransition("OutboundDelivery", "dispatch_started", "dispatch_started")
+        at = ensure_utc(at)
+        if self.claim_expires_at is None or self.claim_expires_at <= at:
+            raise DomainValidationError(
+                "OutboundDelivery dispatch requires an unexpired claim lease"
+            )
+        self.dispatch_started_at = at
+        self.updated_at = at
+
+    def release_for_retry(self, *, at: datetime, available_at: datetime) -> None:
+        """Return a pre-dispatch SENDING delivery to QUEUED for a later retry.
+
+        Only legal while the external boundary has definitely not been
+        crossed.  `attempt_count` and `claim_generation` are preserved so
+        retry budget and fencing history survive the requeue.
+        """
+        self._require_status(DeliveryStatus.SENDING, target=DeliveryStatus.QUEUED)
+        if self.dispatch_started_at is not None:
+            raise InvalidStateTransition("OutboundDelivery", "dispatch_started", "queued")
+        at = ensure_utc(at)
+        retry_at = ensure_utc(available_at)
+        if retry_at < at:
+            raise DomainValidationError(
+                "OutboundDelivery retry availability must not be in the past"
+            )
+        self.claim_owner = None
+        self.claim_token = None
+        self.claim_expires_at = None
+        self.available_at = retry_at
+        self.status = DeliveryStatus.QUEUED
+        self.updated_at = at
+
+    def _require_dispatch_boundary(self, target: DeliveryStatus) -> None:
+        if self.dispatch_started_at is None:
+            raise InvalidStateTransition("OutboundDelivery", "sending", target.value)
+
     def deliver(self, *, at: datetime, provider_message_id: str | None = None) -> None:
         self._require_status(DeliveryStatus.SENDING, target=DeliveryStatus.DELIVERED)
+        self._require_dispatch_boundary(DeliveryStatus.DELIVERED)
         self.provider_message_id = _optional_bounded(
             provider_message_id,
             field="provider_message_id",
@@ -281,6 +333,7 @@ class OutboundDelivery:
 
     def mark_ambiguous(self, *, at: datetime, failure_code: str, failure_message: str) -> None:
         self._require_status(DeliveryStatus.SENDING, target=DeliveryStatus.AMBIGUOUS)
+        self._require_dispatch_boundary(DeliveryStatus.AMBIGUOUS)
         self.failure_code = _bounded(
             failure_code, field="failure_code", maximum=MAX_FAILURE_CODE_LENGTH
         )

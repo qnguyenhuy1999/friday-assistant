@@ -6,6 +6,7 @@ repository holds real in-memory state as of Phase 8."""
 from __future__ import annotations
 
 import builtins
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import TracebackType
@@ -474,6 +475,11 @@ class FakeToolInvocationRepository:
         return invocations[:limit]
 
 
+def _expired_claim_order(delivery: OutboundDelivery) -> tuple[datetime, str]:
+    assert delivery.claim_expires_at is not None
+    return (delivery.claim_expires_at, str(delivery.id))
+
+
 class FakeOutboundDeliveryRepository:
     def __init__(self) -> None:
         self.items: dict[DeliveryId, OutboundDelivery] = {}
@@ -494,10 +500,13 @@ class FakeOutboundDeliveryRepository:
         self.items[delivery.id] = delivery
 
     def get(self, delivery_id: DeliveryId) -> OutboundDelivery | None:
-        return self.items.get(delivery_id)
+        stored = self.items.get(delivery_id)
+        # Detached copy, like a real read: a caller mutating the aggregate must
+        # go through a fenced write for the change to become durable.
+        return deepcopy(stored) if stored is not None else None
 
     def save(self, delivery: OutboundDelivery) -> None:
-        self.items[delivery.id] = delivery
+        self.items[delivery.id] = deepcopy(delivery)
 
     def list_due(self, now: datetime, limit: int) -> list[OutboundDelivery]:
         deliveries = [
@@ -505,9 +514,177 @@ class FakeOutboundDeliveryRepository:
             for delivery in self.items.values()
             if delivery.status is DeliveryStatus.QUEUED and delivery.available_at <= now
         ]
-        return sorted(deliveries, key=lambda delivery: (delivery.available_at, str(delivery.id)))[
-            :limit
+        deliveries.sort(key=lambda delivery: (delivery.available_at, str(delivery.id)))
+        return [deepcopy(delivery) for delivery in deliveries[:limit]]
+
+    def find_expired_claims(self, now: datetime, limit: int) -> list[OutboundDelivery]:
+        expired = [
+            delivery
+            for delivery in self.items.values()
+            if delivery.status is DeliveryStatus.SENDING
+            and delivery.claim_expires_at is not None
+            and delivery.claim_expires_at <= now
         ]
+        expired.sort(key=_expired_claim_order)
+        return [deepcopy(delivery) for delivery in expired[:limit]]
+
+    def try_claim(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> int | None:
+        delivery = self.items.get(delivery_id)
+        if (
+            delivery is None
+            or delivery.status is not DeliveryStatus.QUEUED
+            or delivery.available_at > now
+        ):
+            return None
+        delivery.mark_sending(
+            at=now,
+            claim_owner=worker_id,
+            claim_token=claim_token,
+            claim_expires_at=lease_expires_at,
+        )
+        return delivery.claim_generation
+
+    def _active_claim(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> OutboundDelivery | None:
+        delivery = self.items.get(delivery_id)
+        if (
+            delivery is None
+            or delivery.status is not DeliveryStatus.SENDING
+            or delivery.claim_owner != worker_id
+            or delivery.claim_token != claim_token
+            or delivery.claim_generation != claim_generation
+            or delivery.claim_expires_at is None
+            or delivery.claim_expires_at <= now
+        ):
+            return None
+        return delivery
+
+    def is_claim_active(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        return (
+            self._active_claim(delivery_id, worker_id, claim_token, claim_generation, now)
+            is not None
+        )
+
+    def mark_dispatch_started(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        delivery = self._active_claim(delivery_id, worker_id, claim_token, claim_generation, now)
+        if delivery is None or delivery.dispatch_started_at is not None:
+            return False
+        delivery.mark_dispatch_started(at=now)
+        return True
+
+    def save_claimed_lifecycle(
+        self,
+        delivery: OutboundDelivery,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        stored = self._active_claim(delivery.id, worker_id, claim_token, claim_generation, now)
+        if stored is None:
+            return False
+        # Mirror the SQL SET list: lifecycle columns only. Authority, content,
+        # attempt_count, claim_generation and dispatch_started_at keep the
+        # stored values, so a fenced write can never retarget a delivery.
+        stored.status = delivery.status
+        stored.available_at = delivery.available_at
+        stored.claim_owner = delivery.claim_owner
+        stored.claim_token = delivery.claim_token
+        stored.claim_expires_at = delivery.claim_expires_at
+        stored.provider_message_id = delivery.provider_message_id
+        stored.failure_code = delivery.failure_code
+        stored.failure_message = delivery.failure_message
+        stored.delivered_at = delivery.delivered_at
+        stored.updated_at = delivery.updated_at
+        return True
+
+    def requeue_expired_pre_dispatch(
+        self,
+        delivery_id: DeliveryId,
+        claim_generation: int,
+        now: datetime,
+        available_at: datetime,
+    ) -> bool:
+        delivery = self._expired_claim(delivery_id, claim_generation, now)
+        if delivery is None or delivery.dispatch_started_at is not None:
+            return False
+        delivery.release_for_retry(at=now, available_at=available_at)
+        return True
+
+    def fail_expired_pre_dispatch(
+        self,
+        delivery_id: DeliveryId,
+        claim_generation: int,
+        now: datetime,
+        failure_code: str,
+        failure_message: str,
+    ) -> bool:
+        delivery = self._expired_claim(delivery_id, claim_generation, now)
+        if delivery is None or delivery.dispatch_started_at is not None:
+            return False
+        delivery.fail(at=now, failure_code=failure_code, failure_message=failure_message)
+        delivery.claim_owner = None
+        delivery.claim_token = None
+        delivery.claim_expires_at = None
+        return True
+
+    def mark_expired_post_dispatch_ambiguous(
+        self,
+        delivery_id: DeliveryId,
+        claim_generation: int,
+        now: datetime,
+        failure_code: str,
+        failure_message: str,
+    ) -> bool:
+        delivery = self._expired_claim(delivery_id, claim_generation, now)
+        if delivery is None or delivery.dispatch_started_at is None:
+            return False
+        delivery.mark_ambiguous(at=now, failure_code=failure_code, failure_message=failure_message)
+        delivery.claim_owner = None
+        delivery.claim_token = None
+        delivery.claim_expires_at = None
+        return True
+
+    def _expired_claim(
+        self, delivery_id: DeliveryId, claim_generation: int, now: datetime
+    ) -> OutboundDelivery | None:
+        delivery = self.items.get(delivery_id)
+        if (
+            delivery is None
+            or delivery.status is not DeliveryStatus.SENDING
+            or delivery.claim_generation != claim_generation
+            or delivery.claim_expires_at is None
+            or delivery.claim_expires_at > now
+        ):
+            return None
+        return delivery
 
 
 class FakeApprovalRepository:

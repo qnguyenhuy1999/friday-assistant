@@ -6,6 +6,50 @@ Phase 19 will make outbound messaging a durable workflow: an approved message in
 
 Step 1 implements only the durable substrate. `OutboundDelivery` records immutable authority, source identity, route binding, and message content; its lifecycle supports `queued → sending`, `sending → delivered|failed|ambiguous`, and `queued → cancelled`. The `outbound_deliveries` schema, repository, and unit-of-work wiring preserve those records and enforce one delivery per tool invocation or schedule fire.
 
+## Implemented: Step 2
+
+Step 2 makes delivery ownership and the external side-effect boundary durable, so a later dispatcher can send at most one external message per delivery and any crash is recoverable into an honest state. It adds no transport and performs no network I/O.
+
+### The dispatch boundary invariant
+
+A claimed delivery must distinguish two situations that look identical from outside. `dispatch_started_at` is the durable marker separating them:
+
+```text
+QUEUED
+  -> claimed SENDING, dispatch_started_at = NULL     (nothing was sent)
+  -> dispatch boundary, dispatch_started_at = <time> (a send may have happened)
+  -> future external I/O
+```
+
+Without this marker, recovery has only bad options: treating every expired `SENDING` as `QUEUED` risks duplicate external messages, and treating every expired `SENDING` as `AMBIGUOUS` loses deliveries that crashed before anything was sent. `MarkDeliveryDispatchStarted` commits the marker in its own short transaction, which a future dispatcher must execute immediately before its first external write.
+
+The marker is one-way: set once, never moved backward, never cleared. In the domain, `deliver()` and `mark_ambiguous()` are illegal before the boundary is crossed (both imply a send may exist), while `fail()` stays legal for a definite pre-dispatch failure. `release_for_retry()` is legal only *before* the boundary.
+
+### Recovery
+
+`RecoverExpiredDeliveryClaims` resolves every expired lease deterministically, using the existing `RetryPolicy` for bounded backoff rather than a second retry implementation:
+
+| Expired `SENDING` claim | Outcome |
+| --- | --- |
+| `dispatch_started_at IS NULL`, retry budget remains | back to `QUEUED` with `available_at = now + RetryPolicy` backoff; `attempt_count` and `claim_generation` preserved |
+| `dispatch_started_at IS NULL`, budget exhausted | `FAILED` with `delivery_pre_dispatch_attempts_exhausted` |
+| `dispatch_started_at IS NOT NULL` | `AMBIGUOUS` with `delivery_lease_expired_after_dispatch`, never resent automatically |
+
+Failure codes are Friday-owned and stable; recovery never persists untrusted external error text.
+
+### Claim fencing
+
+`ClaimNextDelivery` opens one short unit of work, recovers expired claims, lists a bounded set of due `QUEUED` candidates, and attempts an atomic claim per candidate. Claiming is a single fenced `UPDATE` on `(id, status = queued, available_at <= now)` that sets `SENDING`, the claim owner and token, `claim_generation + 1`, the lease expiry, and `attempt_count + 1` — never a read-modify-write. Two workers racing on the same row therefore produce exactly one successful claim. No transaction wraps external I/O.
+
+Every subsequent mutation is fenced on delivery id, `status = sending`, exact claim owner, exact claim token, exact `claim_generation`, and an unexpired lease (equality with `claim_expires_at` counts as expired). Stale or expired claims fail closed with `ClaimLost`. Because the generation advances on each new claim, a worker from a recovered generation can never overwrite the recovered state:
+
+```text
+generation 1 claims -> lease expires -> recovery -> generation 2 claims
+                                     -> every generation-1 write matches no row
+```
+
+Fenced outcome writes (`PersistDeliveryOutcome`) update lifecycle columns only. Route binding, subject, body, body digest, and source identity are never in the `SET` clause, so no worker — current or stale — can retarget a delivery through an outcome write. `attempt_count`, `claim_generation`, and `dispatch_started_at` are likewise excluded: they change only through `try_claim` and `mark_dispatch_started`.
+
 ## Deferred Phase 19 work
 
-Transport adapters, `message.send`, approvals, dispatching, claims/recovery orchestration, retry or requeue policy, scheduled-delivery policy/fire-plan bridging, worker polling, API/UI/SDK surfaces, and webhook delivery are later steps. Step 1 does not send messages or materialize scheduled deliveries.
+Transport adapters, `message.send`, approvals and `EXTERNAL_COMMUNICATION` wiring, the delivery dispatcher, worker polling, messaging route/settings configuration, scheduled-delivery policy and fire-plan bridging, delivery attempt history, and API/UI/SDK surfaces are later steps. Steps 1 and 2 do not send messages or materialize scheduled deliveries.

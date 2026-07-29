@@ -468,6 +468,7 @@ def outbound_delivery_to_row(delivery: OutboundDelivery) -> OutboundDeliveryRow:
         created_at=delivery.created_at,
         updated_at=delivery.updated_at,
         delivered_at=delivery.delivered_at,
+        dispatch_started_at=delivery.dispatch_started_at,
     )
 
 
@@ -504,6 +505,9 @@ def outbound_delivery_from_row(row: OutboundDeliveryRow) -> OutboundDelivery:
         created_at=_read_back_utc(row.created_at),
         updated_at=_read_back_utc(row.updated_at),
         delivered_at=_read_back_utc(row.delivered_at) if row.delivered_at else None,
+        dispatch_started_at=(
+            _read_back_utc(row.dispatch_started_at) if row.dispatch_started_at else None
+        ),
     )
 
 

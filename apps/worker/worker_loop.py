@@ -30,6 +30,10 @@ class MemoryIndexRefresh(Protocol):
     def execute(self) -> object: ...
 
 
+class OutboundDeliveryWorker(Protocol):
+    def run_once(self) -> bool: ...
+
+
 class WorkerLoop:
     def __init__(
         self,
@@ -49,6 +53,7 @@ class WorkerLoop:
         refresh_memory_index: MemoryIndexRefresh | None = None,
         memory_index_maintenance_interval_seconds: float | None = None,
         materialize_due_schedules: MaterializeDueSchedules | None = None,
+        delivery_worker: OutboundDeliveryWorker | None = None,
     ) -> None:
         self._claim_next_run = claim_next_run
         self._renew_lease = renew_lease
@@ -59,6 +64,7 @@ class WorkerLoop:
         self._recover_expired_leases = recover_expired_leases
         self._expire_due_approvals = expire_due_approvals
         self._materialize_due_schedules = materialize_due_schedules
+        self._delivery_worker = delivery_worker
         self._clock = clock
         self._refresh_memory_index = refresh_memory_index
         self._memory_index_maintenance_interval_seconds = memory_index_maintenance_interval_seconds
@@ -72,13 +78,14 @@ class WorkerLoop:
         processor: RunProcessor | None,
         shutdown_event: threading.Event | None = None,
     ) -> bool:
-        if processor is None:
-            return False
         if shutdown_event is not None and shutdown_event.is_set():
             return False
+        delivered = self._delivery_worker.run_once() if self._delivery_worker is not None else False
+        if processor is None:
+            return delivered
         claim = self._claim_next_run.execute()
         if claim is None:
-            return False
+            return delivered
         fields = {
             "task_id": claim.task_id,
             "run_id": claim.run_id,

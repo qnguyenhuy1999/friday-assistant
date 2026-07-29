@@ -254,6 +254,16 @@ class PersistDeliveryOutcome:
 
         self._apply(claim, transition)
 
+    def mark_route_ambiguous(
+        self, claim: DeliveryClaim, *, failure_code: str, failure_message: str
+    ) -> None:
+        def transition(delivery: OutboundDelivery, now: datetime) -> None:
+            delivery.mark_route_ambiguous(
+                at=now, failure_code=failure_code, failure_message=failure_message
+            )
+
+        self._apply(claim, transition)
+
     def _apply(self, claim: DeliveryClaim, transition: _Transition) -> None:
         with self._uow_factory() as uow:
             now = self._clock.now()

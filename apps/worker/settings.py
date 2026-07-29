@@ -8,7 +8,14 @@ from datetime import timedelta
 from math import isfinite
 
 _DEFAULT_DATABASE_URL = "sqlite:///./friday.db"
-_DEFAULT_LEASE_SECONDS = 65.0
+_DEFAULT_LEASE_SECONDS = 60.0
+#: Outbound delivery holds its own lease, sized for a webhook round trip rather
+#: than for an agent run. Keeping it separate means a webhook timeout can never
+#: silently stretch the run lease (and its heartbeat margin) underneath the
+#: agent-run loop. The default clears the longest route timeout the messaging
+#: config will accept (`MAX_TIMEOUT_SECONDS`, 60s) plus the safety margin, so
+#: any valid route configuration starts up without operator tuning.
+_DEFAULT_DELIVERY_LEASE_SECONDS = 90.0
 _DELIVERY_LEASE_SAFETY_MARGIN_SECONDS = 5.0
 _DEFAULT_CANDIDATE_LIMIT = 10
 _DEFAULT_POLL_INTERVAL_SECONDS = 1.0
@@ -20,6 +27,19 @@ _DEFAULT_RETRY_BASE_DELAY_SECONDS = 5.0
 _DEFAULT_RETRY_MULTIPLIER = 2.0
 _DEFAULT_RETRY_MAX_DELAY_SECONDS = 300.0
 _DEFAULT_SCHEDULER_ENABLED = True
+
+
+def _positive_finite_seconds(name: str, default: float) -> timedelta:
+    """Parse a duration whose non-finite values must fail as a config error.
+
+    `timedelta` rejects NaN and infinity with its own `ValueError`/`OverflowError`,
+    so the check happens here while the value is still a float and the message can
+    name the variable the operator actually set.
+    """
+    seconds = float(os.environ.get(name, default))
+    if not isfinite(seconds) or seconds <= 0:
+        raise ValueError(f"{name} must be positive and finite")
+    return timedelta(seconds=seconds)
 
 
 def _strict_bool(name: str, default: bool) -> bool:
@@ -39,6 +59,7 @@ class WorkerSettings:
     database_url: str
     worker_id: str
     lease_duration: timedelta
+    delivery_lease_duration: timedelta
     candidate_limit: int
     poll_interval_seconds: float
     heartbeat_interval_seconds: float
@@ -55,6 +76,8 @@ class WorkerSettings:
             raise ValueError("worker_id must not be empty or whitespace-only")
         if self.lease_duration <= timedelta(0):
             raise ValueError("lease_duration must be positive")
+        if self.delivery_lease_duration <= timedelta(0):
+            raise ValueError("delivery_lease_duration must be positive")
         if not isfinite(self.heartbeat_interval_seconds) or self.heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat_interval_seconds must be positive and finite")
         if self.heartbeat_interval_seconds >= self.lease_duration.total_seconds():
@@ -85,12 +108,20 @@ class WorkerSettings:
             raise ValueError("retry_max_delay must be at least retry_base_delay")
 
     def validate_delivery_timeouts(self, timeout_seconds: tuple[float, ...]) -> None:
-        """Require enough delivery-lease time for a webhook timeout and persistence."""
+        """Require enough delivery-lease time for a webhook timeout and persistence.
+
+        Only the delivery lease is checked. A webhook timeout says nothing about
+        how long an agent run may hold the run lease, so messaging configuration
+        must never force unrelated worker retuning — pass only the enabled
+        routes' timeouts, and passing none is a no-op.
+        """
         max_timeout = max(timeout_seconds, default=0.0)
+        if not max_timeout:
+            return
         required = max_timeout + _DELIVERY_LEASE_SAFETY_MARGIN_SECONDS
-        if self.lease_duration.total_seconds() <= required:
+        if self.delivery_lease_duration.total_seconds() <= required:
             raise ValueError(
-                "lease_duration must exceed the longest webhook timeout by "
+                "delivery_lease_duration must exceed the longest webhook timeout by "
                 f"at least {_DELIVERY_LEASE_SAFETY_MARGIN_SECONDS:g} seconds"
             )
 
@@ -99,8 +130,11 @@ class WorkerSettings:
         return cls(
             database_url=os.environ.get("FRIDAY_WORKER_DATABASE_URL", _DEFAULT_DATABASE_URL),
             worker_id=os.environ.get("FRIDAY_WORKER_ID", f"worker-{os.getpid()}"),
-            lease_duration=timedelta(
-                seconds=float(os.environ.get("FRIDAY_WORKER_LEASE_SECONDS", _DEFAULT_LEASE_SECONDS))
+            lease_duration=_positive_finite_seconds(
+                "FRIDAY_WORKER_LEASE_SECONDS", _DEFAULT_LEASE_SECONDS
+            ),
+            delivery_lease_duration=_positive_finite_seconds(
+                "FRIDAY_DELIVERY_LEASE_SECONDS", _DEFAULT_DELIVERY_LEASE_SECONDS
             ),
             candidate_limit=int(
                 os.environ.get("FRIDAY_WORKER_CANDIDATE_LIMIT", _DEFAULT_CANDIDATE_LIMIT)

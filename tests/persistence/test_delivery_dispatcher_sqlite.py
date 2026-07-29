@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
+
+import pytest
 
 from friday.application.delivery_lifecycle import (
     ClaimNextDelivery,
@@ -17,7 +20,13 @@ from friday.domain import Run, Task, ToolInvocation
 from friday.domain.identifiers import DeliveryId, RunId, TaskId, ToolInvocationId
 from friday.domain.outbound_delivery import DeliverySourceKind, DeliveryStatus, OutboundDelivery
 from friday.infrastructure.messaging.config import MessagingRoute
-from friday.infrastructure.messaging.dispatcher import DeliveryDispatcher, DispatchResult
+from friday.infrastructure.messaging.dispatcher import (
+    ROUTE_DISABLED,
+    ROUTE_FINGERPRINT_MISMATCH,
+    ROUTE_MISSING,
+    DeliveryDispatcher,
+    DispatchResult,
+)
 from friday.infrastructure.messaging.transport_models import TransportRequest, TransportResult
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.models import Base
@@ -118,6 +127,58 @@ def test_sqlite_dispatcher_commits_marker_before_transport(tmp_path: Path) -> No
     with factory() as uow:
         stored = uow.deliveries.get(delivery.id)
         assert stored is not None and stored.status is DeliveryStatus.DELIVERED
+    engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        (lambda route: (), ROUTE_MISSING),
+        (lambda route: (replace(route, enabled=False),), ROUTE_DISABLED),
+        (
+            lambda route: (replace(route, endpoint="https://hook.test/rotated"),),
+            ROUTE_FINGERPRINT_MISMATCH,
+        ),
+    ],
+    ids=["missing", "disabled", "fingerprint_mismatch"],
+)
+def test_sqlite_route_authority_drift_parks_ambiguous_before_dispatch(
+    tmp_path: Path,
+    configured: Callable[[MessagingRoute], tuple[MessagingRoute, ...]],
+    expected: str,
+) -> None:
+    """Durably, all three drift cases land AMBIGUOUS with no dispatch marker."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'drift.db'}")
+    Base.metadata.create_all(engine)
+    factory = create_unit_of_work_factory(create_session_factory(engine))
+    clock, route = FakeClock(T0), _route()
+    delivery = _seed(factory, route)
+
+    class UnreachableTransport:
+        def send(self, request: TransportRequest) -> TransportResult:
+            raise AssertionError("route authority drift must never touch the network")
+
+    dispatcher = DeliveryDispatcher(
+        ClaimNextDelivery(
+            factory,
+            clock,
+            RETRY,
+            worker_id="worker",
+            lease_duration=LEASE,
+            candidate_limit=10,
+        ),
+        MarkDeliveryDispatchStarted(factory, clock),
+        PersistDeliveryOutcome(factory, clock),
+        factory,
+        configured(route),
+        UnreachableTransport(),
+    )
+    assert dispatcher.dispatch_once() is DispatchResult.AMBIGUOUS
+    with factory() as uow:
+        stored = uow.deliveries.get(delivery.id)
+        assert stored is not None and stored.status is DeliveryStatus.AMBIGUOUS
+        assert stored.failure_code == expected
+        assert stored.dispatch_started_at is None
     engine.dispose()
 
 

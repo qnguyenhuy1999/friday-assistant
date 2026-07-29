@@ -156,35 +156,36 @@ def test_no_response_transport_failures_are_ambiguous(failure_code: str) -> None
     assert stored.failure_code == failure_code and stored.dispatch_started_at == T0
 
 
-def test_fingerprint_mismatch_is_ambiguous_without_network_io() -> None:
-    uow, clock, route, transport = FakeUnitOfWork(), FakeClock(T0), _route(), RecordingTransport()
-    delivery = _delivery(route)
-    uow.deliveries.add(delivery)
-    changed = _route(endpoint="https://hook.example.test/changed-secret")
-
-    result = _dispatcher(uow, clock, transport, (changed,)).dispatch_once()
-    assert result is DispatchResult.AMBIGUOUS
-    stored = uow.deliveries.get(delivery.id)
-    assert stored is not None and stored.status is DeliveryStatus.AMBIGUOUS
-    assert stored.failure_code == ROUTE_FINGERPRINT_MISMATCH
-    assert stored.dispatch_started_at is None and transport.requests is None
-
-
 @pytest.mark.parametrize(
     ("routes", "expected"),
-    [((), ROUTE_MISSING), ((_route(enabled=False),), ROUTE_DISABLED)],
+    [
+        ((), ROUTE_MISSING),
+        ((_route(enabled=False),), ROUTE_DISABLED),
+        (
+            (_route(endpoint="https://hook.example.test/changed-secret"),),
+            ROUTE_FINGERPRINT_MISMATCH,
+        ),
+    ],
+    ids=["missing", "disabled", "fingerprint_mismatch"],
 )
-def test_missing_or_disabled_route_fails_without_network_io(
+def test_route_authority_drift_is_pre_dispatch_ambiguous_without_network_io(
     routes: tuple[MessagingRoute, ...], expected: str
 ) -> None:
+    """Authority drift is never a definite failure: nothing was sent, but the
+    approved destination can no longer be verified, so the delivery parks
+    AMBIGUOUS with the dispatch boundary left unmarked."""
     uow, clock, route, transport = FakeUnitOfWork(), FakeClock(T0), _route(), RecordingTransport()
     delivery = _delivery(route)
     uow.deliveries.add(delivery)
 
-    assert _dispatcher(uow, clock, transport, routes).dispatch_once() is DispatchResult.FAILED
+    assert _dispatcher(uow, clock, transport, routes).dispatch_once() is DispatchResult.AMBIGUOUS
     stored = uow.deliveries.get(delivery.id)
-    assert stored is not None and stored.failure_code == expected
-    assert stored.dispatch_started_at is None and transport.requests is None
+    assert stored is not None and stored.status is DeliveryStatus.AMBIGUOUS
+    assert stored.failure_code == expected
+    assert stored.dispatch_started_at is None
+    assert transport.requests is None
+    message = stored.failure_message or ""
+    assert SECRET_ENDPOINT not in message and SECRET_BODY not in message
 
 
 def test_already_dispatched_delivery_is_never_sent() -> None:

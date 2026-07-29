@@ -29,6 +29,9 @@ ROUTE_FINGERPRINT_MISMATCH = "delivery_route_fingerprint_mismatch"
 ALREADY_DISPATCHED = "delivery_already_dispatched"
 TRANSPORT_EXCEPTION = "delivery_transport_exception"
 
+#: Friday-owned, secret-free messages. Route authority drift is a pre-dispatch
+#: safety stop, never a definite failure: the approved intent is still valid,
+#: only the authority it was approved against is no longer trustworthy.
 _ROUTE_MISSING_MESSAGE = "Delivery route is no longer configured; no message was sent."
 _ROUTE_DISABLED_MESSAGE = "Delivery route is disabled; no message was sent."
 _ROUTE_FINGERPRINT_MESSAGE = "Delivery route authority changed; no message was sent."
@@ -78,31 +81,19 @@ class DeliveryDispatcher:
             return DispatchResult.AMBIGUOUS
         route = next((item for item in self.routes if item.route_id == delivery.route_id), None)
         if route is None:
-            if not self._persist(
-                lambda: self.persist_outcome.fail(
-                    claim, failure_code=ROUTE_MISSING, failure_message=_ROUTE_MISSING_MESSAGE
-                )
-            ):
-                return DispatchResult.CLAIM_LOST
-            return DispatchResult.FAILED
+            return self._park_route_drift(
+                claim, failure_code=ROUTE_MISSING, failure_message=_ROUTE_MISSING_MESSAGE
+            )
         if not route.enabled:
-            if not self._persist(
-                lambda: self.persist_outcome.fail(
-                    claim, failure_code=ROUTE_DISABLED, failure_message=_ROUTE_DISABLED_MESSAGE
-                )
-            ):
-                return DispatchResult.CLAIM_LOST
-            return DispatchResult.FAILED
+            return self._park_route_drift(
+                claim, failure_code=ROUTE_DISABLED, failure_message=_ROUTE_DISABLED_MESSAGE
+            )
         if route.fingerprint != delivery.route_fingerprint:
-            if not self._persist(
-                lambda: self.persist_outcome.mark_route_ambiguous(
-                    claim,
-                    failure_code=ROUTE_FINGERPRINT_MISMATCH,
-                    failure_message=_ROUTE_FINGERPRINT_MESSAGE,
-                )
-            ):
-                return DispatchResult.CLAIM_LOST
-            return DispatchResult.AMBIGUOUS
+            return self._park_route_drift(
+                claim,
+                failure_code=ROUTE_FINGERPRINT_MISMATCH,
+                failure_message=_ROUTE_FINGERPRINT_MESSAGE,
+            )
         try:
             self.dispatch_started.execute(claim)
         except ClaimLost:
@@ -142,6 +133,28 @@ class DeliveryDispatcher:
         ):
             return DispatchResult.CLAIM_LOST
         return DispatchResult.FAILED
+
+    def _park_route_drift(
+        self, claim: DeliveryClaim, *, failure_code: str, failure_message: str
+    ) -> DispatchResult:
+        """Stop a delivery whose approved route authority no longer holds.
+
+        Missing, disabled, and fingerprint-changed routes are all the same
+        situation: the operator changed the destination authority after the
+        message was approved, and nothing has been sent. Marking these FAILED
+        would claim Friday knows the send definitely did not and will never
+        happen, when in fact the intent is still valid and only its authority
+        is unverifiable. They are therefore parked as pre-dispatch AMBIGUOUS —
+        the dispatch boundary stays unmarked, so the audit trail keeps them
+        distinguishable from a post-dispatch unknown.
+        """
+        if not self._persist(
+            lambda: self.persist_outcome.mark_route_ambiguous(
+                claim, failure_code=failure_code, failure_message=failure_message
+            )
+        ):
+            return DispatchResult.CLAIM_LOST
+        return DispatchResult.AMBIGUOUS
 
     @staticmethod
     def _persist(action: Callable[[], None]) -> bool:

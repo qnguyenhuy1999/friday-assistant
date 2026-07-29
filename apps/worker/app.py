@@ -397,7 +397,11 @@ def _compose_worker(
     if computer_gateway is not None:
         resources.callback(computer_gateway.close)
     messaging_routes = MessagingSettings.from_env().routes()
-    settings.validate_delivery_timeouts(tuple(route.timeout_seconds for route in messaging_routes))
+    # Only enabled routes can consume delivery-lease time, so a disabled route
+    # (or messaging being off entirely) must not constrain worker configuration.
+    settings.validate_delivery_timeouts(
+        tuple(route.timeout_seconds for route in messaging_routes if route.enabled)
+    )
     message_gateway = (
         MessageToolGateway(
             MessageToolGatewaySettings(
@@ -479,7 +483,9 @@ def _compose_worker(
                     clock,
                     retry_policy,
                     worker_id=settings.worker_id,
-                    lease_duration=settings.lease_duration,
+                    # Delivery holds its own lease: a webhook round trip and an
+                    # agent run have nothing to do with each other's timing.
+                    lease_duration=settings.delivery_lease_duration,
                     candidate_limit=settings.candidate_limit,
                 ),
                 dispatch_started=MarkDeliveryDispatchStarted(uow_factory, clock),

@@ -156,6 +156,16 @@ def test_alembic_head_matches_sqlalchemy_metadata(tmp_path: Path) -> None:
         expected = _metadata_snapshot()
         assert set(actual) == set(expected)
         assert actual == expected
+
+        # The delivery dispatch boundary is the newest owned column; assert it
+        # explicitly so a mapper/migration drift is named, not just diffed.
+        deliveries = actual["outbound_deliveries"]["columns"]
+        assert deliveries["dispatch_started_at"] == {
+            "type": "DATETIME",
+            "nullable": True,
+            "primary_key": False,
+            "default": None,
+        }
     finally:
         engine.dispose()
 

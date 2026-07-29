@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Iterator
 from copy import deepcopy
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from friday.application.delivery_lifecycle import (
@@ -108,17 +109,14 @@ def test_round_trip_save_and_list_due(session: Session) -> None:
     repo.add(delivery)
     session.flush()
 
-    delivery.mark_sending(
-        at=T0,
-        claim_owner="worker",
-        claim_token="token",
-        claim_expires_at=T0 + timedelta(minutes=1),
-    )
-    delivery.mark_dispatch_started(at=T0 + timedelta(seconds=1))
-    delivery.mark_ambiguous(
-        at=T0 + timedelta(seconds=1), failure_code="timeout", failure_message="lost"
-    )
-    repo.save(delivery)
+    generation = repo.try_claim(delivery.id, "worker", "token", T0, T0 + timedelta(minutes=1))
+    assert generation == 1
+    boundary = T0 + timedelta(seconds=1)
+    assert repo.mark_dispatch_started(delivery.id, "worker", "token", generation, boundary)
+    claimed = repo.get(delivery.id)
+    assert claimed is not None
+    claimed.mark_ambiguous(at=boundary, failure_code="timeout", failure_message="lost")
+    assert repo.save_claimed_lifecycle(claimed, "worker", "token", generation, boundary)
     session.flush()
     fetched = repo.get(delivery.id)
     assert fetched is not None
@@ -327,6 +325,86 @@ def test_two_workers_racing_produce_exactly_one_claim(fixture: DeliveryFixture) 
     assert stored.dispatch_started_at is None
 
 
+def test_concurrent_claim_over_real_sqlite_produces_exactly_one_winner(
+    fixture: DeliveryFixture,
+) -> None:
+    """Two threads race try_claim over the production engine, synchronized by
+    a barrier immediately before the fenced UPDATE, so the race is genuine
+    rather than simulated by sequential calls."""
+    barrier = threading.Barrier(2)
+    results: dict[str, int | None | BaseException] = {}
+    session_factory = create_session_factory(fixture.engine)
+
+    def attempt(worker: str, token: str) -> None:
+        session = session_factory()
+        try:
+            repo = OutboundDeliveryRepository(session)
+            barrier.wait(timeout=10)
+            try:
+                generation = repo.try_claim(fixture.delivery_id, worker, token, T0, T0 + LEASE)
+                session.commit()
+                results[worker] = generation
+            except OperationalError as exc:  # pragma: no cover - failure path only
+                session.rollback()
+                results[worker] = exc
+        finally:
+            session.close()
+
+    thread_a = threading.Thread(target=attempt, args=("worker-a", "token-a"))
+    thread_b = threading.Thread(target=attempt, args=("worker-b", "token-b"))
+    thread_a.start()
+    thread_b.start()
+    thread_a.join(timeout=10)
+    thread_b.join(timeout=10)
+
+    for worker, result in results.items():
+        assert not isinstance(result, BaseException), f"{worker} raised {result!r}"
+
+    winners = [worker for worker, generation in results.items() if generation is not None]
+    losers = [worker for worker, generation in results.items() if generation is None]
+    assert len(winners) == 1
+    assert len(losers) == 1
+
+    stored = fixture.read()
+    assert stored.status is DeliveryStatus.SENDING
+    assert stored.attempt_count == 1
+    assert stored.claim_generation == 1
+    assert stored.claim_owner == winners[0]
+    assert stored.claim_token == ("token-a" if winners[0] == "worker-a" else "token-b")
+
+
+def test_post_dispatch_claim_cannot_be_forced_to_queued_via_any_write_primitive(
+    fixture: DeliveryFixture,
+) -> None:
+    """Finding 1 hardening: every requeue-shaped write primitive is gated on
+    dispatch_started_at IS NULL, so a post-dispatch claim can never be forced
+    back to QUEUED."""
+    repo = fixture.repo(fixture.session_a)
+    generation = repo.try_claim(fixture.delivery_id, "worker-a", "token-a", T0, T0 + LEASE)
+    assert generation == 1
+    boundary = T0 + timedelta(seconds=1)
+    assert repo.mark_dispatch_started(
+        fixture.delivery_id, "worker-a", "token-a", generation, boundary
+    )
+    fixture.session_a.commit()
+
+    claimed = fixture.read()
+    forced_queued = _forced_status(claimed, DeliveryStatus.QUEUED)
+    assert not repo.save_claimed_lifecycle(
+        forced_queued, "worker-a", "token-a", generation, boundary
+    )
+
+    expired_at = boundary + LEASE + timedelta(seconds=1)
+    assert not repo.requeue_expired_pre_dispatch(
+        fixture.delivery_id, generation, expired_at, expired_at
+    )
+    assert not repo.fail_expired_pre_dispatch(fixture.delivery_id, generation, expired_at, "c", "m")
+
+    stored = fixture.read()
+    assert stored.status is DeliveryStatus.SENDING
+    assert stored.dispatch_started_at == boundary
+
+
 def test_claim_generation_increments_monotonically(fixture: DeliveryFixture) -> None:
     generations: list[int] = []
     now = T0
@@ -416,6 +494,25 @@ def test_stale_worker_and_generation_cannot_mark_dispatch_started(
         fixture.delivery_id, "worker-a", "token-a", generation, boundary + timedelta(seconds=1)
     )
     assert fixture.read().dispatch_started_at == boundary
+
+
+def test_dispatch_started_at_rejects_direct_mutation_after_sqlite_round_trip(
+    fixture: DeliveryFixture,
+) -> None:
+    repo = fixture.repo(fixture.session_a)
+    generation = repo.try_claim(fixture.delivery_id, "worker-a", "token-a", T0, T0 + LEASE)
+    assert generation == 1
+    boundary = T0 + timedelta(seconds=1)
+    assert repo.mark_dispatch_started(
+        fixture.delivery_id, "worker-a", "token-a", generation, boundary
+    )
+    fixture.session_a.commit()
+
+    reloaded = fixture.read(fixture.session_b)
+    assert reloaded.dispatch_started_at == boundary
+    with pytest.raises(AttributeError):
+        reloaded.dispatch_started_at = boundary + timedelta(seconds=1)
+    assert reloaded.dispatch_started_at == boundary
 
 
 def test_stale_worker_cannot_persist_an_outcome_after_recovery(

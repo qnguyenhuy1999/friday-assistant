@@ -505,9 +505,6 @@ class FakeOutboundDeliveryRepository:
         # go through a fenced write for the change to become durable.
         return deepcopy(stored) if stored is not None else None
 
-    def save(self, delivery: OutboundDelivery) -> None:
-        self.items[delivery.id] = deepcopy(delivery)
-
     def list_due(self, now: datetime, limit: int) -> list[OutboundDelivery]:
         deliveries = [
             delivery
@@ -609,6 +606,8 @@ class FakeOutboundDeliveryRepository:
     ) -> bool:
         stored = self._active_claim(delivery.id, worker_id, claim_token, claim_generation, now)
         if stored is None:
+            return False
+        if delivery.status is DeliveryStatus.QUEUED and stored.dispatch_started_at is not None:
             return False
         # Mirror the SQL SET list: lifecycle columns only. Authority, content,
         # attempt_count, claim_generation and dispatch_started_at keep the

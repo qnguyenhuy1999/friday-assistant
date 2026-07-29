@@ -18,6 +18,7 @@ from friday.application.delivery_lifecycle import (
 )
 from friday.application.errors import ClaimLost
 from friday.application.retry_policy import RetryPolicy
+from friday.domain.errors import DomainValidationError
 from friday.domain.identifiers import DeliveryId, RunId, ToolInvocationId
 from friday.domain.outbound_delivery import DeliverySourceKind, DeliveryStatus, OutboundDelivery
 from tests.application.fakes import T0, CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
@@ -208,23 +209,6 @@ def test_persist_outcome_requires_the_dispatch_boundary_then_records_delivered(
     stored = _stored(fake_uow, delivery.id)
     assert stored.status is DeliveryStatus.DELIVERED
     assert stored.provider_message_id == "provider-1"
-
-
-def test_persist_outcome_can_release_a_pre_dispatch_delivery_for_retry(
-    fake_uow: FakeUnitOfWork, uow_factory: CountingUnitOfWorkFactory, clock: FakeClock
-) -> None:
-    delivery = _delivery()
-    fake_uow.deliveries.add(delivery)
-    claim = _claimer(uow_factory, clock).execute()
-    assert claim is not None
-
-    retry_at = T0 + timedelta(minutes=2)
-    PersistDeliveryOutcome(uow_factory, clock).release_for_retry(claim, available_at=retry_at)
-    stored = _stored(fake_uow, delivery.id)
-    assert stored.status is DeliveryStatus.QUEUED
-    assert stored.available_at == retry_at
-    assert stored.claim_owner is None
-    assert (stored.attempt_count, stored.claim_generation) == (1, 1)
 
 
 def test_persist_outcome_never_rewrites_authority_or_content(
@@ -436,6 +420,31 @@ def test_claim_construction_rejects_degenerate_configuration(
             lease_duration=LEASE,
             candidate_limit=0,
         )
+
+
+@pytest.mark.parametrize("worker_id", ["", "   ", "x" * 257])
+def test_claim_construction_rejects_an_invalid_worker_id(
+    fake_uow: FakeUnitOfWork,
+    uow_factory: CountingUnitOfWorkFactory,
+    clock: FakeClock,
+    worker_id: str,
+) -> None:
+    delivery = _delivery()
+    fake_uow.deliveries.add(delivery)
+
+    with pytest.raises(DomainValidationError, match="worker_id"):
+        ClaimNextDelivery(
+            uow_factory,
+            clock,
+            RETRY_POLICY,
+            worker_id=worker_id,
+            lease_duration=LEASE,
+            candidate_limit=5,
+        )
+
+    stored = _stored(fake_uow, delivery.id)
+    assert stored.status is DeliveryStatus.QUEUED
+    assert (stored.attempt_count, stored.claim_generation) == (0, 0)
 
 
 def test_delivery_claim_is_immutable() -> None:

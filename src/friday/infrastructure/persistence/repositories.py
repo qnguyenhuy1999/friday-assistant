@@ -735,9 +735,6 @@ class OutboundDeliveryRepository:
         row = self._session.get(OutboundDeliveryRow, str(delivery_id))
         return outbound_delivery_from_row(row) if row is not None else None
 
-    def save(self, delivery: OutboundDelivery) -> None:
-        self._session.merge(outbound_delivery_to_row(delivery))
-
     def list_due(self, now: object, limit: int) -> list[OutboundDelivery]:
         stmt = (
             select(OutboundDeliveryRow)
@@ -871,7 +868,17 @@ class OutboundDeliveryRepository:
         `attempt_count`, `claim_generation` and `dispatch_started_at` are
         excluded too: they change only via `try_claim` and
         `mark_dispatch_started`.
+
+        A requeue to QUEUED additionally requires `dispatch_started_at IS
+        NULL`: this is the only fenced write that can move a delivery out of
+        SENDING pre-dispatch, so it must not be able to smuggle a requeue
+        through once the external side-effect boundary has been crossed.
         """
+        extra_predicate = (
+            (OutboundDeliveryRow.dispatch_started_at.is_(None),)
+            if delivery.status is DeliveryStatus.QUEUED
+            else ()
+        )
         stmt = (
             update(OutboundDeliveryRow)
             .where(
@@ -881,7 +888,8 @@ class OutboundDeliveryRepository:
                     claim_token=claim_token,
                     generation=claim_generation,
                     now=now,
-                )
+                ),
+                *extra_predicate,
             )
             .values(
                 status=delivery.status.value,

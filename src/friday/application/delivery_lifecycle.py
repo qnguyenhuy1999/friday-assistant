@@ -35,7 +35,11 @@ from friday.application.errors import ClaimLost
 from friday.application.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from friday.application.retry_policy import RetryPolicy
 from friday.domain.identifiers import DeliveryId
-from friday.domain.outbound_delivery import DeliveryStatus, OutboundDelivery
+from friday.domain.outbound_delivery import (
+    DeliveryStatus,
+    OutboundDelivery,
+    validate_claim_identity_value,
+)
 
 #: Friday-owned failure codes. Recovery never persists untrusted external
 #: error text; these are stable, greppable, and safe to surface.
@@ -133,6 +137,7 @@ class ClaimNextDelivery:
             raise ValueError("lease_duration must be greater than zero")
         if candidate_limit < 1:
             raise ValueError("candidate_limit must be at least 1")
+        validate_claim_identity_value(worker_id, field="worker_id")
         self._uow_factory = uow_factory
         self._clock = clock
         self._worker_id = worker_id
@@ -246,12 +251,6 @@ class PersistDeliveryOutcome:
             delivery.mark_ambiguous(
                 at=now, failure_code=failure_code, failure_message=failure_message
             )
-
-        self._apply(claim, transition)
-
-    def release_for_retry(self, claim: DeliveryClaim, *, available_at: datetime) -> None:
-        def transition(delivery: OutboundDelivery, now: datetime) -> None:
-            delivery.release_for_retry(at=now, available_at=available_at)
 
         self._apply(claim, transition)
 

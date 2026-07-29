@@ -81,6 +81,21 @@ def test_dispatch_boundary_is_one_way_and_requires_an_unexpired_claim() -> None:
         expired.mark_dispatch_started(at=T0 + timedelta(minutes=1))
 
 
+def test_dispatch_started_at_rejects_direct_mutation() -> None:
+    delivery = _claimed()
+    with pytest.raises(AttributeError):
+        delivery.dispatch_started_at = T0 + timedelta(seconds=1)
+    assert delivery.dispatch_started_at is None
+
+    delivery.mark_dispatch_started(at=T0 + timedelta(seconds=1))
+    with pytest.raises(AttributeError):
+        delivery.dispatch_started_at = T0 + timedelta(seconds=2)
+    assert delivery.dispatch_started_at == T0 + timedelta(seconds=1)
+    with pytest.raises(AttributeError):
+        delivery.dispatch_started_at = None
+    assert delivery.dispatch_started_at == T0 + timedelta(seconds=1)
+
+
 def test_pre_dispatch_sending_may_be_released_for_retry() -> None:
     delivery = _claimed()
     at = T0 + timedelta(seconds=30)

@@ -69,6 +69,17 @@ def _optional_bounded(value: str | None, *, field: str, maximum: int) -> str | N
     return _bounded(value, field=field, maximum=maximum)
 
 
+def validate_claim_identity_value(value: str, *, field: str) -> str:
+    """Shared bound for claim identity values (worker ids, claim tokens).
+
+    Callers outside this aggregate (e.g. `ClaimNextDelivery.worker_id`) must
+    obey the same non-empty/non-whitespace, `<= MAX_CLAIM_VALUE_LENGTH` rule
+    as `claim_owner`/`claim_token` so a claim can never be opened with an
+    identity the aggregate would then reject.
+    """
+    return _bounded(value, field=field, maximum=MAX_CLAIM_VALUE_LENGTH)
+
+
 @dataclass(slots=True)
 class OutboundDelivery:
     """A durable, immutable delivery instruction with mutable lifecycle state."""
@@ -114,8 +125,17 @@ class OutboundDelivery:
         }
     )
 
+    #: Guarded like an authority field, but for a different reason: this one
+    #: durable timestamp is the whole boundary between "safe to retry" and
+    #: "must go AMBIGUOUS". `mark_dispatch_started` is the only legal writer,
+    #: and it bypasses this guard with `object.__setattr__` directly.
+    _DISPATCH_BOUNDARY_FIELD = "dispatch_started_at"
+
     def __setattr__(self, name: str, value: object) -> None:
-        if name in self._AUTHORITY_FIELDS and getattr(self, "_authority_frozen", False):
+        if not getattr(self, "_authority_frozen", False):
+            object.__setattr__(self, name, value)
+            return
+        if name in self._AUTHORITY_FIELDS or name == self._DISPATCH_BOUNDARY_FIELD:
             raise AttributeError(f"OutboundDelivery.{name} is immutable")
         object.__setattr__(self, name, value)
 
@@ -278,7 +298,7 @@ class OutboundDelivery:
             raise DomainValidationError(
                 "OutboundDelivery dispatch requires an unexpired claim lease"
             )
-        self.dispatch_started_at = at
+        object.__setattr__(self, "dispatch_started_at", at)
         self.updated_at = at
 
     def release_for_retry(self, *, at: datetime, available_at: datetime) -> None:

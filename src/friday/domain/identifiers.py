@@ -87,3 +87,7 @@ class ArtifactId(_Id):
 
 class ToolInvocationId(_Id):
     pass
+
+
+class DeliveryId(_Id):
+    pass

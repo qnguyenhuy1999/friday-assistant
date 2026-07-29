@@ -34,6 +34,7 @@ from friday.infrastructure.persistence.repositories import (
     ConversationTurnRepository,
     MemoryIndexSnapshotRepository,
     MemoryRetrievalRecordRepository,
+    OutboundDeliveryRepository,
     RunEventStore,
     RunRepository,
     RunStepRepository,
@@ -69,6 +70,7 @@ class SqlAlchemyUnitOfWork:
         self._approvals = ApprovalRepository(session)
         self._artifacts = ArtifactRepository(session)
         self._tool_invocations = ToolInvocationRepository(session)
+        self._deliveries = OutboundDeliveryRepository(session)
         self._events = RunEventStore(session)
         self._task_events = TaskEventStore(session)
         self._work_queue = SqlAlchemyRunWorkQueue(session)
@@ -114,6 +116,10 @@ class SqlAlchemyUnitOfWork:
     @property
     def tool_invocations(self) -> ToolInvocationRepository:
         return self._tool_invocations
+
+    @property
+    def deliveries(self) -> OutboundDeliveryRepository:
+        return self._deliveries
 
     @property
     def events(self) -> RunEventStore:

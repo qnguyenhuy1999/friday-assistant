@@ -32,8 +32,12 @@ from friday.domain import (
     ConversationInputMode,
     ConversationTurn,
     ConversationTurnId,
+    DeliveryId,
+    DeliverySourceKind,
+    DeliveryStatus,
     Failure,
     FailureCause,
+    OutboundDelivery,
     Run,
     RunEvent,
     RunEventId,
@@ -69,6 +73,7 @@ from friday.infrastructure.persistence.models import (
     MemoryIndexSnapshotRow,
     MemoryRetrievalItemRow,
     MemoryRetrievalRecordRow,
+    OutboundDeliveryRow,
     RunEventRow,
     RunRow,
     RunStepRow,
@@ -431,6 +436,74 @@ def tool_invocation_from_row(row: ToolInvocationRow) -> ToolInvocation:
         _output_set=row.output_set,
         _failure=_failure_from_dict(row.failure),
         _provenance=_provenance_from_row(row),
+    )
+
+
+def outbound_delivery_to_row(delivery: OutboundDelivery) -> OutboundDeliveryRow:
+    return OutboundDeliveryRow(
+        id=str(delivery.id),
+        source_kind=delivery.source_kind.value,
+        source_run_id=str(delivery.source_run_id),
+        source_tool_invocation_id=(
+            str(delivery.source_tool_invocation_id) if delivery.source_tool_invocation_id else None
+        ),
+        source_schedule_fire_id=(
+            str(delivery.source_schedule_fire_id) if delivery.source_schedule_fire_id else None
+        ),
+        route_id=delivery.route_id,
+        route_fingerprint=delivery.route_fingerprint,
+        subject=delivery.subject,
+        body=delivery.body,
+        body_sha256=delivery.body_sha256,
+        status=delivery.status.value,
+        available_at=delivery.available_at,
+        attempt_count=delivery.attempt_count,
+        claim_owner=delivery.claim_owner,
+        claim_token=delivery.claim_token,
+        claim_generation=delivery.claim_generation,
+        claim_expires_at=delivery.claim_expires_at,
+        provider_message_id=delivery.provider_message_id,
+        failure_code=delivery.failure_code,
+        failure_message=delivery.failure_message,
+        created_at=delivery.created_at,
+        updated_at=delivery.updated_at,
+        delivered_at=delivery.delivered_at,
+    )
+
+
+def outbound_delivery_from_row(row: OutboundDeliveryRow) -> OutboundDelivery:
+    return OutboundDelivery(
+        id=DeliveryId.parse(row.id),
+        source_kind=DeliverySourceKind(row.source_kind),
+        source_run_id=RunId.parse(row.source_run_id),
+        source_tool_invocation_id=(
+            ToolInvocationId.parse(row.source_tool_invocation_id)
+            if row.source_tool_invocation_id
+            else None
+        ),
+        source_schedule_fire_id=(
+            ScheduleFireId.parse(row.source_schedule_fire_id)
+            if row.source_schedule_fire_id
+            else None
+        ),
+        route_id=row.route_id,
+        route_fingerprint=row.route_fingerprint,
+        subject=row.subject,
+        body=row.body,
+        body_sha256=row.body_sha256,
+        status=DeliveryStatus(row.status),
+        available_at=_read_back_utc(row.available_at),
+        attempt_count=row.attempt_count,
+        claim_owner=row.claim_owner,
+        claim_token=row.claim_token,
+        claim_generation=row.claim_generation,
+        claim_expires_at=(_read_back_utc(row.claim_expires_at) if row.claim_expires_at else None),
+        provider_message_id=row.provider_message_id,
+        failure_code=row.failure_code,
+        failure_message=row.failure_message,
+        created_at=_read_back_utc(row.created_at),
+        updated_at=_read_back_utc(row.updated_at),
+        delivered_at=_read_back_utc(row.delivered_at) if row.delivered_at else None,
     )
 
 

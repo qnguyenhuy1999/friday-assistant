@@ -19,6 +19,9 @@ from friday.domain import (
     ConversationId,
     ConversationTurn,
     ConversationTurnId,
+    DeliveryId,
+    DeliveryStatus,
+    OutboundDelivery,
     Run,
     RunEvent,
     RunEventType,
@@ -53,6 +56,8 @@ from friday.infrastructure.persistence.mappers import (
     memory_retrieval_item_to_row,
     memory_retrieval_record_from_row,
     memory_retrieval_record_to_row,
+    outbound_delivery_from_row,
+    outbound_delivery_to_row,
     run_event_from_row,
     run_event_to_row,
     run_from_row,
@@ -78,6 +83,7 @@ from friday.infrastructure.persistence.models import (
     MemoryIndexSnapshotRow,
     MemoryRetrievalItemRow,
     MemoryRetrievalRecordRow,
+    OutboundDeliveryRow,
     RunEventRow,
     RunEventSequenceCounterRow,
     RunRow,
@@ -716,6 +722,33 @@ class ToolInvocationRepository:
             after_requested_at,
             after_id,
         )
+
+
+class OutboundDeliveryRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, delivery: OutboundDelivery) -> None:
+        self._session.add(outbound_delivery_to_row(delivery))
+
+    def get(self, delivery_id: DeliveryId) -> OutboundDelivery | None:
+        row = self._session.get(OutboundDeliveryRow, str(delivery_id))
+        return outbound_delivery_from_row(row) if row is not None else None
+
+    def save(self, delivery: OutboundDelivery) -> None:
+        self._session.merge(outbound_delivery_to_row(delivery))
+
+    def list_due(self, now: object, limit: int) -> list[OutboundDelivery]:
+        stmt = (
+            select(OutboundDeliveryRow)
+            .where(
+                OutboundDeliveryRow.status == DeliveryStatus.QUEUED.value,
+                OutboundDeliveryRow.available_at <= now,
+            )
+            .order_by(OutboundDeliveryRow.available_at, OutboundDeliveryRow.id)
+            .limit(limit)
+        )
+        return [outbound_delivery_from_row(row) for row in self._session.execute(stmt).scalars()]
 
 
 class RunEventStore:

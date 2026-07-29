@@ -18,6 +18,7 @@ from friday.domain.identifiers import (
     ArtifactId,
     ConversationId,
     ConversationTurnId,
+    DeliveryId,
     RunEventId,
     RunId,
     RunStepId,
@@ -28,6 +29,12 @@ from friday.domain.identifiers import (
     ToolInvocationId,
 )
 from friday.domain.json_value import JsonScalar, JsonValue, ensure_json_value
+from friday.domain.outbound_delivery import (
+    TERMINAL_DELIVERY_STATUSES,
+    DeliverySourceKind,
+    DeliveryStatus,
+    OutboundDelivery,
+)
 from friday.domain.run import Run, RunStatus
 from friday.domain.schedule import Schedule, ScheduleKind, ScheduleStatus
 from friday.domain.schedule_fire import ScheduleFire
@@ -50,6 +57,9 @@ __all__ = [
     "ConversationInputMode",
     "ConversationTurn",
     "ConversationTurnId",
+    "DeliveryId",
+    "DeliverySourceKind",
+    "DeliveryStatus",
     "DomainError",
     "DomainValidationError",
     "Failure",
@@ -78,6 +88,8 @@ __all__ = [
     "TaskEventType",
     "TaskId",
     "TaskStatus",
+    "OutboundDelivery",
+    "TERMINAL_DELIVERY_STATUSES",
     "ToolInvocation",
     "ToolInvocationId",
     "ToolInvocationStatus",

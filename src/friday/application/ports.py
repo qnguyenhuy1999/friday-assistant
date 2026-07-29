@@ -32,12 +32,14 @@ from friday.domain.identifiers import (
     ArtifactId,
     ConversationId,
     ConversationTurnId,
+    DeliveryId,
     RunId,
     RunStepId,
     ScheduleId,
     TaskId,
     ToolInvocationId,
 )
+from friday.domain.outbound_delivery import OutboundDelivery
 from friday.domain.run import Run
 from friday.domain.schedule import Schedule
 from friday.domain.schedule_fire import ScheduleFire
@@ -328,6 +330,16 @@ class RunEventStore(Protocol):
         ...
 
 
+class OutboundDeliveryRepository(Protocol):
+    def add(self, delivery: OutboundDelivery) -> None: ...
+    def get(self, delivery_id: DeliveryId) -> OutboundDelivery | None: ...
+    def save(self, delivery: OutboundDelivery) -> None: ...
+
+    def list_due(self, now: datetime, limit: int) -> list[OutboundDelivery]:
+        """Read-only QUEUED selection, ordered by available_at then id."""
+        ...
+
+
 class TaskEventStore(Protocol):
     def append(self, event: TaskEvent) -> None: ...
 
@@ -371,6 +383,8 @@ class UnitOfWork(Protocol):
     def artifacts(self) -> ArtifactRepository: ...
     @property
     def tool_invocations(self) -> ToolInvocationRepository: ...
+    @property
+    def deliveries(self) -> OutboundDeliveryRepository: ...
     @property
     def events(self) -> RunEventStore: ...
     @property

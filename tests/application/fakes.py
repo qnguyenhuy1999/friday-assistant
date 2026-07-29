@@ -21,6 +21,7 @@ from friday.application.ports import (
     ArtifactRepository,
     ConversationRepository,
     ConversationTurnRepository,
+    OutboundDeliveryRepository,
     RunEventStore,
     RunRepository,
     RunStepRepository,
@@ -42,12 +43,14 @@ from friday.domain.identifiers import (
     ArtifactId,
     ConversationId,
     ConversationTurnId,
+    DeliveryId,
     RunId,
     RunStepId,
     ScheduleId,
     TaskId,
     ToolInvocationId,
 )
+from friday.domain.outbound_delivery import DeliveryStatus, OutboundDelivery
 from friday.domain.run import Run
 from friday.domain.schedule import Schedule, ScheduleStatus
 from friday.domain.schedule_fire import ScheduleFire
@@ -471,6 +474,42 @@ class FakeToolInvocationRepository:
         return invocations[:limit]
 
 
+class FakeOutboundDeliveryRepository:
+    def __init__(self) -> None:
+        self.items: dict[DeliveryId, OutboundDelivery] = {}
+
+    def add(self, delivery: OutboundDelivery) -> None:
+        from friday.application.errors import EntityConflict
+
+        if delivery.source_tool_invocation_id is not None and any(
+            item.source_tool_invocation_id == delivery.source_tool_invocation_id
+            for item in self.items.values()
+        ):
+            raise EntityConflict("write violated a uniqueness or state constraint")
+        if delivery.source_schedule_fire_id is not None and any(
+            item.source_schedule_fire_id == delivery.source_schedule_fire_id
+            for item in self.items.values()
+        ):
+            raise EntityConflict("write violated a uniqueness or state constraint")
+        self.items[delivery.id] = delivery
+
+    def get(self, delivery_id: DeliveryId) -> OutboundDelivery | None:
+        return self.items.get(delivery_id)
+
+    def save(self, delivery: OutboundDelivery) -> None:
+        self.items[delivery.id] = delivery
+
+    def list_due(self, now: datetime, limit: int) -> list[OutboundDelivery]:
+        deliveries = [
+            delivery
+            for delivery in self.items.values()
+            if delivery.status is DeliveryStatus.QUEUED and delivery.available_at <= now
+        ]
+        return sorted(deliveries, key=lambda delivery: (delivery.available_at, str(delivery.id)))[
+            :limit
+        ]
+
+
 class FakeApprovalRepository:
     def __init__(self) -> None:
         self.items: dict[ApprovalRequestId, ApprovalRequest] = {}
@@ -846,6 +885,7 @@ class FakeUnitOfWork:
         self.task_event_store = FakeTaskEventStore()
         self.step_repo = FakeRunStepRepository()
         self.tool_repo = FakeToolInvocationRepository()
+        self.delivery_repo = FakeOutboundDeliveryRepository()
         self.approval_repo = FakeApprovalRepository()
         self.artifact_repo = FakeArtifactRepository()
         self.work_queue_repo = FakeRunWorkQueue()
@@ -894,6 +934,10 @@ class FakeUnitOfWork:
     @property
     def tool_invocations(self) -> ToolInvocationRepository:
         return self.tool_repo
+
+    @property
+    def deliveries(self) -> OutboundDeliveryRepository:
+        return self.delivery_repo
 
     @property
     def events(self) -> RunEventStore:

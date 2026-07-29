@@ -259,6 +259,66 @@ class ToolInvocationRow(Base):
     provenance_binding_fingerprint: Mapped[str | None]
 
 
+class OutboundDeliveryRow(Base):
+    __tablename__ = "outbound_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_tool_invocation_id",
+            name="uq_outbound_deliveries_source_tool_invocation_id",
+        ),
+        UniqueConstraint(
+            "source_schedule_fire_id",
+            name="uq_outbound_deliveries_source_schedule_fire_id",
+        ),
+        Index("ix_outbound_deliveries_due", "status", "available_at", "id"),
+        CheckConstraint(
+            "status IN ('queued', 'sending', 'delivered', 'failed', 'ambiguous', 'cancelled')",
+            name="ck_outbound_deliveries_status",
+        ),
+        CheckConstraint("attempt_count >= 0", name="ck_outbound_deliveries_attempt_count"),
+        CheckConstraint("claim_generation >= 0", name="ck_outbound_deliveries_claim_generation"),
+        CheckConstraint(
+            "(source_kind = 'agent_request' AND source_tool_invocation_id IS NOT NULL "
+            "AND source_schedule_fire_id IS NULL) OR "
+            "(source_kind = 'scheduled_run_answer' AND source_tool_invocation_id IS NULL "
+            "AND source_schedule_fire_id IS NOT NULL)",
+            name="ck_outbound_deliveries_source_shape",
+        ),
+        CheckConstraint(
+            "length(route_fingerprint) = 64 AND route_fingerprint NOT GLOB '*[^0-9a-f]*'",
+            name="ck_outbound_deliveries_route_fingerprint_hex",
+        ),
+        CheckConstraint(
+            "length(body_sha256) = 64 AND body_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_outbound_deliveries_body_sha256_hex",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    source_kind: Mapped[str]
+    source_run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    source_tool_invocation_id: Mapped[str | None] = mapped_column(ForeignKey("tool_invocations.id"))
+    source_schedule_fire_id: Mapped[str | None] = mapped_column(ForeignKey("schedule_fires.id"))
+    route_id: Mapped[str]
+    route_fingerprint: Mapped[str]
+    subject: Mapped[str | None]
+    body: Mapped[str]
+    body_sha256: Mapped[str]
+    status: Mapped[str]
+    available_at: Mapped[datetime]
+    attempt_count: Mapped[int]
+    claim_owner: Mapped[str | None]
+    claim_token: Mapped[str | None]
+    claim_generation: Mapped[int]
+    claim_expires_at: Mapped[datetime | None]
+    provider_message_id: Mapped[str | None]
+    failure_code: Mapped[str | None]
+    failure_message: Mapped[str | None]
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+    delivered_at: Mapped[datetime | None]
+
+
 class RunEventRow(Base):
     __tablename__ = "run_events"
     __table_args__ = (

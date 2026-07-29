@@ -8,7 +8,7 @@ import uuid
 import pytest
 
 from friday.domain.errors import DomainValidationError
-from friday.domain.identifiers import RunId, TaskId
+from friday.domain.identifiers import DeliveryId, RunId, TaskId
 
 VALID_UUID = "11111111-1111-1111-1111-111111111111"
 
@@ -40,6 +40,7 @@ def test_different_identifier_types_never_compare_equal_for_the_same_uuid() -> N
     task_id = TaskId.parse(VALID_UUID)
     run_id = RunId.parse(VALID_UUID)
     assert task_id != run_id  # type: ignore[comparison-overlap]
+    assert task_id != DeliveryId.parse(VALID_UUID)  # type: ignore[comparison-overlap]
 
 
 def test_same_identifier_type_and_value_compare_equal() -> None:

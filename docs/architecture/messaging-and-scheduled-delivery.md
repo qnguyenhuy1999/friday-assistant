@@ -52,4 +52,27 @@ Fenced outcome writes (`PersistDeliveryOutcome`) update lifecycle columns only. 
 
 ## Deferred Phase 19 work
 
+## Implemented: Step 3
+
+Step 3 adds operator-owned route configuration and the `message.send` tool. The
+model sees only enabled route aliases and bounded trusted descriptions; endpoint
+URLs, environment-variable names, and credentials never enter the tool manifest,
+approval payload, provenance, or delivery row.
+
+```text
+operator-owned routes -> model-visible aliases only -> exact external-communication approval
+-> durable enqueue -> zero external effect
+```
+
+Every `message.send` assessment uses an `EXTERNAL_COMMUNICATION` approval scope
+whose route fingerprint covers safe authority fields and a digest of the
+in-memory endpoint. The authorization fingerprint also covers exact tool input,
+so changing the body, route, delivery time, or route authority invalidates an old
+approval. Execution creates exactly one queued `OutboundDelivery`, keyed by tool
+invocation for replay safety. No transport, HTTP client, dispatcher, or polling
+loop is constructed in this step.
+
+`ToolInvocation SUCCEEDED` for `message.send` means durable enqueue succeeded,
+not that an external delivery occurred.
+
 Transport adapters, `message.send`, approvals and `EXTERNAL_COMMUNICATION` wiring, the delivery dispatcher, worker polling, messaging route/settings configuration, scheduled-delivery policy and fire-plan bridging, delivery attempt history, and API/UI/SDK surfaces are later steps. Steps 1 and 2 do not send messages or materialize scheduled deliveries.

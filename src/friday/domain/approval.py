@@ -42,6 +42,7 @@ class ApprovalCategory(StrEnum):
     FILESYSTEM_WRITE = "filesystem_write"
     NETWORK_ACCESS = "network_access"
     COMPUTER_USE = "computer_use"
+    EXTERNAL_COMMUNICATION = "external_communication"
     OTHER = "other"
 
 

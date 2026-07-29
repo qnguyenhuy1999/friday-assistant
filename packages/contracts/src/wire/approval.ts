@@ -5,6 +5,7 @@ export type ApprovalCategory =
   | "filesystem_write"
   | "network_access"
   | "computer_use"
+  | "external_communication"
   | "other";
 export type ApprovalStatus =
   "pending" | "approved" | "rejected" | "cancelled" | "expired";

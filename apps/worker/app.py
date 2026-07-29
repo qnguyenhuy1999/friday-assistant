@@ -14,6 +14,7 @@ from sqlalchemy import Engine
 from apps.worker.computer_settings import ComputerSettings
 from apps.worker.mcp_settings import McpSettings
 from apps.worker.memory_settings import MemorySettings
+from apps.worker.messaging_settings import MessagingSettings
 from apps.worker.runtime_settings import RuntimeSettings
 from apps.worker.settings import WorkerSettings
 from apps.worker.worker_loop import WorkerLoop
@@ -66,6 +67,10 @@ from friday.infrastructure.memory.graphify_cli import GraphifyCliIndexBuilder, G
 from friday.infrastructure.memory.graphify_json import GraphifyJsonIndex, GraphifyJsonIndexSettings
 from friday.infrastructure.memory.lexical_index import LexicalIndexStore
 from friday.infrastructure.memory.obsidian_vault import ObsidianVaultStore
+from friday.infrastructure.messaging.message_tool_gateway import (
+    MessageToolGateway,
+    MessageToolGatewaySettings,
+)
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
 from friday.infrastructure.tools.composite import CompositeToolGateway
@@ -91,6 +96,7 @@ class Worker:
     processor: AgentRunProcessor
     computer_gateway: ComputerToolGateway | None = None
     mcp_gateway: McpToolGateway | None = None
+    message_gateway: MessageToolGateway | None = None
 
     def close(self) -> None:
         """Release everything the worker owns outside this process.
@@ -382,15 +388,28 @@ def _compose_worker(
     computer_gateway = _computer_gateway(runtime)  # raises ComputerUseUnavailable
     if computer_gateway is not None:
         resources.callback(computer_gateway.close)
+    messaging_routes = MessagingSettings.from_env().routes()
+    message_gateway = (
+        MessageToolGateway(
+            MessageToolGatewaySettings(
+                routes=messaging_routes, uow_factory=uow_factory, clock=clock
+            )
+        )
+        if any(route.enabled for route in messaging_routes)
+        else None
+    )
     mcp_gateway = _mcp_gateway(
         workspace_gateway,
         *((computer_gateway,) if computer_gateway is not None else ()),
+        *((message_gateway,) if message_gateway is not None else ()),
     )
     if mcp_gateway is not None:
         resources.callback(mcp_gateway.close)
     gateways: list[ToolGateway] = [workspace_gateway]
     if computer_gateway is not None:
         gateways.append(computer_gateway)
+    if message_gateway is not None:
+        gateways.append(message_gateway)
     if mcp_gateway is not None:
         gateways.append(mcp_gateway)
     # ONE composite instance for both the brain manifest and execution: two
@@ -458,6 +477,7 @@ def _compose_worker(
         processor=processor,
         computer_gateway=computer_gateway,
         mcp_gateway=mcp_gateway,
+        message_gateway=message_gateway,
     )
     # ownership transfers here and only here: from now on Worker.close() is
     # what releases these, so the unwind must not also fire

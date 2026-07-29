@@ -505,6 +505,14 @@ class FakeOutboundDeliveryRepository:
         # go through a fenced write for the change to become durable.
         return deepcopy(stored) if stored is not None else None
 
+    def get_by_source_tool_invocation_id(
+        self, invocation_id: ToolInvocationId
+    ) -> OutboundDelivery | None:
+        for delivery in self.items.values():
+            if delivery.source_tool_invocation_id == invocation_id:
+                return deepcopy(delivery)
+        return None
+
     def list_due(self, now: datetime, limit: int) -> list[OutboundDelivery]:
         deliveries = [
             delivery

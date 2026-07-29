@@ -735,6 +735,16 @@ class OutboundDeliveryRepository:
         row = self._session.get(OutboundDeliveryRow, str(delivery_id))
         return outbound_delivery_from_row(row) if row is not None else None
 
+    def get_by_source_tool_invocation_id(
+        self, invocation_id: ToolInvocationId
+    ) -> OutboundDelivery | None:
+        row = self._session.execute(
+            select(OutboundDeliveryRow).where(
+                OutboundDeliveryRow.source_tool_invocation_id == str(invocation_id)
+            )
+        ).scalar_one_or_none()
+        return outbound_delivery_from_row(row) if row is not None else None
+
     def list_due(self, now: object, limit: int) -> list[OutboundDelivery]:
         stmt = (
             select(OutboundDeliveryRow)

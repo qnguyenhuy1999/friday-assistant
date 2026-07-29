@@ -115,15 +115,9 @@ def _database_snapshot(engine: Engine) -> dict[str, dict[str, Any]]:
             tuple(constraint["column_names"])
             for constraint in inspector.get_unique_constraints(table_name)
         )
-        uq_names = {
-            constraint["name"]
-            for constraint in inspector.get_unique_constraints(table_name)
-            if constraint.get("name")
-        }
         indexes = sorted(
             (index["name"], tuple(index["column_names"]), bool(index["unique"]))
             for index in inspector.get_indexes(table_name)
-            if index.get("name") not in uq_names
         )
         tables[table_name] = {
             "columns": columns,

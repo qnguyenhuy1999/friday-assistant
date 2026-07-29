@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 
-from apps.api.dependencies import get_clock, get_messaging_routes, get_uow_factory
+from apps.api.dependencies import get_clock, get_uow_factory
 from apps.api.pagination import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -19,11 +19,9 @@ from apps.api.schemas.schedules import (
     ScheduleFireResponse,
     SchedulePageResponse,
     ScheduleResponse,
-    SetScheduleDeliveryBody,
 )
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.schedule_lifecycle import (
-    ConfigureScheduleDelivery,
     CreateSchedule,
     CreateScheduleCommand,
     GetSchedule,
@@ -32,21 +30,13 @@ from friday.application.schedule_lifecycle import (
 from friday.domain.identifiers import ScheduleId, TaskId
 from friday.domain.schedule import Schedule, ScheduleKind
 from friday.domain.schedule_fire import ScheduleFire
-from friday.domain.scheduled_delivery import ScheduleDeliveryPolicy
-from friday.infrastructure.messaging.config import MessagingRoutes
 
 router = APIRouter(prefix="/v1/tasks/{task_id}/schedules", tags=["schedules"])
 UowDependency = Annotated[UnitOfWorkFactory, Depends(get_uow_factory)]
 ClockDependency = Annotated[Clock, Depends(get_clock)]
-MessagingRoutesDependency = Annotated[MessagingRoutes, Depends(get_messaging_routes)]
 
 
-def _schedule(
-    value: Schedule,
-    policy: ScheduleDeliveryPolicy | None = None,
-    routes: MessagingRoutes | None = None,
-) -> ScheduleResponse:
-    route = routes.get(policy.route_id) if policy is not None and routes is not None else None
+def _schedule(value: Schedule) -> ScheduleResponse:
     return ScheduleResponse(
         id=str(value.id),
         task_id=str(value.task_id),
@@ -58,9 +48,6 @@ def _schedule(
         next_fire_at=value.next_fire_at,
         created_at=value.created_at,
         updated_at=value.updated_at,
-        delivery_route_id=policy.route_id if policy is not None else None,
-        delivery_route_description=route.trusted_description if route is not None else None,
-        delivery_enabled=route.enabled if route is not None else None,
     )
 
 
@@ -85,17 +72,7 @@ def create_schedule(
     body: CreateScheduleBody,
     uow_factory: UowDependency,
     clock: ClockDependency,
-    messaging_routes: MessagingRoutesDependency,
 ) -> ScheduleResponse:
-    route = (
-        messaging_routes.get_enabled(body.delivery_route_id)
-        if body.delivery_route_id is not None
-        else None
-    )
-    if body.delivery_route_id is not None and route is None:
-        from friday.application.errors import EntityConflict
-
-        raise EntityConflict("delivery route is not configured")
     result = CreateSchedule(uow_factory, clock).execute(
         CreateScheduleCommand(
             task_id=TaskId.parse(str(task_id)),
@@ -103,20 +80,15 @@ def create_schedule(
             cron=body.cron,
             run_at=body.run_at,
             timezone=body.timezone,
-            delivery_route_id=route.route_id if route is not None else None,
-            delivery_route_fingerprint=route.fingerprint if route is not None else None,
         )
     )
-    with uow_factory() as uow:
-        policy = uow.schedule_delivery_policies.get(result.id)
-    return _schedule(result, policy, messaging_routes)
+    return _schedule(result)
 
 
 @router.get("", response_model=SchedulePageResponse, operation_id="listSchedules")
 def list_schedules(
     task_id: UUID,
     uow_factory: UowDependency,
-    messaging_routes: MessagingRoutesDependency,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     cursor: str | None = None,
 ) -> SchedulePageResponse:
@@ -130,7 +102,6 @@ def list_schedules(
             cursor_datetime(after.after[0]) if after else None,
             after.after[1] if after else None,
         )
-        policies = {item.id: uow.schedule_delivery_policies.get(item.id) for item in items}
     page, next_cursor = page_from_query(
         items,
         limit=limit,
@@ -139,58 +110,15 @@ def list_schedules(
         order="created_at_id_asc",
         key=lambda value: (value.created_at.isoformat(), str(value.id)),
     )
-    return SchedulePageResponse(
-        items=[_schedule(item, policies[item.id], messaging_routes) for item in page],
-        next_cursor=next_cursor,
-    )
+    return SchedulePageResponse(items=[_schedule(item) for item in page], next_cursor=next_cursor)
 
 
 @router.get("/{schedule_id}", response_model=ScheduleResponse, operation_id="getSchedule")
-def get_schedule(
-    task_id: UUID,
-    schedule_id: UUID,
-    uow_factory: UowDependency,
-    messaging_routes: MessagingRoutesDependency,
-) -> ScheduleResponse:
+def get_schedule(task_id: UUID, schedule_id: UUID, uow_factory: UowDependency) -> ScheduleResponse:
     result = GetSchedule(uow_factory).execute(
         ScheduleId.parse(str(schedule_id)), task_id=TaskId.parse(str(task_id))
     )
-    with uow_factory() as uow:
-        policy = uow.schedule_delivery_policies.get(result.id)
-    return _schedule(result, policy, messaging_routes)
-
-
-@router.post(
-    "/{schedule_id}/delivery",
-    response_model=ScheduleResponse,
-    operation_id="setScheduleDelivery",
-)
-def set_schedule_delivery(
-    task_id: UUID,
-    schedule_id: UUID,
-    body: SetScheduleDeliveryBody,
-    uow_factory: UowDependency,
-    clock: ClockDependency,
-    messaging_routes: MessagingRoutesDependency,
-) -> ScheduleResponse:
-    route = (
-        messaging_routes.get_enabled(body.delivery_route_id)
-        if body.delivery_route_id is not None
-        else None
-    )
-    if body.delivery_route_id is not None and route is None:
-        from friday.application.errors import EntityConflict
-
-        raise EntityConflict("delivery route is not configured")
-    result = ConfigureScheduleDelivery(uow_factory, clock).execute(
-        ScheduleId.parse(str(schedule_id)),
-        task_id=TaskId.parse(str(task_id)),
-        route_id=route.route_id if route is not None else None,
-        route_fingerprint=route.fingerprint if route is not None else None,
-    )
-    with uow_factory() as uow:
-        policy = uow.schedule_delivery_policies.get(result.id)
-    return _schedule(result, policy, messaging_routes)
+    return _schedule(result)
 
 
 def _control(
@@ -199,52 +127,37 @@ def _control(
     uow_factory: UnitOfWorkFactory,
     clock: Clock,
     action: str,
-    messaging_routes: MessagingRoutes,
 ) -> ScheduleResponse:
     control = ScheduleControl(uow_factory, clock)
     result = getattr(control, action)(
         ScheduleId.parse(str(schedule_id)), task_id=TaskId.parse(str(task_id))
     )
-    with uow_factory() as uow:
-        policy = uow.schedule_delivery_policies.get(result.id)
-    return _schedule(result, policy, messaging_routes)
+    return _schedule(result)
 
 
 @router.post("/{schedule_id}/pause", response_model=ScheduleResponse, operation_id="pauseSchedule")
 def pause_schedule(
-    task_id: UUID,
-    schedule_id: UUID,
-    uow_factory: UowDependency,
-    clock: ClockDependency,
-    messaging_routes: MessagingRoutesDependency,
+    task_id: UUID, schedule_id: UUID, uow_factory: UowDependency, clock: ClockDependency
 ) -> ScheduleResponse:
-    return _control(task_id, schedule_id, uow_factory, clock, "pause", messaging_routes)
+    return _control(task_id, schedule_id, uow_factory, clock, "pause")
 
 
 @router.post(
     "/{schedule_id}/resume", response_model=ScheduleResponse, operation_id="resumeSchedule"
 )
 def resume_schedule(
-    task_id: UUID,
-    schedule_id: UUID,
-    uow_factory: UowDependency,
-    clock: ClockDependency,
-    messaging_routes: MessagingRoutesDependency,
+    task_id: UUID, schedule_id: UUID, uow_factory: UowDependency, clock: ClockDependency
 ) -> ScheduleResponse:
-    return _control(task_id, schedule_id, uow_factory, clock, "resume", messaging_routes)
+    return _control(task_id, schedule_id, uow_factory, clock, "resume")
 
 
 @router.post(  # noqa: E501
     "/{schedule_id}/cancel", response_model=ScheduleResponse, operation_id="cancelSchedule"
 )
 def cancel_schedule(
-    task_id: UUID,
-    schedule_id: UUID,
-    uow_factory: UowDependency,
-    clock: ClockDependency,
-    messaging_routes: MessagingRoutesDependency,
+    task_id: UUID, schedule_id: UUID, uow_factory: UowDependency, clock: ClockDependency
 ) -> ScheduleResponse:
-    return _control(task_id, schedule_id, uow_factory, clock, "cancel", messaging_routes)
+    return _control(task_id, schedule_id, uow_factory, clock, "cancel")
 
 
 @router.get(

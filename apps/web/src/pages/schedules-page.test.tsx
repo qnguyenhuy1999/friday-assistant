@@ -4,10 +4,6 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SchedulesPage } from "./schedules-page";
 
-vi.mock("../hooks/use-messaging-routes", () => ({
-  useMessagingRoutes: () => ({ data: { items: [] }, isError: false }),
-}));
-
 function response(body: unknown) {
   return new Response(JSON.stringify(body), {
     headers: { "content-type": "application/json" },
@@ -25,9 +21,6 @@ const schedule = (id: string) => ({
   next_fire_at: "2026-01-02T09:00:00Z",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
-  delivery_route_id: null,
-  delivery_route_description: null,
-  delivery_enabled: null,
 });
 
 function renderPage(onViewRun = vi.fn()) {

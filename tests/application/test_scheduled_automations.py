@@ -9,23 +9,14 @@ import pytest
 
 from friday.application.materialize_due_schedule import MaterializeDueSchedules
 from friday.application.retry_policy import RetryPolicy
-from friday.application.schedule_lifecycle import (
-    ConfigureScheduleDelivery,
-    CreateSchedule,
-    CreateScheduleCommand,
-)
+from friday.application.schedule_lifecycle import CreateSchedule, CreateScheduleCommand
 from friday.application.schedule_recurrence import coalesced_next, first_occurrence
-from friday.application.worker_coordination import (
-    ApplyFailedOutcome,
-    ApplySucceededOutcome,
-    ClaimNextRun,
-)
+from friday.application.worker_coordination import ApplyFailedOutcome
 from friday.domain.errors import DomainValidationError
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.identifiers import TaskId
 from friday.domain.run import RunStatus
 from friday.domain.schedule import Schedule, ScheduleKind
-from friday.domain.scheduled_delivery import ScheduleDeliveryPolicy
 from friday.domain.task import Task
 from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
 
@@ -64,106 +55,6 @@ def test_two_scheduler_actors_and_restart_materialize_one_durable_fire() -> None
     assert len(uow.schedule_fire_repo.items) == len(uow.run_repo.items) == 1
     assert uow.schedule_fire_repo.items[0].schedule_id == schedule.id
     assert next(iter(uow.run_repo.items.values())).status is RunStatus.QUEUED
-
-
-def test_schedule_delivery_authority_is_frozen_per_fire_and_final_answer_enqueues_once() -> None:
-    uow, clock, factory, task = _prepared()
-    schedule = _schedule(factory, clock, task, T0 + timedelta(minutes=1))
-    uow.schedule_delivery_policy_repo.save(
-        ScheduleDeliveryPolicy(
-            schedule_id=schedule.id,
-            route_id="route-a",
-            route_fingerprint="a" * 64,
-            enabled=True,
-            created_at=T0,
-            updated_at=T0,
-        )
-    )
-    clock.fixed_now = T0 + timedelta(minutes=1)
-    assert MaterializeDueSchedules(factory, clock, batch_size=10).execute() == 1
-    # A later schedule edit affects only future fires; this fire retains A.
-    uow.schedule_delivery_policy_repo.save(
-        ScheduleDeliveryPolicy(
-            schedule_id=schedule.id,
-            route_id="route-b",
-            route_fingerprint="b" * 64,
-            enabled=True,
-            created_at=T0,
-            updated_at=clock.now(),
-        )
-    )
-    claim = ClaimNextRun(
-        factory, clock, worker_id="worker", lease_duration=timedelta(minutes=1), candidate_limit=10
-    ).execute()
-    assert claim is not None
-
-    ApplySucceededOutcome(factory, clock).execute(
-        claim.run_id,
-        claim.worker_id,
-        claim.claim_token,
-        claim.claim_generation,
-        ("canonical answer", {"safe": True}),
-    )
-    delivery = next(iter(uow.delivery_repo.items.values()))
-    assert delivery.route_id == "route-a"
-    assert delivery.body == "canonical answer"
-    assert delivery.source_run_id == claim.run_id
-    # Finalization replay cannot create a second intent for this ScheduleFire.
-    assert len(uow.delivery_repo.items) == 1
-
-
-def test_scheduled_secret_shaped_answer_is_blocked_without_persisting_secret() -> None:
-    uow, clock, factory, task = _prepared()
-    schedule = _schedule(factory, clock, task, T0 + timedelta(minutes=1))
-    uow.schedule_delivery_policy_repo.save(
-        ScheduleDeliveryPolicy(
-            schedule_id=schedule.id,
-            route_id="route-a",
-            route_fingerprint="a" * 64,
-            enabled=True,
-            created_at=T0,
-            updated_at=T0,
-        )
-    )
-    clock.fixed_now = T0 + timedelta(minutes=1)
-    assert MaterializeDueSchedules(factory, clock, batch_size=10).execute() == 1
-    claim = ClaimNextRun(
-        factory, clock, worker_id="worker", lease_duration=timedelta(minutes=1), candidate_limit=10
-    ).execute()
-    assert claim is not None
-    secret = "secret=test-value-here-not-real"
-
-    ApplySucceededOutcome(factory, clock).execute(
-        claim.run_id,
-        claim.worker_id,
-        claim.claim_token,
-        claim.claim_generation,
-        (f"result: {secret}", {"raw": secret}),
-    )
-    delivery = next(iter(uow.delivery_repo.items.values()))
-    assert delivery.status.value == "failed"
-    assert delivery.failure_code == "scheduled_content_secret_detected"
-    assert secret not in repr(delivery)
-    assert secret not in repr(uow.event_store.appended)
-
-
-def test_schedule_delivery_policy_update_does_not_mutate_existing_fire_plan() -> None:
-    uow, clock, factory, task = _prepared()
-    schedule = _schedule(factory, clock, task, T0 + timedelta(minutes=1))
-    ConfigureScheduleDelivery(factory, clock).execute(
-        schedule.id, task_id=task.id, route_id="route-a", route_fingerprint="a" * 64
-    )
-    clock.fixed_now = T0 + timedelta(minutes=1)
-    assert MaterializeDueSchedules(factory, clock, batch_size=10).execute() == 1
-    plan = next(iter(uow.schedule_fire_delivery_plan_repo.items.values()))
-
-    ConfigureScheduleDelivery(factory, clock).execute(
-        schedule.id, task_id=task.id, route_id="route-b", route_fingerprint="b" * 64
-    )
-
-    assert plan.route_id == "route-a"
-    assert plan.route_fingerprint == "a" * 64
-    assert uow.schedule_delivery_policy_repo.get(schedule.id).route_id == "route-b"  # type: ignore[union-attr]
 
 
 def test_one_broken_schedule_does_not_starve_other_due_schedules(

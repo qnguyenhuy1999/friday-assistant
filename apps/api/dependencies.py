@@ -15,7 +15,6 @@ from sqlalchemy import text
 
 from apps.api.settings import ApiSettings
 from friday.application.ports import Clock, UnitOfWorkFactory
-from friday.infrastructure.messaging.config import MessagingRoutes
 from friday.infrastructure.persistence.health import is_database_reachable
 
 
@@ -32,11 +31,6 @@ def get_clock(request: Request) -> Clock:
 def get_settings(request: Request) -> ApiSettings:
     settings: ApiSettings = request.app.state.settings
     return settings
-
-
-def get_messaging_routes(request: Request) -> MessagingRoutes:
-    routes: MessagingRoutes = request.app.state.messaging_routes
-    return routes
 
 
 def get_database_reachable(request: Request) -> bool:

@@ -41,9 +41,6 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "schedule_fires",
             "conversations",
             "conversation_turns",
-            "delivery_attempts",
-            "schedule_delivery_policies",
-            "schedule_fire_delivery_plans",
             "alembic_version",
         }
         assert "execution_id" in {column["name"] for column in inspector.get_columns("runs")}
@@ -67,6 +64,14 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "ck_outbound_deliveries_route_fingerprint_hex",
             "ck_outbound_deliveries_body_sha256_hex",
         } <= delivery_checks
+        delivery_unique = {
+            tuple(constraint["column_names"])
+            for constraint in inspector.get_unique_constraints("outbound_deliveries")
+        }
+        assert delivery_unique == {
+            ("source_tool_invocation_id",),
+            ("source_schedule_fire_id",),
+        }
     finally:
         engine.dispose()
 

@@ -65,6 +65,8 @@ def test_delivery_state_machine_and_terminal_states() -> None:
             claim_token="token",
             claim_expires_at=T0 + timedelta(minutes=1),
         )
+    with pytest.raises(InvalidStateTransition):
+        delivery.cancel(at=T0)
 
 
 def test_only_queued_delivery_can_be_cancelled_or_started() -> None:
@@ -79,6 +81,53 @@ def test_only_queued_delivery_can_be_cancelled_or_started() -> None:
     )
     with pytest.raises(InvalidStateTransition):
         sending.cancel(at=T0)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("route_id", "other.route"),
+        ("route_fingerprint", "b" * 64),
+        ("subject", "other"),
+        ("body", "other body"),
+        ("body_sha256", "b" * 64),
+        ("source_run_id", RunId.new()),
+        ("source_tool_invocation_id", ToolInvocationId.new()),
+    ],
+)
+def test_authority_and_content_are_immutable_after_creation(field: str, value: object) -> None:
+    with pytest.raises(AttributeError):
+        setattr(_delivery(), field, value)
+
+
+def test_claim_does_not_allow_retargeting_authority_or_requeue() -> None:
+    delivery = _delivery()
+    delivery.claim(
+        at=T0, claim_owner="worker", claim_token="token", claim_expires_at=T0 + timedelta(minutes=1)
+    )
+    with pytest.raises(AttributeError):
+        delivery.route_id = "other.route"
+    assert not hasattr(delivery, "requeue")
+    delivery.fail(at=T0 + timedelta(seconds=1), failure_code="failed", failure_message="nope")
+    assert delivery.status is DeliveryStatus.FAILED
+
+
+def test_scheduled_delivery_source_identity_is_immutable() -> None:
+    from friday.domain.identifiers import ScheduleFireId
+
+    delivery = OutboundDelivery.new(
+        id=DeliveryId.new(),
+        source_kind=DeliverySourceKind.SCHEDULED_RUN_ANSWER,
+        source_run_id=RunId.new(),
+        source_schedule_fire_id=ScheduleFireId.new(),
+        route_id="scheduled.route",
+        route_fingerprint=FINGERPRINT,
+        body="hello",
+        available_at=T0,
+        created_at=T0,
+    )
+    with pytest.raises(AttributeError):
+        delivery.source_schedule_fire_id = ScheduleFireId.new()
 
 
 @pytest.mark.parametrize(

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 
@@ -71,6 +71,8 @@ def _optional_bounded(value: str | None, *, field: str, maximum: int) -> str | N
 
 @dataclass(slots=True)
 class OutboundDelivery:
+    """A durable, immutable delivery instruction with mutable lifecycle state."""
+
     id: DeliveryId
     source_kind: DeliverySourceKind
     source_run_id: RunId
@@ -94,6 +96,27 @@ class OutboundDelivery:
     created_at: datetime
     updated_at: datetime
     delivered_at: datetime | None
+    _authority_frozen: bool = field(init=False, default=False, repr=False)
+
+    _AUTHORITY_FIELDS = frozenset(
+        {
+            "id",
+            "source_kind",
+            "source_run_id",
+            "source_tool_invocation_id",
+            "source_schedule_fire_id",
+            "route_id",
+            "route_fingerprint",
+            "subject",
+            "body",
+            "body_sha256",
+        }
+    )
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name in self._AUTHORITY_FIELDS and getattr(self, "_authority_frozen", False):
+            raise AttributeError(f"OutboundDelivery.{name} is immutable")
+        object.__setattr__(self, name, value)
 
     @classmethod
     def new(
@@ -192,6 +215,7 @@ class OutboundDelivery:
         self.updated_at = ensure_utc(self.updated_at)
         self.claim_expires_at = ensure_utc(self.claim_expires_at) if self.claim_expires_at else None
         self.delivered_at = ensure_utc(self.delivered_at) if self.delivered_at else None
+        self._authority_frozen = True
 
     def _validate_source_shape(self) -> None:
         if self.source_kind is DeliverySourceKind.AGENT_REQUEST:
@@ -255,18 +279,6 @@ class OutboundDelivery:
         self.updated_at = ensure_utc(at)
         self.status = DeliveryStatus.FAILED
 
-    def block(self, *, at: datetime, failure_code: str, failure_message: str) -> None:
-        """Record a policy refusal before dispatch; this is never retried."""
-        self._require_status(DeliveryStatus.QUEUED, target=DeliveryStatus.FAILED)
-        self.failure_code = _bounded(
-            failure_code, field="failure_code", maximum=MAX_FAILURE_CODE_LENGTH
-        )
-        self.failure_message = _bounded(
-            failure_message, field="failure_message", maximum=MAX_FAILURE_MESSAGE_LENGTH
-        )
-        self.updated_at = ensure_utc(at)
-        self.status = DeliveryStatus.FAILED
-
     def mark_ambiguous(self, *, at: datetime, failure_code: str, failure_message: str) -> None:
         self._require_status(DeliveryStatus.SENDING, target=DeliveryStatus.AMBIGUOUS)
         self.failure_code = _bounded(
@@ -277,20 +289,6 @@ class OutboundDelivery:
         )
         self.updated_at = ensure_utc(at)
         self.status = DeliveryStatus.AMBIGUOUS
-
-    def requeue(self, *, at: datetime, available_at: datetime) -> None:
-        """Retry only a failure proven to have occurred before dispatch."""
-        self._require_status(DeliveryStatus.SENDING, target=DeliveryStatus.QUEUED)
-        available = ensure_utc(available_at)
-        now = ensure_utc(at)
-        if available <= now:
-            raise DomainValidationError("OutboundDelivery retry availability must be in the future")
-        self.status = DeliveryStatus.QUEUED
-        self.available_at = available
-        self.claim_owner = None
-        self.claim_token = None
-        self.claim_expires_at = None
-        self.updated_at = now
 
     def cancel(self, *, at: datetime) -> None:
         self._require_status(DeliveryStatus.QUEUED, target=DeliveryStatus.CANCELLED)

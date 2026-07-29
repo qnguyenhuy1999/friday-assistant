@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-from sqlalchemy.orm import Session
+import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
 
 from friday.domain import (
     DeliveryId,
@@ -16,6 +23,8 @@ from friday.domain import (
     ToolInvocation,
     ToolInvocationId,
 )
+from friday.domain.identifiers import ScheduleFireId, ScheduleId
+from friday.infrastructure.persistence.models import RunRow, ScheduleFireRow, ScheduleRow
 from friday.infrastructure.persistence.repositories import (
     OutboundDeliveryRepository,
     RunRepository,
@@ -25,6 +34,22 @@ from friday.infrastructure.persistence.repositories import (
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 FINGERPRINT = "a" * 64
+
+
+@pytest.fixture
+def session(tmp_path: Path) -> Iterator[Session]:
+    """Acceptance tests use the actual Alembic-created SQLite schema."""
+    db_path = tmp_path / "outbound-deliveries.db"
+    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{db_path}")
+    db_session = sessionmaker(bind=engine)()
+    try:
+        yield db_session
+    finally:
+        db_session.close()
+        engine.dispose()
 
 
 def _run_and_invocation(session: Session) -> tuple[RunId, ToolInvocationId]:
@@ -86,6 +111,19 @@ def test_round_trip_save_and_list_due(session: Session) -> None:
     assert fetched.claim_token == "token"
     assert fetched.failure_code == "timeout"
     assert fetched.updated_at.tzinfo is UTC
+    assert fetched.route_id == delivery.route_id
+    assert fetched.route_fingerprint == delivery.route_fingerprint
+    assert fetched.subject == delivery.subject
+    assert fetched.body == delivery.body
+    assert fetched.body_sha256 == delivery.body_sha256
+    assert fetched.source_run_id == delivery.source_run_id
+    assert fetched.source_tool_invocation_id == delivery.source_tool_invocation_id
+    with pytest.raises(AttributeError):
+        fetched.body = "retargeted"
+    with pytest.raises(AttributeError):
+        fetched.route_id = "retargeted.route"
+    with pytest.raises(AttributeError):
+        fetched.source_tool_invocation_id = ToolInvocationId.new()
 
     future_invocation = ToolInvocation.new(
         id=ToolInvocationId.new(),
@@ -120,3 +158,65 @@ def test_list_due_is_queued_only_and_deterministic(session: Session) -> None:
     repo.add(earlier)
     session.flush()
     assert [delivery.id for delivery in repo.list_due(T0 + timedelta(seconds=1), 1)] == [earlier.id]
+
+
+def test_source_tool_invocation_is_unique(session: Session) -> None:
+    run_id, invocation_id = _run_and_invocation(session)
+    repo = OutboundDeliveryRepository(session)
+    repo.add(_delivery(run_id, invocation_id, T0))
+    session.flush()
+    repo.add(_delivery(run_id, invocation_id, T0))
+    with pytest.raises(IntegrityError, match="UNIQUE constraint failed"):
+        session.flush()
+
+
+def test_source_schedule_fire_is_unique(session: Session) -> None:
+    run_id, _ = _run_and_invocation(session)
+    run = session.get(RunRow, str(run_id))
+    assert run is not None
+    schedule_id = ScheduleId.new()
+    fire_id = ScheduleFireId.new()
+    session.add(
+        ScheduleRow(
+            id=str(schedule_id),
+            task_id=run.task_id,
+            kind="once",
+            cron=None,
+            run_at=T0,
+            timezone="UTC",
+            status="completed",
+            next_fire_at=None,
+            created_at=T0,
+            updated_at=T0,
+        )
+    )
+    session.add(
+        ScheduleFireRow(
+            id=str(fire_id),
+            schedule_id=str(schedule_id),
+            scheduled_for=T0,
+            fired_at=T0,
+            run_id=str(run_id),
+        )
+    )
+    session.flush()
+    repo = OutboundDeliveryRepository(session)
+
+    def scheduled() -> OutboundDelivery:
+        return OutboundDelivery.new(
+            id=DeliveryId.new(),
+            source_kind=DeliverySourceKind.SCHEDULED_RUN_ANSWER,
+            source_run_id=run_id,
+            source_schedule_fire_id=fire_id,
+            route_id="scheduled.route",
+            route_fingerprint=FINGERPRINT,
+            body="hello",
+            available_at=T0,
+            created_at=T0,
+        )
+
+    repo.add(scheduled())
+    session.flush()
+    repo.add(scheduled())
+    with pytest.raises(IntegrityError, match="UNIQUE constraint failed"):
+        session.flush()

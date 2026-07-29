@@ -15,7 +15,6 @@ from friday.application.schedule_recurrence import (
 from friday.domain.errors import InvalidStateTransition
 from friday.domain.identifiers import ScheduleId, TaskId
 from friday.domain.schedule import Schedule, ScheduleKind, validate_timezone
-from friday.domain.scheduled_delivery import ScheduleDeliveryPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,8 +24,6 @@ class CreateScheduleCommand:
     cron: str | None = None
     run_at: datetime | None = None
     timezone: str = "UTC"
-    delivery_route_id: str | None = None
-    delivery_route_fingerprint: str | None = None
 
 
 class CreateSchedule:
@@ -59,22 +56,6 @@ class CreateSchedule:
                 ),
             )
             uow.schedules.add(schedule)
-            if (command.delivery_route_id is None) != (command.delivery_route_fingerprint is None):
-                raise ValueError(
-                    "schedule delivery route and fingerprint must be provided together"
-                )
-            if command.delivery_route_id is not None:
-                assert command.delivery_route_fingerprint is not None
-                uow.schedule_delivery_policies.save(
-                    ScheduleDeliveryPolicy(
-                        schedule_id=schedule.id,
-                        route_id=command.delivery_route_id,
-                        route_fingerprint=command.delivery_route_fingerprint,
-                        enabled=True,
-                        created_at=now,
-                        updated_at=now,
-                    )
-                )
             uow.commit()
             return schedule
 
@@ -113,51 +94,6 @@ class ScheduleControl:
 
     def cancel(self, schedule_id: ScheduleId, *, task_id: TaskId | None = None) -> Schedule:
         return self._change(schedule_id, "cancel", task_id=task_id)
-
-
-class ConfigureScheduleDelivery:
-    """Change standing authority for future fires only.
-
-    Existing ScheduleFireDeliveryPlan rows are immutable snapshots, so this
-    policy update cannot retarget an occurrence already materialized.
-    """
-
-    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
-        self._uow_factory = uow_factory
-        self._clock = clock
-
-    def execute(
-        self,
-        schedule_id: ScheduleId,
-        *,
-        task_id: TaskId,
-        route_id: str | None,
-        route_fingerprint: str | None,
-    ) -> Schedule:
-        if (route_id is None) != (route_fingerprint is None):
-            raise ValueError("schedule delivery route and fingerprint must be provided together")
-        with self._uow_factory() as uow:
-            schedule = uow.schedules.get(schedule_id)
-            if schedule is None or schedule.task_id != task_id:
-                raise ScheduleNotFound(schedule_id)
-            if route_id is None:
-                uow.schedule_delivery_policies.delete(schedule_id)
-            else:
-                assert route_fingerprint is not None
-                now = self._clock.now()
-                existing = uow.schedule_delivery_policies.get(schedule_id)
-                uow.schedule_delivery_policies.save(
-                    ScheduleDeliveryPolicy(
-                        schedule_id=schedule_id,
-                        route_id=route_id,
-                        route_fingerprint=route_fingerprint,
-                        enabled=True,
-                        created_at=existing.created_at if existing is not None else now,
-                        updated_at=now,
-                    )
-                )
-            uow.commit()
-            return schedule
 
 
 class GetSchedule:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import builtins
-from datetime import datetime
 from typing import Any, cast
 
 from sqlalchemy import Select, and_, func, or_, select, update
@@ -31,7 +30,6 @@ from friday.domain import (
     RunStepId,
     Schedule,
     ScheduleFire,
-    ScheduleFireId,
     ScheduleId,
     Task,
     TaskEvent,
@@ -41,11 +39,9 @@ from friday.domain import (
 )
 from friday.domain.run import TERMINAL_RUN_STATUSES
 from friday.domain.schedule import ScheduleStatus
-from friday.domain.scheduled_delivery import ScheduleDeliveryPolicy, ScheduleFireDeliveryPlan
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
 from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
 from friday.infrastructure.persistence.mappers import (
-    _read_back_utc,
     approval_from_row,
     approval_to_row,
     artifact_from_row,
@@ -84,7 +80,6 @@ from friday.infrastructure.persistence.models import (
     ArtifactRow,
     ConversationRow,
     ConversationTurnRow,
-    DeliveryAttemptRow,
     MemoryIndexSnapshotRow,
     MemoryRetrievalItemRow,
     MemoryRetrievalRecordRow,
@@ -93,8 +88,6 @@ from friday.infrastructure.persistence.models import (
     RunEventSequenceCounterRow,
     RunRow,
     RunStepRow,
-    ScheduleDeliveryPolicyRow,
-    ScheduleFireDeliveryPlanRow,
     ScheduleFireRow,
     ScheduleRow,
     TaskEventRow,
@@ -432,73 +425,6 @@ class ScheduleFireRepository:
         return self._session.execute(stmt).first() is not None
 
 
-class ScheduleDeliveryPolicyRepository:
-    def __init__(self, session: Session) -> None:
-        self._session = session
-
-    def get(self, schedule_id: ScheduleId) -> ScheduleDeliveryPolicy | None:
-        row = self._session.get(ScheduleDeliveryPolicyRow, str(schedule_id))
-        if row is None:
-            return None
-        return ScheduleDeliveryPolicy(
-            schedule_id=ScheduleId.parse(row.schedule_id),
-            route_id=row.route_id,
-            route_fingerprint=row.route_fingerprint,
-            enabled=row.enabled,
-            created_at=_read_back_utc(row.created_at),
-            updated_at=_read_back_utc(row.updated_at),
-        )
-
-    def save(self, policy: ScheduleDeliveryPolicy) -> None:
-        self._session.merge(
-            ScheduleDeliveryPolicyRow(
-                schedule_id=str(policy.schedule_id),
-                route_id=policy.route_id,
-                route_fingerprint=policy.route_fingerprint,
-                enabled=policy.enabled,
-                created_at=policy.created_at,
-                updated_at=policy.updated_at,
-            )
-        )
-
-    def delete(self, schedule_id: ScheduleId) -> None:
-        row = self._session.get(ScheduleDeliveryPolicyRow, str(schedule_id))
-        if row is not None:
-            self._session.delete(row)
-
-
-class ScheduleFireDeliveryPlanRepository:
-    def __init__(self, session: Session) -> None:
-        self._session = session
-
-    def add(self, plan: ScheduleFireDeliveryPlan) -> None:
-        self._session.add(
-            ScheduleFireDeliveryPlanRow(
-                schedule_fire_id=str(plan.schedule_fire_id),
-                execution_id=str(plan.execution_id),
-                route_id=plan.route_id,
-                route_fingerprint=plan.route_fingerprint,
-                created_at=plan.created_at,
-            )
-        )
-
-    def get_by_execution(self, execution_id: RunId) -> ScheduleFireDeliveryPlan | None:
-        row = self._session.execute(
-            select(ScheduleFireDeliveryPlanRow).where(
-                ScheduleFireDeliveryPlanRow.execution_id == str(execution_id)
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            return None
-        return ScheduleFireDeliveryPlan(
-            schedule_fire_id=ScheduleFireId.parse(row.schedule_fire_id),
-            execution_id=RunId.parse(row.execution_id),
-            route_id=row.route_id,
-            route_fingerprint=row.route_fingerprint,
-            created_at=_read_back_utc(row.created_at),
-        )
-
-
 class RunStepRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -809,26 +735,6 @@ class OutboundDeliveryRepository:
         row = self._session.get(OutboundDeliveryRow, str(delivery_id))
         return outbound_delivery_from_row(row) if row is not None else None
 
-    def get_by_source_tool_invocation(
-        self, invocation_id: ToolInvocationId
-    ) -> OutboundDelivery | None:
-        row = self._session.execute(
-            select(OutboundDeliveryRow).where(
-                OutboundDeliveryRow.source_tool_invocation_id == str(invocation_id)
-            )
-        ).scalar_one_or_none()
-        return outbound_delivery_from_row(row) if row is not None else None
-
-    def get_by_source_schedule_fire(
-        self, schedule_fire_id: ScheduleFireId
-    ) -> OutboundDelivery | None:
-        row = self._session.execute(
-            select(OutboundDeliveryRow).where(
-                OutboundDeliveryRow.source_schedule_fire_id == str(schedule_fire_id)
-            )
-        ).scalar_one_or_none()
-        return outbound_delivery_from_row(row) if row is not None else None
-
     def save(self, delivery: OutboundDelivery) -> None:
         self._session.merge(outbound_delivery_to_row(delivery))
 
@@ -843,195 +749,6 @@ class OutboundDeliveryRepository:
             .limit(limit)
         )
         return [outbound_delivery_from_row(row) for row in self._session.execute(stmt).scalars()]
-
-    def list_for_run(self, run_id: RunId) -> list[OutboundDelivery]:
-        rows = self._session.execute(
-            select(OutboundDeliveryRow)
-            .where(OutboundDeliveryRow.source_run_id == str(run_id))
-            .order_by(OutboundDeliveryRow.created_at, OutboundDeliveryRow.id)
-        ).scalars()
-        return [outbound_delivery_from_row(row) for row in rows]
-
-    def list_for_schedule(self, schedule_id: ScheduleId) -> list[OutboundDelivery]:
-        rows = self._session.execute(
-            select(OutboundDeliveryRow)
-            .join(
-                ScheduleFireRow,
-                OutboundDeliveryRow.source_schedule_fire_id == ScheduleFireRow.id,
-            )
-            .where(ScheduleFireRow.schedule_id == str(schedule_id))
-            .order_by(OutboundDeliveryRow.created_at, OutboundDeliveryRow.id)
-        ).scalars()
-        return [outbound_delivery_from_row(row) for row in rows]
-
-    def latest_for_route(self, route_id: str) -> OutboundDelivery | None:
-        row = self._session.execute(
-            select(OutboundDeliveryRow)
-            .where(OutboundDeliveryRow.route_id == route_id)
-            .order_by(OutboundDeliveryRow.updated_at.desc(), OutboundDeliveryRow.id.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        return outbound_delivery_from_row(row) if row is not None else None
-
-    def cancel_if_queued(self, delivery_id: DeliveryId, at: datetime) -> OutboundDelivery | None:
-        result = self._session.execute(
-            update(OutboundDeliveryRow)
-            .where(
-                OutboundDeliveryRow.id == str(delivery_id),
-                OutboundDeliveryRow.status == DeliveryStatus.QUEUED.value,
-            )
-            .values(status=DeliveryStatus.CANCELLED.value, updated_at=at)
-            .returning(OutboundDeliveryRow)
-        ).scalar_one_or_none()
-        return outbound_delivery_from_row(result) if result is not None else None
-
-    def try_claim(
-        self,
-        delivery_id: DeliveryId,
-        worker_id: str,
-        claim_token: str,
-        now: datetime,
-        lease_expires_at: datetime,
-    ) -> int | None:
-        stmt = (
-            update(OutboundDeliveryRow)
-            .where(
-                OutboundDeliveryRow.id == str(delivery_id),
-                OutboundDeliveryRow.status == DeliveryStatus.QUEUED.value,
-                OutboundDeliveryRow.available_at <= now,
-            )
-            .values(
-                status=DeliveryStatus.SENDING.value,
-                claim_owner=worker_id,
-                claim_token=claim_token,
-                claim_generation=OutboundDeliveryRow.claim_generation + 1,
-                claim_expires_at=lease_expires_at,
-                attempt_count=OutboundDeliveryRow.attempt_count + 1,
-                updated_at=now,
-            )
-            .returning(OutboundDeliveryRow.claim_generation)
-        )
-        generation = self._session.execute(stmt).scalar_one_or_none()
-        if generation is not None:
-            self._session.add(
-                DeliveryAttemptRow(
-                    delivery_id=str(delivery_id),
-                    claim_generation=generation,
-                    attempt_number=generation,
-                    claim_owner=worker_id,
-                    claimed_at=now,
-                    completed_at=None,
-                    outcome=None,
-                    failure_code=None,
-                )
-            )
-        return generation
-
-    def is_claim_active(
-        self,
-        delivery_id: DeliveryId,
-        worker_id: str,
-        claim_token: str,
-        claim_generation: int,
-        now: datetime,
-    ) -> bool:
-        stmt = select(OutboundDeliveryRow.id).where(
-            OutboundDeliveryRow.id == str(delivery_id),
-            OutboundDeliveryRow.status == DeliveryStatus.SENDING.value,
-            OutboundDeliveryRow.claim_owner == worker_id,
-            OutboundDeliveryRow.claim_token == claim_token,
-            OutboundDeliveryRow.claim_generation == claim_generation,
-            OutboundDeliveryRow.claim_expires_at > now,
-        )
-        return self._session.execute(stmt).scalar_one_or_none() is not None
-
-    def save_if_claimed(
-        self,
-        delivery: OutboundDelivery,
-        worker_id: str,
-        claim_token: str,
-        claim_generation: int,
-        now: datetime,
-    ) -> bool:
-        values = outbound_delivery_to_row(delivery)
-        stmt = (
-            update(OutboundDeliveryRow)
-            .where(
-                OutboundDeliveryRow.id == str(delivery.id),
-                OutboundDeliveryRow.status == DeliveryStatus.SENDING.value,
-                OutboundDeliveryRow.claim_owner == worker_id,
-                OutboundDeliveryRow.claim_token == claim_token,
-                OutboundDeliveryRow.claim_generation == claim_generation,
-                OutboundDeliveryRow.claim_expires_at > now,
-            )
-            .values(
-                status=values.status,
-                available_at=values.available_at,
-                claim_owner=values.claim_owner,
-                claim_token=values.claim_token,
-                claim_expires_at=values.claim_expires_at,
-                provider_message_id=values.provider_message_id,
-                failure_code=values.failure_code,
-                failure_message=values.failure_message,
-                updated_at=values.updated_at,
-                delivered_at=values.delivered_at,
-            )
-        )
-        result = cast(CursorResult[Any], self._session.execute(stmt))
-        if result.rowcount == 1:
-            self._session.execute(
-                update(DeliveryAttemptRow)
-                .where(
-                    DeliveryAttemptRow.delivery_id == str(delivery.id),
-                    DeliveryAttemptRow.claim_generation == claim_generation,
-                    DeliveryAttemptRow.completed_at.is_(None),
-                )
-                .values(
-                    completed_at=now,
-                    outcome=delivery.status.value,
-                    failure_code=delivery.failure_code,
-                )
-            )
-        return result.rowcount == 1
-
-    def recover_expired_sending(self, now: datetime) -> int:
-        expired = list(
-            self._session.execute(
-                select(OutboundDeliveryRow.id, OutboundDeliveryRow.claim_generation).where(
-                    OutboundDeliveryRow.status == DeliveryStatus.SENDING.value,
-                    OutboundDeliveryRow.claim_expires_at <= now,
-                )
-            )
-        )
-        stmt = (
-            update(OutboundDeliveryRow)
-            .where(
-                OutboundDeliveryRow.status == DeliveryStatus.SENDING.value,
-                OutboundDeliveryRow.claim_expires_at <= now,
-            )
-            .values(
-                status=DeliveryStatus.AMBIGUOUS.value,
-                failure_code="delivery_lease_expired",
-                failure_message="delivery outcome is unknown after its worker lease expired",
-                updated_at=now,
-            )
-        )
-        result = cast(CursorResult[Any], self._session.execute(stmt))
-        for delivery_id, generation in expired:
-            self._session.execute(
-                update(DeliveryAttemptRow)
-                .where(
-                    DeliveryAttemptRow.delivery_id == delivery_id,
-                    DeliveryAttemptRow.claim_generation == generation,
-                    DeliveryAttemptRow.completed_at.is_(None),
-                )
-                .values(
-                    completed_at=now,
-                    outcome=DeliveryStatus.AMBIGUOUS.value,
-                    failure_code="delivery_lease_expired",
-                )
-            )
-        return result.rowcount
 
 
 class RunEventStore:

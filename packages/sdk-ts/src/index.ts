@@ -31,9 +31,4 @@ export type {
   CreateScheduleBody,
   ListScheduleFiresParams,
   ListSchedulesParams,
-  SetScheduleDeliveryBody,
 } from "./resources/schedules";
-export { DeliveriesResource } from "./resources/deliveries";
-export type { Delivery, DeliveryPage } from "./resources/deliveries";
-export { MessagingResource } from "./resources/messaging";
-export type { MessagingRoute, MessagingRoutePage } from "./resources/messaging";

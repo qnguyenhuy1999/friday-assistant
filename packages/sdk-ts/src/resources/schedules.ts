@@ -7,24 +7,8 @@ import {
 import type { FridayHttpClient } from "../http";
 
 export type CreateScheduleBody =
-  | {
-      kind: "once";
-      run_at: string;
-      timezone?: string;
-      delivery_route_id?: string;
-      cron?: never;
-    }
-  | {
-      kind: "cron";
-      cron: string;
-      timezone?: string;
-      delivery_route_id?: string;
-      run_at?: never;
-    };
-
-export interface SetScheduleDeliveryBody {
-  delivery_route_id: string | null;
-}
+  | { kind: "once"; run_at: string; timezone?: string; cron?: never }
+  | { kind: "cron"; cron: string; timezone?: string; run_at?: never };
 export interface ListSchedulesParams {
   limit?: number;
   cursor?: string;
@@ -67,18 +51,6 @@ export class SchedulesResource {
   }
   cancel(taskId: string, scheduleId: string) {
     return this.control(taskId, scheduleId, "cancel");
-  }
-  setDelivery(
-    taskId: string,
-    scheduleId: string,
-    input: SetScheduleDeliveryBody,
-  ) {
-    return this.http.requestJson<Schedule>({
-      method: "POST",
-      path: `/v1/tasks/${taskId}/schedules/${scheduleId}/delivery`,
-      body: input,
-      validate: validateSchedule,
-    });
   }
   fires(
     taskId: string,

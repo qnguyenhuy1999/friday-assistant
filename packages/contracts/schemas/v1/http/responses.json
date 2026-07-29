@@ -305,10 +305,7 @@
         "status",
         "next_fire_at",
         "created_at",
-        "updated_at",
-        "delivery_route_id",
-        "delivery_route_description",
-        "delivery_enabled"
+        "updated_at"
       ],
       "properties": {
         "id": { "type": "string" },
@@ -320,10 +317,7 @@
         "status": { "enum": ["active", "paused", "completed", "cancelled"] },
         "next_fire_at": { "type": ["string", "null"] },
         "created_at": { "type": "string" },
-        "updated_at": { "type": "string" },
-        "delivery_route_id": { "type": ["string", "null"] },
-        "delivery_route_description": { "type": ["string", "null"] },
-        "delivery_enabled": { "type": ["boolean", "null"] }
+        "updated_at": { "type": "string" }
       }
     },
     "ScheduleFire": {

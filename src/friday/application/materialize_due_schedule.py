@@ -11,7 +11,6 @@ from friday.application.start_run import StartRun
 from friday.domain.identifiers import ScheduleFireId, ScheduleId
 from friday.domain.schedule import ScheduleStatus
 from friday.domain.schedule_fire import ScheduleFire
-from friday.domain.scheduled_delivery import ScheduleFireDeliveryPlan
 
 logger = logging.getLogger(__name__)
 
@@ -66,25 +65,15 @@ class MaterializeDueSchedules:
                     return False
                 occurrence = schedule.next_fire_at
                 result = StartRun.execute_in_uow(uow, task, now)
-                fire = ScheduleFire.new(
-                    id=ScheduleFireId.new(),
-                    schedule_id=schedule.id,
-                    scheduled_for=occurrence,
-                    fired_at=now,
-                    run_id=result.run_id,
-                )
-                uow.schedule_fires.add(fire)
-                policy = uow.schedule_delivery_policies.get(schedule.id)
-                if policy is not None and policy.enabled:
-                    uow.schedule_fire_delivery_plans.add(
-                        ScheduleFireDeliveryPlan(
-                            schedule_fire_id=fire.id,
-                            execution_id=result.run_id,
-                            route_id=policy.route_id,
-                            route_fingerprint=policy.route_fingerprint,
-                            created_at=now,
-                        )
+                uow.schedule_fires.add(
+                    ScheduleFire.new(
+                        id=ScheduleFireId.new(),
+                        schedule_id=schedule.id,
+                        scheduled_for=occurrence,
+                        fired_at=now,
+                        run_id=result.run_id,
                     )
+                )
                 schedule.advance_after_fire(
                     now=now,
                     next_fire_at=coalesced_next(schedule, fired_at=occurrence, now=now),

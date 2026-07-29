@@ -22,7 +22,6 @@ from friday.application.errors import (
     ConcurrencyConflict,
     ConversationNotFound,
     ConversationTurnNotFound,
-    DeliveryNotFound,
     EntityConflict,
     RunNotFound,
     RunStepNotFound,
@@ -61,7 +60,6 @@ _NOT_FOUND_TYPES: dict[type[ApplicationError], str] = {
     RunStepNotFound: "run_step_not_found",
     ApprovalNotFound: "approval_not_found",
     ToolInvocationNotFound: "tool_invocation_not_found",
-    DeliveryNotFound: "delivery_not_found",
     ArtifactNotFound: "artifact_not_found",
 }
 

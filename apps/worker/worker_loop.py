@@ -30,10 +30,6 @@ class MemoryIndexRefresh(Protocol):
     def execute(self) -> object: ...
 
 
-class DeliveryDispatcher(Protocol):
-    def dispatch_once(self) -> bool: ...
-
-
 class WorkerLoop:
     def __init__(
         self,
@@ -53,7 +49,6 @@ class WorkerLoop:
         refresh_memory_index: MemoryIndexRefresh | None = None,
         memory_index_maintenance_interval_seconds: float | None = None,
         materialize_due_schedules: MaterializeDueSchedules | None = None,
-        delivery_dispatcher: DeliveryDispatcher | None = None,
     ) -> None:
         self._claim_next_run = claim_next_run
         self._renew_lease = renew_lease
@@ -64,7 +59,6 @@ class WorkerLoop:
         self._recover_expired_leases = recover_expired_leases
         self._expire_due_approvals = expire_due_approvals
         self._materialize_due_schedules = materialize_due_schedules
-        self._delivery_dispatcher = delivery_dispatcher
         self._clock = clock
         self._refresh_memory_index = refresh_memory_index
         self._memory_index_maintenance_interval_seconds = memory_index_maintenance_interval_seconds
@@ -82,8 +76,6 @@ class WorkerLoop:
             return False
         if shutdown_event is not None and shutdown_event.is_set():
             return False
-        if self._delivery_dispatcher is not None and self._delivery_dispatcher.dispatch_once():
-            return True
         claim = self._claim_next_run.execute()
         if claim is None:
             return False

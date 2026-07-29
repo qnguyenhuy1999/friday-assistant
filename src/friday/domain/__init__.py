@@ -38,7 +38,6 @@ from friday.domain.outbound_delivery import (
 from friday.domain.run import Run, RunStatus
 from friday.domain.schedule import Schedule, ScheduleKind, ScheduleStatus
 from friday.domain.schedule_fire import ScheduleFire
-from friday.domain.scheduled_delivery import ScheduleDeliveryPolicy, ScheduleFireDeliveryPlan
 from friday.domain.step import RunStep, RunStepStatus
 from friday.domain.task import Task, TaskStatus
 from friday.domain.task_event import TaskEvent, TaskEventType
@@ -90,8 +89,6 @@ __all__ = [
     "TaskId",
     "TaskStatus",
     "OutboundDelivery",
-    "ScheduleDeliveryPolicy",
-    "ScheduleFireDeliveryPlan",
     "TERMINAL_DELIVERY_STATUSES",
     "ToolInvocation",
     "ToolInvocationId",

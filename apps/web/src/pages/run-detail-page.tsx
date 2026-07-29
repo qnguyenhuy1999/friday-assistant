@@ -4,7 +4,6 @@ import { FinalResultPanel } from "../components/final-result-panel";
 import { ToolInvocationList } from "../components/tool-invocation-list";
 import { useRunArtifacts } from "../hooks/use-artifacts";
 import { useRunApprovals } from "../hooks/use-approvals";
-import { useRunDeliveries } from "../hooks/use-deliveries";
 import { isTerminalRunStatus, useRun } from "../hooks/use-run";
 import { useRunEventStream } from "../hooks/use-run-event-stream";
 import { useRunSteps } from "../hooks/use-run-steps";
@@ -21,7 +20,6 @@ export function RunDetailPage({
   const invocations = useRunToolInvocations(runId);
   const artifacts = useRunArtifacts(runId);
   const approvals = useRunApprovals(runId);
-  const deliveries = useRunDeliveries(runId);
   const eventStream = useRunEventStream(runId);
   if (isLoading) return <p>Loading run…</p>;
   if (isError || !run) return <p role="alert">Failed to load run.</p>;
@@ -71,19 +69,6 @@ export function RunDetailPage({
       ) : (
         <ArtifactList artifacts={artifacts.data?.items ?? []} />
       )}
-      <h3>Deliveries</h3>
-      {deliveries.isLoading && <p>Loading delivery status…</p>}
-      {deliveries.isError && (
-        <p role="alert">Failed to load delivery status.</p>
-      )}
-      <ul>
-        {deliveries.data?.items?.map((delivery) => (
-          <li key={delivery.id}>
-            {delivery.route_id} — {delivery.status}
-            {delivery.failure_code ? ` (${delivery.failure_code})` : ""}
-          </li>
-        ))}
-      </ul>
       <h3>Events</h3>
       {eventStream.isLoading && <p>Loading event history…</p>}
       {eventStream.isDegraded && (

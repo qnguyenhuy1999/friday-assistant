@@ -19,17 +19,14 @@ from apps.api.request_size import RequestBodyLimitMiddleware
 from apps.api.routes.approvals import router as approvals_router
 from apps.api.routes.artifacts import router as artifacts_router
 from apps.api.routes.conversations import router as conversations_router
-from apps.api.routes.deliveries import router as deliveries_router
 from apps.api.routes.events import router as events_router
 from apps.api.routes.health import router as health_router
-from apps.api.routes.messaging import router as messaging_router
 from apps.api.routes.runs import router as runs_router
 from apps.api.routes.schedules import router as schedules_router
 from apps.api.routes.steps import router as steps_router
 from apps.api.routes.tasks import router as tasks_router
 from apps.api.routes.tool_invocations import router as tool_invocations_router
 from apps.api.settings import ApiSettings
-from apps.worker.messaging_settings import MessagingSettings
 from friday.infrastructure.clock import SystemClock
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
@@ -49,7 +46,6 @@ def create_app(settings: ApiSettings) -> FastAPI:
     app.state.engine = engine
     app.state.uow_factory = create_unit_of_work_factory(session_factory)
     app.state.clock = SystemClock()
-    app.state.messaging_routes = MessagingSettings.from_env().routes
     app.add_middleware(RequestBodyLimitMiddleware, max_bytes=settings.max_request_bytes)
     app.add_middleware(
         CORSMiddleware,
@@ -60,12 +56,10 @@ def create_app(settings: ApiSettings) -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(health_router, responses=ERROR_RESPONSES)
-    app.include_router(messaging_router, responses=ERROR_RESPONSES)
     app.include_router(tasks_router, responses=ERROR_RESPONSES)
     app.include_router(schedules_router, responses=ERROR_RESPONSES)
     app.include_router(conversations_router, responses=ERROR_RESPONSES)
     app.include_router(runs_router, responses=ERROR_RESPONSES)
-    app.include_router(deliveries_router, responses=ERROR_RESPONSES)
     app.include_router(steps_router, responses=ERROR_RESPONSES)
     app.include_router(approvals_router, responses=ERROR_RESPONSES)
     app.include_router(tool_invocations_router, responses=ERROR_RESPONSES)

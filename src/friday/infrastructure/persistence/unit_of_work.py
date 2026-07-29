@@ -38,8 +38,6 @@ from friday.infrastructure.persistence.repositories import (
     RunEventStore,
     RunRepository,
     RunStepRepository,
-    ScheduleDeliveryPolicyRepository,
-    ScheduleFireDeliveryPlanRepository,
     ScheduleFireRepository,
     ScheduleRepository,
     TaskEventStore,
@@ -73,8 +71,6 @@ class SqlAlchemyUnitOfWork:
         self._artifacts = ArtifactRepository(session)
         self._tool_invocations = ToolInvocationRepository(session)
         self._deliveries = OutboundDeliveryRepository(session)
-        self._schedule_delivery_policies = ScheduleDeliveryPolicyRepository(session)
-        self._schedule_fire_delivery_plans = ScheduleFireDeliveryPlanRepository(session)
         self._events = RunEventStore(session)
         self._task_events = TaskEventStore(session)
         self._work_queue = SqlAlchemyRunWorkQueue(session)
@@ -124,14 +120,6 @@ class SqlAlchemyUnitOfWork:
     @property
     def deliveries(self) -> OutboundDeliveryRepository:
         return self._deliveries
-
-    @property
-    def schedule_delivery_policies(self) -> ScheduleDeliveryPolicyRepository:
-        return self._schedule_delivery_policies
-
-    @property
-    def schedule_fire_delivery_plans(self) -> ScheduleFireDeliveryPlanRepository:
-        return self._schedule_fire_delivery_plans
 
     @property
     def events(self) -> RunEventStore:

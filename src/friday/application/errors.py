@@ -12,7 +12,6 @@ from friday.domain.identifiers import (
     ArtifactId,
     ConversationId,
     ConversationTurnId,
-    DeliveryId,
     RunId,
     RunStepId,
     ScheduleId,
@@ -71,12 +70,6 @@ class ToolInvocationNotFound(ApplicationError):
     def __init__(self, invocation_id: ToolInvocationId) -> None:
         self.invocation_id = invocation_id
         super().__init__(f"Tool invocation not found: {invocation_id}")
-
-
-class DeliveryNotFound(ApplicationError):
-    def __init__(self, delivery_id: DeliveryId) -> None:
-        self.delivery_id = delivery_id
-        super().__init__(f"Delivery not found: {delivery_id}")
 
 
 class ArtifactNotFound(ApplicationError):

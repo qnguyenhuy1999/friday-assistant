@@ -35,7 +35,6 @@ from friday.domain.identifiers import (
     DeliveryId,
     RunId,
     RunStepId,
-    ScheduleFireId,
     ScheduleId,
     TaskId,
     ToolInvocationId,
@@ -44,7 +43,6 @@ from friday.domain.outbound_delivery import OutboundDelivery
 from friday.domain.run import Run
 from friday.domain.schedule import Schedule
 from friday.domain.schedule_fire import ScheduleFire
-from friday.domain.scheduled_delivery import ScheduleDeliveryPolicy, ScheduleFireDeliveryPlan
 from friday.domain.step import RunStep
 from friday.domain.task import Task
 from friday.domain.task_event import TaskEvent
@@ -225,17 +223,6 @@ class ScheduleFireRepository(Protocol):
     def has_non_terminal_execution_for_schedule(self, schedule_id: ScheduleId) -> bool: ...
 
 
-class ScheduleDeliveryPolicyRepository(Protocol):
-    def get(self, schedule_id: ScheduleId) -> ScheduleDeliveryPolicy | None: ...
-    def save(self, policy: ScheduleDeliveryPolicy) -> None: ...
-    def delete(self, schedule_id: ScheduleId) -> None: ...
-
-
-class ScheduleFireDeliveryPlanRepository(Protocol):
-    def add(self, plan: ScheduleFireDeliveryPlan) -> None: ...
-    def get_by_execution(self, execution_id: RunId) -> ScheduleFireDeliveryPlan | None: ...
-
-
 class ConversationRepository(Protocol):
     def add(self, conversation: Conversation) -> None: ...
     def get(self, conversation_id: ConversationId) -> Conversation | None: ...
@@ -346,62 +333,10 @@ class RunEventStore(Protocol):
 class OutboundDeliveryRepository(Protocol):
     def add(self, delivery: OutboundDelivery) -> None: ...
     def get(self, delivery_id: DeliveryId) -> OutboundDelivery | None: ...
-    def get_by_source_tool_invocation(
-        self, invocation_id: ToolInvocationId
-    ) -> OutboundDelivery | None: ...
-    def get_by_source_schedule_fire(
-        self, schedule_fire_id: ScheduleFireId
-    ) -> OutboundDelivery | None: ...
     def save(self, delivery: OutboundDelivery) -> None: ...
 
     def list_due(self, now: datetime, limit: int) -> list[OutboundDelivery]:
         """Read-only QUEUED selection, ordered by available_at then id."""
-        ...
-
-    def list_for_run(self, run_id: RunId) -> list[OutboundDelivery]: ...
-    def list_for_schedule(self, schedule_id: ScheduleId) -> list[OutboundDelivery]: ...
-    def latest_for_route(self, route_id: str) -> OutboundDelivery | None: ...
-    def cancel_if_queued(
-        self, delivery_id: DeliveryId, at: datetime
-    ) -> OutboundDelivery | None: ...
-
-    def try_claim(
-        self,
-        delivery_id: DeliveryId,
-        worker_id: str,
-        claim_token: str,
-        now: datetime,
-        lease_expires_at: datetime,
-    ) -> int | None:
-        """Atomically transition a due delivery to SENDING.
-
-        Returns the newly-fenced claim generation, or ``None`` if another
-        worker won / the delivery is no longer due.
-        """
-        ...
-
-    def is_claim_active(
-        self,
-        delivery_id: DeliveryId,
-        worker_id: str,
-        claim_token: str,
-        claim_generation: int,
-        now: datetime,
-    ) -> bool: ...
-
-    def save_if_claimed(
-        self,
-        delivery: OutboundDelivery,
-        worker_id: str,
-        claim_token: str,
-        claim_generation: int,
-        now: datetime,
-    ) -> bool:
-        """Persist an outcome only while this exact unexpired claim owns it."""
-        ...
-
-    def recover_expired_sending(self, now: datetime) -> int:
-        """Fail closed: expired in-flight sends become AMBIGUOUS, never queued."""
         ...
 
 
@@ -440,10 +375,6 @@ class UnitOfWork(Protocol):
     def conversation_turns(self) -> ConversationTurnRepository: ...
     @property
     def schedule_fires(self) -> ScheduleFireRepository: ...
-    @property
-    def schedule_delivery_policies(self) -> ScheduleDeliveryPolicyRepository: ...
-    @property
-    def schedule_fire_delivery_plans(self) -> ScheduleFireDeliveryPlanRepository: ...
     @property
     def steps(self) -> RunStepRepository: ...
     @property

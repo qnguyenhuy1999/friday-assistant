@@ -13,10 +13,6 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta
 
-from friday.application.delivery_policy import (
-    BLOCKED_CONTENT_PLACEHOLDER,
-    scheduled_delivery_rejection,
-)
 from friday.application.errors import ApprovalNotFound, ClaimLost, EntityConflict, RunNotFound
 from friday.application.lifecycle_events import LifecycleEvents, run_result
 from friday.application.ports import Clock, UnitOfWorkFactory
@@ -26,9 +22,8 @@ from friday.application.run_lifecycle import _fail_run_event_specs, _succeed_run
 from friday.domain.approval import TERMINAL_APPROVAL_STATUSES, ApprovalStatus
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure
-from friday.domain.identifiers import ApprovalRequestId, DeliveryId, RunId
+from friday.domain.identifiers import ApprovalRequestId, RunId
 from friday.domain.json_value import JsonValue
-from friday.domain.outbound_delivery import DeliverySourceKind, OutboundDelivery
 from friday.domain.run import TERMINAL_RUN_STATUSES, Run, RunStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
 from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
@@ -309,48 +304,14 @@ class ApplySucceededOutcome:
             specs = _succeed_run_event_specs(uow, run, now)
             if final_response is not None:
                 summary, details = final_response
-                delivery_plan = uow.schedule_fire_delivery_plans.get_by_execution(run.execution_id)
-                rejection = (
-                    scheduled_delivery_rejection(str(summary))
-                    if delivery_plan is not None
-                    else None
-                )
-                event_summary: str = str(summary)[:4000]
-                event_details: JsonValue = details
-                if rejection is not None:
-                    event_summary = "scheduled delivery blocked by Friday safety policy"
-                    event_details = {"delivery_blocked": True, "failure_code": rejection}
                 specs.insert(
                     0,
                     (
                         RunEventType.AGENT_FINISHED,
-                        {"summary": event_summary, "details": event_details},
+                        {"summary": str(summary)[:4000], "details": details},
                         None,
                     ),
                 )
-                if (
-                    delivery_plan is not None
-                    and uow.deliveries.get_by_source_schedule_fire(delivery_plan.schedule_fire_id)
-                    is None
-                ):
-                    delivery = OutboundDelivery.new(
-                        id=DeliveryId.new(),
-                        source_kind=DeliverySourceKind.SCHEDULED_RUN_ANSWER,
-                        source_run_id=run.id,
-                        source_schedule_fire_id=delivery_plan.schedule_fire_id,
-                        route_id=delivery_plan.route_id,
-                        route_fingerprint=delivery_plan.route_fingerprint,
-                        body=BLOCKED_CONTENT_PLACEHOLDER if rejection is not None else str(summary),
-                        available_at=now,
-                        created_at=now,
-                    )
-                    if rejection is not None:
-                        delivery.block(
-                            at=now,
-                            failure_code=rejection,
-                            failure_message="scheduled content was blocked by Friday safety policy",
-                        )
-                    uow.deliveries.add(delivery)
             LifecycleEvents.append_run_events(uow, run, now, specs)
             uow.commit()
             return run_result(run)

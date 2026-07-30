@@ -23,6 +23,10 @@ from apps.api.schemas.schedules import (
     ScheduleResponse,
 )
 from friday.application.ports import Clock, UnitOfWorkFactory
+from friday.application.put_schedule_delivery_policy import (
+    PutScheduleDeliveryPolicy,
+    PutScheduleDeliveryPolicyCommand,
+)
 from friday.application.schedule_lifecycle import (
     CreateSchedule,
     CreateScheduleCommand,
@@ -30,7 +34,7 @@ from friday.application.schedule_lifecycle import (
     ScheduleControl,
 )
 from friday.domain.identifiers import ScheduleId, TaskId
-from friday.domain.schedule import TERMINAL_SCHEDULE_STATUSES, Schedule, ScheduleKind
+from friday.domain.schedule import Schedule, ScheduleKind
 from friday.domain.schedule_delivery_policy import ScheduleDeliveryPolicy
 from friday.domain.schedule_fire import ScheduleFire
 
@@ -106,26 +110,14 @@ def put_delivery_policy(
     uow_factory: UowDependency,
     clock: ClockDependency,
 ) -> ScheduleDeliveryPolicyResponse:
-    schedule = GetSchedule(uow_factory).execute(
-        ScheduleId.parse(str(schedule_id)), task_id=TaskId.parse(str(task_id))
-    )
-    if schedule.status in TERMINAL_SCHEDULE_STATUSES:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="terminal schedule cannot own delivery policy",
+    policy = PutScheduleDeliveryPolicy(uow_factory, clock).execute(
+        PutScheduleDeliveryPolicyCommand(
+            schedule_id=ScheduleId.parse(str(schedule_id)),
+            task_id=TaskId.parse(str(task_id)),
+            route_id=body.route,
+            enabled=body.enabled,
         )
-    now = clock.now()
-    with uow_factory() as uow:
-        policy = uow.schedule_delivery_policies.get_for_schedule(schedule.id)
-        if policy is None:
-            policy = ScheduleDeliveryPolicy.new(
-                schedule_id=schedule.id, route_id=body.route, enabled=body.enabled, now=now
-            )
-        else:
-            policy.update_route(body.route, now)
-            policy.enable(now) if body.enabled else policy.disable(now)
-        uow.schedule_delivery_policies.save(policy)
-        uow.commit()
+    )
     return _delivery_policy(policy)
 
 

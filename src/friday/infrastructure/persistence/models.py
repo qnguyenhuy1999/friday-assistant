@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -99,6 +106,7 @@ class ScheduleFireRow(Base):
     __table_args__ = (
         UniqueConstraint("schedule_id", "scheduled_for", name="uq_schedule_fires_occurrence"),
         UniqueConstraint("run_id", name="uq_schedule_fires_run_id"),
+        UniqueConstraint("id", "schedule_id", "run_id", name="uq_schedule_fires_binding"),
         Index("ix_schedule_fires_schedule_id", "schedule_id"),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
@@ -127,6 +135,11 @@ class ScheduleFireDeliveryPlanRow(Base):
     __tablename__ = "schedule_fire_delivery_plans"
     __table_args__ = (
         UniqueConstraint("schedule_fire_id", name="uq_schedule_fire_delivery_plans_fire"),
+        ForeignKeyConstraint(
+            ["schedule_fire_id", "schedule_id", "execution_id"],
+            ["schedule_fires.id", "schedule_fires.schedule_id", "schedule_fires.run_id"],
+            name="fk_schedule_fire_delivery_plans_fire_binding",
+        ),
         CheckConstraint(
             "status IN ('ready', 'suppressed')", name="ck_schedule_fire_delivery_plans_status"
         ),
@@ -141,8 +154,12 @@ class ScheduleFireDeliveryPlanRow(Base):
         ),
         CheckConstraint(
             "(status = 'ready' AND route_fingerprint IS NOT NULL AND reason_code IS NULL) OR "  # noqa: E501
-            "(status = 'suppressed' AND route_fingerprint IS NULL AND reason_code IS NOT NULL)",
+            "(status = 'suppressed' AND route_fingerprint IS NULL AND reason_code IN "
+            "('schedule_delivery_route_missing', 'schedule_delivery_route_disabled'))",
             name="ck_schedule_fire_delivery_plans_shape",
+        ),
+        CheckConstraint(
+            "length(route_id) BETWEEN 1 AND 64", name="ck_schedule_fire_delivery_plans_route_id"
         ),
     )
     id: Mapped[str] = mapped_column(primary_key=True)

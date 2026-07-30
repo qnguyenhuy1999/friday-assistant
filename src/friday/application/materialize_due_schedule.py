@@ -75,6 +75,9 @@ class MaterializeDueSchedules:
                     return False
                 occurrence = schedule.next_fire_at
                 result = StartRun.execute_in_uow(uow, task, now)
+                root_run = uow.runs.get(result.run_id)
+                if root_run is None or root_run.id != root_run.execution_id:
+                    raise EntityConflict("scheduled fire requires a root execution run")
                 fire = ScheduleFire.new(
                     id=ScheduleFireId.new(),
                     schedule_id=schedule.id,
@@ -91,6 +94,18 @@ class MaterializeDueSchedules:
                         else None
                     )
                     if authority is None:
+                        plan = ScheduleFireDeliveryPlan.suppressed(
+                            id=ScheduleFireDeliveryPlanId.new(),
+                            schedule_fire_id=fire.id,
+                            schedule_id=schedule.id,
+                            execution_id=result.run_id,
+                            route_id=policy.route_id,
+                            reason_code="schedule_delivery_route_missing",
+                            created_at=now,
+                        )
+                    elif authority.route_id != policy.route_id:
+                        # A resolver must not accidentally lend authority for
+                        # alias Y to a policy that requested alias X.
                         plan = ScheduleFireDeliveryPlan.suppressed(
                             id=ScheduleFireDeliveryPlanId.new(),
                             schedule_fire_id=fire.id,
@@ -120,7 +135,7 @@ class MaterializeDueSchedules:
                             route_fingerprint=authority.fingerprint,
                             created_at=now,
                         )
-                    uow.schedule_fire_delivery_plans.add(plan)
+                    uow.schedule_fire_delivery_plans.add_for_fire(plan, fire)
                 schedule.advance_after_fire(
                     now=now,
                     next_fire_at=coalesced_next(schedule, fired_at=occurrence, now=now),

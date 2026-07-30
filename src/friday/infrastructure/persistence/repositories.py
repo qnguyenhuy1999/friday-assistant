@@ -451,15 +451,65 @@ class ScheduleDeliveryPolicyRepository:
         row = self._session.get(ScheduleDeliveryPolicyRow, str(schedule_id))
         return schedule_delivery_policy_from_row(row) if row is not None else None
 
-    def save(self, policy: ScheduleDeliveryPolicy) -> None:
-        self._session.merge(schedule_delivery_policy_to_row(policy))
+    def put_for_nonterminal_schedule(self, policy: ScheduleDeliveryPolicy) -> bool:
+        """Persist policy only while its schedule is durably non-terminal.
+
+        This is intentionally the only production policy write primitive: a
+        generic merge would let callers persist authority after a stale status
+        read. The predicate is evaluated by the same SQL statement.
+        """
+        row = schedule_delivery_policy_to_row(policy)
+        values = {
+            "schedule_id": row.schedule_id,
+            "route_id": row.route_id,
+            "enabled": row.enabled,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+        nonterminal = exists(
+            select(ScheduleRow.id).where(
+                ScheduleRow.id == str(policy.schedule_id),
+                ScheduleRow.status.not_in(
+                    (ScheduleStatus.COMPLETED.value, ScheduleStatus.CANCELLED.value)
+                ),
+            )
+        )
+        stmt = (
+            insert(ScheduleDeliveryPolicyRow)
+            .values(**values)
+            .on_conflict_do_update(
+                index_elements=[ScheduleDeliveryPolicyRow.schedule_id],
+                set_={
+                    "route_id": row.route_id,
+                    "enabled": row.enabled,
+                    "updated_at": row.updated_at,
+                },
+                where=nonterminal,
+            )
+        )
+        # SQLite's UPSERT does not predicate the insert arm. Guard both arms
+        # with an INSERT .. SELECT so a terminal schedule cannot gain a row.
+        existing = self._session.get(ScheduleDeliveryPolicyRow, str(policy.schedule_id))
+        if existing is None:
+            if not self._session.execute(select(nonterminal)).scalar_one():
+                return False
+            self._session.add(row)
+            return True
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
 
 
 class ScheduleFireDeliveryPlanRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def add(self, plan: ScheduleFireDeliveryPlan) -> None:
+    def add_for_fire(self, plan: ScheduleFireDeliveryPlan, fire: ScheduleFire) -> None:
+        if (
+            plan.schedule_fire_id != fire.id
+            or plan.schedule_id != fire.schedule_id
+            or plan.execution_id != fire.run_id
+        ):
+            raise ValueError("delivery plan must bind exactly to its ScheduleFire")
         self._session.add(schedule_fire_delivery_plan_to_row(plan))
 
     def get_by_fire(self, schedule_fire_id: ScheduleFireId) -> ScheduleFireDeliveryPlan | None:

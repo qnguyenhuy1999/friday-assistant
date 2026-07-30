@@ -39,8 +39,12 @@ class ScheduleFireDeliveryPlan:
     def __post_init__(self) -> None:
         object.__setattr__(self, "route_id", validate_route_id(self.route_id))
         object.__setattr__(self, "created_at", ensure_utc(self.created_at))
-        if self.content_source is not ScheduleFireDeliveryContentSource.FINAL_AGENT_SUMMARY_V1:
+        if not isinstance(self.content_source, ScheduleFireDeliveryContentSource) or (
+            self.content_source is not ScheduleFireDeliveryContentSource.FINAL_AGENT_SUMMARY_V1
+        ):
             raise DomainValidationError("ScheduleFireDeliveryPlan.content_source is invalid")
+        if not isinstance(self.status, ScheduleFireDeliveryPlanStatus):
+            raise DomainValidationError("ScheduleFireDeliveryPlan.status is invalid")
         ready = self.status is ScheduleFireDeliveryPlanStatus.READY
         if ready and (
             not isinstance(self.route_fingerprint, str)
@@ -48,7 +52,9 @@ class ScheduleFireDeliveryPlan:
             or self.reason_code is not None
         ):
             raise DomainValidationError("ready delivery plan requires fingerprint and no reason")
-        if not ready and (self.route_fingerprint is not None or self.reason_code not in _REASONS):
+        if self.status is ScheduleFireDeliveryPlanStatus.SUPPRESSED and (
+            self.route_fingerprint is not None or self.reason_code not in _REASONS
+        ):
             raise DomainValidationError(
                 "suppressed delivery plan requires a stable reason and no fingerprint"
             )

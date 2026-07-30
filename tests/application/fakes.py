@@ -339,10 +339,27 @@ class FakeScheduleDeliveryPolicyRepository:
         self.items: dict[ScheduleId, ScheduleDeliveryPolicy] = {}
 
     def get_for_schedule(self, schedule_id: ScheduleId) -> ScheduleDeliveryPolicy | None:
-        return self.items.get(schedule_id)
+        policy = self.items.get(schedule_id)
+        return self._copy(policy) if policy is not None else None
 
     def save(self, policy: ScheduleDeliveryPolicy) -> None:
-        self.items[policy.schedule_id] = policy
+        # Compatibility seed helper for tests; production has no unrestricted
+        # policy save surface. Store a detached value like a real mapper.
+        self.items[policy.schedule_id] = self._copy(policy)
+
+    def put_for_nonterminal_schedule(self, policy: ScheduleDeliveryPolicy) -> bool:
+        self.items[policy.schedule_id] = self._copy(policy)
+        return True
+
+    @staticmethod
+    def _copy(policy: ScheduleDeliveryPolicy) -> ScheduleDeliveryPolicy:
+        return ScheduleDeliveryPolicy.reconstruct(
+            schedule_id=policy.schedule_id,
+            route_id=policy.route_id,
+            enabled=policy.enabled,
+            created_at=policy.created_at,
+            updated_at=policy.updated_at,
+        )
 
 
 class FakeScheduleFireDeliveryPlanRepository:
@@ -355,6 +372,17 @@ class FakeScheduleFireDeliveryPlanRepository:
 
             raise EntityConflict("duplicate schedule fire delivery plan")
         self.items[plan.schedule_fire_id] = plan
+
+    def add_for_fire(self, plan: ScheduleFireDeliveryPlan, fire: ScheduleFire) -> None:
+        if (
+            plan.schedule_fire_id != fire.id
+            or plan.schedule_id != fire.schedule_id
+            or plan.execution_id != fire.run_id
+        ):
+            from friday.application.errors import EntityConflict
+
+            raise EntityConflict("delivery plan must bind exactly to its ScheduleFire")
+        self.add(plan)
 
     def get_by_fire(self, schedule_fire_id: ScheduleFireId) -> ScheduleFireDeliveryPlan | None:
         return self.items.get(schedule_fire_id)

@@ -312,12 +312,12 @@ def schedule_delivery_policy_to_row(policy: ScheduleDeliveryPolicy) -> ScheduleD
 
 
 def schedule_delivery_policy_from_row(row: ScheduleDeliveryPolicyRow) -> ScheduleDeliveryPolicy:
-    return ScheduleDeliveryPolicy(
-        ScheduleId.parse(row.schedule_id),
-        row.route_id,
-        row.enabled,
-        read_back_utc(row.created_at),
-        read_back_utc(row.updated_at),
+    return ScheduleDeliveryPolicy.reconstruct(
+        schedule_id=ScheduleId.parse(row.schedule_id),
+        route_id=row.route_id,
+        enabled=row.enabled,
+        created_at=read_back_utc(row.created_at),
+        updated_at=read_back_utc(row.updated_at),
     )
 
 

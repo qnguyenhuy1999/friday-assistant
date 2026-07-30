@@ -91,3 +91,7 @@ class ToolInvocationId(_Id):
 
 class DeliveryId(_Id):
     pass
+
+
+class DeliveryAttemptId(_Id):
+    pass

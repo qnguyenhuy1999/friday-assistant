@@ -3,7 +3,7 @@ from __future__ import annotations
 import builtins
 from typing import Any, cast
 
-from sqlalchemy import Select, and_, func, or_, select, update
+from sqlalchemy import Select, and_, exists, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
@@ -19,6 +19,8 @@ from friday.domain import (
     ConversationId,
     ConversationTurn,
     ConversationTurnId,
+    DeliveryAttempt,
+    DeliveryAttemptOutcome,
     DeliveryId,
     DeliveryStatus,
     OutboundDelivery,
@@ -50,6 +52,8 @@ from friday.infrastructure.persistence.mappers import (
     conversation_to_row,
     conversation_turn_from_row,
     conversation_turn_to_row,
+    delivery_attempt_from_row,
+    delivery_attempt_to_row,
     index_snapshot_from_row,
     index_snapshot_to_row,
     memory_retrieval_item_from_row,
@@ -80,6 +84,7 @@ from friday.infrastructure.persistence.models import (
     ArtifactRow,
     ConversationRow,
     ConversationTurnRow,
+    DeliveryAttemptRow,
     MemoryIndexSnapshotRow,
     MemoryRetrievalItemRow,
     MemoryRetrievalRecordRow,
@@ -1018,6 +1023,111 @@ class OutboundDeliveryRepository:
         )
         result = cast(CursorResult[Any], self._session.execute(stmt))
         return result.rowcount == 1
+
+
+class DeliveryAttemptRepository:
+    """Bounded audit ledger writes; no generic mutable-row save is exposed."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, attempt: DeliveryAttempt) -> None:
+        self._session.add(delivery_attempt_to_row(attempt))
+
+    def get_for_generation(
+        self, delivery_id: DeliveryId, claim_generation: int
+    ) -> DeliveryAttempt | None:
+        row = self._session.execute(
+            select(DeliveryAttemptRow).where(
+                DeliveryAttemptRow.delivery_id == str(delivery_id),
+                DeliveryAttemptRow.claim_generation == claim_generation,
+            )
+        ).scalar_one_or_none()
+        return delivery_attempt_from_row(row) if row is not None else None
+
+    def list_for_delivery(self, delivery_id: DeliveryId, limit: int) -> list[DeliveryAttempt]:
+        rows = self._session.execute(
+            select(DeliveryAttemptRow)
+            .where(DeliveryAttemptRow.delivery_id == str(delivery_id))
+            .order_by(DeliveryAttemptRow.started_at.desc(), DeliveryAttemptRow.id.desc())
+            .limit(limit)
+        ).scalars()
+        return [delivery_attempt_from_row(row) for row in rows]
+
+    @staticmethod
+    def _active_delivery_exists(
+        delivery_id: DeliveryId, worker_id: str, claim_token: str, generation: int, now: object
+    ) -> Any:
+        return exists(
+            select(1)
+            .select_from(OutboundDeliveryRow)
+            .where(
+                OutboundDeliveryRow.id == str(delivery_id),
+                OutboundDeliveryRow.status == DeliveryStatus.SENDING.value,
+                OutboundDeliveryRow.claim_owner == worker_id,
+                OutboundDeliveryRow.claim_token == claim_token,
+                OutboundDeliveryRow.claim_generation == generation,
+                OutboundDeliveryRow.claim_expires_at.is_not(None),
+                OutboundDeliveryRow.claim_expires_at > now,
+            )
+        )
+
+    def complete_for_claim(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: object,
+        outcome: DeliveryAttemptOutcome,
+        failure_code: str | None,
+    ) -> bool:
+        stmt = (
+            update(DeliveryAttemptRow)
+            .where(
+                DeliveryAttemptRow.delivery_id == str(delivery_id),
+                DeliveryAttemptRow.claim_generation == claim_generation,
+                DeliveryAttemptRow.outcome == DeliveryAttemptOutcome.IN_PROGRESS.value,
+                self._active_delivery_exists(
+                    delivery_id, worker_id, claim_token, claim_generation, now
+                ),
+            )
+            .values(outcome=outcome.value, finished_at=now, failure_code=failure_code)
+            .execution_options(synchronize_session=False)
+        )
+        return cast(CursorResult[Any], self._session.execute(stmt)).rowcount == 1
+
+    def close_expired_as_ambiguous(
+        self, delivery_id: DeliveryId, claim_generation: int, now: object, failure_code: str
+    ) -> bool:
+        expired = exists(
+            select(1)
+            .select_from(OutboundDeliveryRow)
+            .where(
+                OutboundDeliveryRow.id == str(delivery_id),
+                OutboundDeliveryRow.status == DeliveryStatus.SENDING.value,
+                OutboundDeliveryRow.claim_generation == claim_generation,
+                OutboundDeliveryRow.claim_expires_at.is_not(None),
+                OutboundDeliveryRow.claim_expires_at <= now,
+                OutboundDeliveryRow.dispatch_started_at.is_not(None),
+            )
+        )
+        stmt = (
+            update(DeliveryAttemptRow)
+            .where(
+                DeliveryAttemptRow.delivery_id == str(delivery_id),
+                DeliveryAttemptRow.claim_generation == claim_generation,
+                DeliveryAttemptRow.outcome == DeliveryAttemptOutcome.IN_PROGRESS.value,
+                expired,
+            )
+            .values(
+                outcome=DeliveryAttemptOutcome.AMBIGUOUS.value,
+                finished_at=now,
+                failure_code=failure_code,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return cast(CursorResult[Any], self._session.execute(stmt)).rowcount == 1
 
 
 class RunEventStore:

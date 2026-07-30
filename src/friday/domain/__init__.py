@@ -10,6 +10,7 @@ from friday.domain.approval import ApprovalCategory, ApprovalRequest, ApprovalSt
 from friday.domain.artifact import Artifact, ArtifactKind
 from friday.domain.conversation import Conversation, ConversationInputMode
 from friday.domain.conversation_turn import ConversationTurn
+from friday.domain.delivery_attempt import DeliveryAttempt, DeliveryAttemptOutcome
 from friday.domain.errors import DomainError, DomainValidationError, InvalidStateTransition
 from friday.domain.event import RunEvent, RunEventType
 from friday.domain.failure import Failure, FailureCause
@@ -18,6 +19,7 @@ from friday.domain.identifiers import (
     ArtifactId,
     ConversationId,
     ConversationTurnId,
+    DeliveryAttemptId,
     DeliveryId,
     RunEventId,
     RunId,
@@ -58,6 +60,9 @@ __all__ = [
     "ConversationTurn",
     "ConversationTurnId",
     "DeliveryId",
+    "DeliveryAttempt",
+    "DeliveryAttemptId",
+    "DeliveryAttemptOutcome",
     "DeliverySourceKind",
     "DeliveryStatus",
     "DomainError",

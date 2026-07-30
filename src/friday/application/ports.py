@@ -26,6 +26,7 @@ from friday.domain.approval import ApprovalRequest
 from friday.domain.artifact import Artifact
 from friday.domain.conversation import Conversation
 from friday.domain.conversation_turn import ConversationTurn
+from friday.domain.delivery_attempt import DeliveryAttempt, DeliveryAttemptOutcome
 from friday.domain.event import RunEvent, RunEventType
 from friday.domain.identifiers import (
     ApprovalRequestId,
@@ -429,6 +430,31 @@ class OutboundDeliveryRepository(Protocol):
         ...
 
 
+class DeliveryAttemptRepository(Protocol):
+    def add(self, attempt: DeliveryAttempt) -> None: ...
+    def get_for_generation(
+        self, delivery_id: DeliveryId, claim_generation: int
+    ) -> DeliveryAttempt | None: ...
+    def list_for_delivery(self, delivery_id: DeliveryId, limit: int) -> list[DeliveryAttempt]: ...
+    def complete_for_claim(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+        outcome: DeliveryAttemptOutcome,
+        failure_code: str | None,
+    ) -> bool: ...
+    def close_expired_as_ambiguous(
+        self,
+        delivery_id: DeliveryId,
+        claim_generation: int,
+        now: datetime,
+        failure_code: str,
+    ) -> bool: ...
+
+
 class TaskEventStore(Protocol):
     def append(self, event: TaskEvent) -> None: ...
 
@@ -474,6 +500,8 @@ class UnitOfWork(Protocol):
     def tool_invocations(self) -> ToolInvocationRepository: ...
     @property
     def deliveries(self) -> OutboundDeliveryRepository: ...
+    @property
+    def delivery_attempts(self) -> DeliveryAttemptRepository: ...
     @property
     def events(self) -> RunEventStore: ...
     @property

@@ -75,4 +75,8 @@ loop is constructed in this step.
 `ToolInvocation SUCCEEDED` for `message.send` means durable enqueue succeeded,
 not that an external delivery occurred.
 
-Transport adapters, `message.send`, approvals and `EXTERNAL_COMMUNICATION` wiring, the delivery dispatcher, worker polling, messaging route/settings configuration, scheduled-delivery policy and fire-plan bridging, delivery attempt history, and API/UI/SDK surfaces are later steps. Steps 1 and 2 do not send messages or materialize scheduled deliveries.
+Step 4 implements route-authoritative webhook dispatch: a claimed delivery is checked against the configured route, then crosses its durable dispatch boundary before network I/O. Missing, disabled, or fingerprint-drifted routes become pre-dispatch `AMBIGUOUS` with no network I/O.
+
+Step 5 adds `DeliveryAttempt`, a durable, secret-free ledger keyed by `(delivery_id, claim_generation)`. In one short transaction the exact active claim marks `dispatch_started_at` and creates an `IN_PROGRESS` attempt; only after commit may webhook I/O begin. A terminal transport result closes the matching attempt and delivery in the same fenced transaction. Expired post-dispatch claims close their matching in-progress attempt as `AMBIGUOUS` in the same recovery transaction. No attempt is created for route/authority ambiguity before the boundary.
+
+Generic webhook delivery currently has no verified provider idempotency contract. Therefore post-dispatch `FAILED` and `AMBIGUOUS` outcomes are never automatically retried. Automatic redrive requires a future provider-idempotency design.

@@ -22,6 +22,7 @@ from friday.application.ports import (
     ArtifactRepository,
     ConversationRepository,
     ConversationTurnRepository,
+    DeliveryAttemptRepository,
     OutboundDeliveryRepository,
     RunEventStore,
     RunRepository,
@@ -38,6 +39,7 @@ from friday.domain.approval import ApprovalRequest, ApprovalStatus
 from friday.domain.artifact import Artifact
 from friday.domain.conversation import Conversation
 from friday.domain.conversation_turn import ConversationTurn
+from friday.domain.delivery_attempt import DeliveryAttempt, DeliveryAttemptOutcome
 from friday.domain.event import RunEvent, RunEventType
 from friday.domain.identifiers import (
     ApprovalRequestId,
@@ -694,6 +696,73 @@ class FakeOutboundDeliveryRepository:
         return delivery
 
 
+class FakeDeliveryAttemptRepository:
+    def __init__(self, deliveries: FakeOutboundDeliveryRepository) -> None:
+        self._deliveries = deliveries
+        self.items: dict[tuple[DeliveryId, int], DeliveryAttempt] = {}
+
+    def add(self, attempt: DeliveryAttempt) -> None:
+        key = (attempt.delivery_id, attempt.claim_generation)
+        if key in self.items:
+            from friday.application.errors import EntityConflict
+
+            raise EntityConflict("write violated a uniqueness or state constraint")
+        self.items[key] = deepcopy(attempt)
+
+    def get_for_generation(
+        self, delivery_id: DeliveryId, claim_generation: int
+    ) -> DeliveryAttempt | None:
+        found = self.items.get((delivery_id, claim_generation))
+        return deepcopy(found) if found else None
+
+    def list_for_delivery(self, delivery_id: DeliveryId, limit: int) -> list[DeliveryAttempt]:
+        return [
+            deepcopy(item)
+            for item in sorted(
+                (a for a in self.items.values() if a.delivery_id == delivery_id),
+                key=lambda a: (a.started_at, str(a.id)),
+                reverse=True,
+            )[:limit]
+        ]
+
+    def complete_for_claim(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+        outcome: DeliveryAttemptOutcome,
+        failure_code: str | None,
+    ) -> bool:
+        if not self._deliveries.is_claim_active(
+            delivery_id, worker_id, claim_token, claim_generation, now
+        ):
+            return False
+        attempt = self.items.get((delivery_id, claim_generation))
+        if attempt is None or attempt.outcome is not DeliveryAttemptOutcome.IN_PROGRESS:
+            return False
+        attempt.complete(outcome=outcome, finished_at=now, failure_code=failure_code)
+        return True
+
+    def close_expired_as_ambiguous(
+        self, delivery_id: DeliveryId, claim_generation: int, now: datetime, failure_code: str
+    ) -> bool:
+        delivery = self._deliveries._expired_claim(delivery_id, claim_generation, now)
+        attempt = self.items.get((delivery_id, claim_generation))
+        if (
+            delivery is None
+            or delivery.dispatch_started_at is None
+            or attempt is None
+            or attempt.outcome is not DeliveryAttemptOutcome.IN_PROGRESS
+        ):
+            return False
+        attempt.complete(
+            outcome=DeliveryAttemptOutcome.AMBIGUOUS, finished_at=now, failure_code=failure_code
+        )
+        return True
+
+
 class FakeApprovalRepository:
     def __init__(self) -> None:
         self.items: dict[ApprovalRequestId, ApprovalRequest] = {}
@@ -1070,6 +1139,7 @@ class FakeUnitOfWork:
         self.step_repo = FakeRunStepRepository()
         self.tool_repo = FakeToolInvocationRepository()
         self.delivery_repo = FakeOutboundDeliveryRepository()
+        self.delivery_attempt_repo = FakeDeliveryAttemptRepository(self.delivery_repo)
         self.approval_repo = FakeApprovalRepository()
         self.artifact_repo = FakeArtifactRepository()
         self.work_queue_repo = FakeRunWorkQueue()
@@ -1122,6 +1192,10 @@ class FakeUnitOfWork:
     @property
     def deliveries(self) -> OutboundDeliveryRepository:
         return self.delivery_repo
+
+    @property
+    def delivery_attempts(self) -> DeliveryAttemptRepository:
+        return self.delivery_attempt_repo
 
     @property
     def events(self) -> RunEventStore:

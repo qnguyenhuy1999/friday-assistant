@@ -32,6 +32,9 @@ from friday.domain import (
     ConversationInputMode,
     ConversationTurn,
     ConversationTurnId,
+    DeliveryAttempt,
+    DeliveryAttemptId,
+    DeliveryAttemptOutcome,
     DeliveryId,
     DeliverySourceKind,
     DeliveryStatus,
@@ -70,6 +73,7 @@ from friday.infrastructure.persistence.models import (
     ArtifactRow,
     ConversationRow,
     ConversationTurnRow,
+    DeliveryAttemptRow,
     MemoryIndexSnapshotRow,
     MemoryRetrievalItemRow,
     MemoryRetrievalRecordRow,
@@ -508,6 +512,30 @@ def outbound_delivery_from_row(row: OutboundDeliveryRow) -> OutboundDelivery:
         dispatch_started_at=(
             _read_back_utc(row.dispatch_started_at) if row.dispatch_started_at else None
         ),
+    )
+
+
+def delivery_attempt_to_row(attempt: DeliveryAttempt) -> DeliveryAttemptRow:
+    return DeliveryAttemptRow(
+        id=str(attempt.id),
+        delivery_id=str(attempt.delivery_id),
+        claim_generation=attempt.claim_generation,
+        started_at=attempt.started_at,
+        finished_at=attempt.finished_at,
+        outcome=attempt.outcome.value,
+        failure_code=attempt.failure_code,
+    )
+
+
+def delivery_attempt_from_row(row: DeliveryAttemptRow) -> DeliveryAttempt:
+    return DeliveryAttempt(
+        DeliveryAttemptId.parse(row.id),
+        DeliveryId.parse(row.delivery_id),
+        row.claim_generation,
+        _read_back_utc(row.started_at),
+        _read_back_utc(row.finished_at) if row.finished_at else None,
+        DeliveryAttemptOutcome(row.outcome),
+        row.failure_code,
     )
 
 

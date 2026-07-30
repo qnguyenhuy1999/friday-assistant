@@ -236,3 +236,82 @@ def test_downtime_coalescing_jumps_directly_to_the_next_future_cron_occurrence()
     now = T0 + timedelta(days=180)
     expected = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
     assert coalesced_next(schedule, fired_at=T0, now=now) == expected
+
+
+def test_disabled_policy_produces_no_delivery_plan() -> None:
+    uow, clock, factory, task = _prepared()
+    schedule = _schedule(factory, clock, task, T0 + timedelta(minutes=1))
+    uow.schedule_delivery_policy_repo.save(
+        ScheduleDeliveryPolicy.new(
+            schedule_id=schedule.id, route_id="ops.primary", enabled=False, now=T0
+        )
+    )
+    clock.fixed_now = T0 + timedelta(minutes=1)
+
+    class Resolver:
+        @staticmethod
+        def resolve(route_id: str) -> DeliveryRouteAuthority | None:
+            return DeliveryRouteAuthority(route_id, True, "a" * 64)
+
+    assert (
+        MaterializeDueSchedules(
+            factory, clock, batch_size=10, delivery_route_authority_resolver=Resolver()
+        ).execute()
+        == 1
+    )
+    assert len(uow.schedule_fire_repo.items) == 1
+    assert len(uow.schedule_fire_delivery_plan_repo.items) == 0
+
+
+def test_disabled_route_suppresses_plan_with_disabled_reason() -> None:
+    uow, clock, factory, task = _prepared()
+    schedule = _schedule(factory, clock, task, T0 + timedelta(minutes=1))
+    uow.schedule_delivery_policy_repo.save(
+        ScheduleDeliveryPolicy.new(
+            schedule_id=schedule.id, route_id="ops.primary", enabled=True, now=T0
+        )
+    )
+    clock.fixed_now = T0 + timedelta(minutes=1)
+
+    class DisabledResolver:
+        @staticmethod
+        def resolve(route_id: str) -> DeliveryRouteAuthority | None:
+            return DeliveryRouteAuthority(route_id, False, "a" * 64)
+
+    assert (
+        MaterializeDueSchedules(
+            factory, clock, batch_size=10, delivery_route_authority_resolver=DisabledResolver()
+        ).execute()
+        == 1
+    )
+    plan = next(iter(uow.schedule_fire_delivery_plan_repo.items.values()))
+    assert plan.reason_code == "schedule_delivery_route_disabled"
+
+
+def test_mismatched_resolver_alias_never_ready() -> None:
+    uow, clock, factory, task = _prepared()
+    schedule = _schedule(factory, clock, task, T0 + timedelta(minutes=1))
+    uow.schedule_delivery_policy_repo.save(
+        ScheduleDeliveryPolicy.new(
+            schedule_id=schedule.id, route_id="ops.primary", enabled=True, now=T0
+        )
+    )
+    clock.fixed_now = T0 + timedelta(minutes=1)
+
+    class WrongAliasResolver:
+        @staticmethod
+        def resolve(route_id: str) -> DeliveryRouteAuthority | None:
+            assert route_id == "ops.primary"
+            return DeliveryRouteAuthority("ops.secondary", True, "a" * 64)
+
+    assert (
+        MaterializeDueSchedules(
+            factory,
+            clock,
+            batch_size=10,
+            delivery_route_authority_resolver=WrongAliasResolver(),
+        ).execute()
+        == 1
+    )
+    plan = next(iter(uow.schedule_fire_delivery_plan_repo.items.values()))
+    assert plan.reason_code == "schedule_delivery_route_missing"

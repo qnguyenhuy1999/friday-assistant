@@ -7,6 +7,7 @@ from typing import Any, cast
 from sqlalchemy import DateTime, Select, String, and_, exists, func, literal, or_, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from friday.application.memory.models import IndexSnapshot, IndexState, MemoryRetrievalRecord
@@ -456,7 +457,8 @@ class ScheduleDeliveryPolicyRepository:
 
         This is intentionally the only production policy write primitive: a
         generic merge would let callers persist authority after a stale status
-        read. The predicate is evaluated by the same SQL statement.
+        read. Every write path embeds its own non-terminal predicate so the
+        database evaluates authority atomically with state.
         """
         row = schedule_delivery_policy_to_row(policy)
         values = {
@@ -466,35 +468,63 @@ class ScheduleDeliveryPolicyRepository:
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }
-        nonterminal = exists(
-            select(ScheduleRow.id).where(
-                ScheduleRow.id == str(policy.schedule_id),
-                ScheduleRow.status.not_in(
-                    (ScheduleStatus.COMPLETED.value, ScheduleStatus.CANCELLED.value)
+        conditions = (
+            ScheduleRow.id == values["schedule_id"],
+            ScheduleRow.status.not_in(
+                (ScheduleStatus.COMPLETED.value, ScheduleStatus.CANCELLED.value)
+            ),
+        )
+        nonterminal = exists(select(ScheduleRow.id).where(*conditions))
+
+        # ARM 1 — atomic INSERT … SELECT.
+        # The SELECT returns exactly one row only while the schedule is
+        # durably non‑terminal.  If the schedule has already been completed
+        # or cancelled the SELECT yields zero rows and the INSERT inserts
+        # nothing — no row is created even after a concurrent state change.
+        sel = (
+            select(
+                literal(values["schedule_id"]),
+                literal(values["route_id"]),
+                literal(values["enabled"]),
+                literal(values["created_at"]),
+                literal(values["updated_at"]),
+            )
+            .select_from(ScheduleRow)
+            .where(*conditions)
+        )
+        try:
+            result = cast(
+                CursorResult[Any],
+                self._session.execute(
+                    insert(ScheduleDeliveryPolicyRow).from_select(
+                        ["schedule_id", "route_id", "enabled", "created_at", "updated_at"],
+                        sel,
+                    )
                 ),
             )
-        )
+            return result.rowcount == 1
+        except IntegrityError:
+            pass  # Row already exists; fall through to UPSERT.
+
+        # ARM 2 — UPSERT with non‑terminal predicate on the UPDATE arm.
+        # Only reachable when a row already exists (ARM 1 raised
+        # IntegrityError). The UPSERT's INSERT arm is unconditional in
+        # SQLite, so we rely on ARM 1 having already verified the
+        # schedule is non‑terminal. The `where=nonterminal` guards the
+        # UPDATE arm against a concurrent schedule-terminal race.
         stmt = (
             insert(ScheduleDeliveryPolicyRow)
             .values(**values)
             .on_conflict_do_update(
                 index_elements=[ScheduleDeliveryPolicyRow.schedule_id],
                 set_={
-                    "route_id": row.route_id,
-                    "enabled": row.enabled,
-                    "updated_at": row.updated_at,
+                    "route_id": values["route_id"],
+                    "enabled": values["enabled"],
+                    "updated_at": values["updated_at"],
                 },
                 where=nonterminal,
             )
         )
-        # SQLite's UPSERT does not predicate the insert arm. Guard both arms
-        # with an INSERT .. SELECT so a terminal schedule cannot gain a row.
-        existing = self._session.get(ScheduleDeliveryPolicyRow, str(policy.schedule_id))
-        if existing is None:
-            if not self._session.execute(select(nonterminal)).scalar_one():
-                return False
-            self._session.add(row)
-            return True
         result = cast(CursorResult[Any], self._session.execute(stmt))
         return result.rowcount == 1
 

@@ -12,11 +12,13 @@ from friday.application.retry_policy import RetryPolicy
 from friday.application.schedule_lifecycle import CreateSchedule, CreateScheduleCommand
 from friday.application.schedule_recurrence import coalesced_next, first_occurrence
 from friday.application.worker_coordination import ApplyFailedOutcome
+from friday.domain.delivery_route import DeliveryRouteAuthority
 from friday.domain.errors import DomainValidationError
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.identifiers import TaskId
 from friday.domain.run import RunStatus
 from friday.domain.schedule import Schedule, ScheduleKind
+from friday.domain.schedule_delivery_policy import ScheduleDeliveryPolicy
 from friday.domain.task import Task
 from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
 
@@ -55,6 +57,62 @@ def test_two_scheduler_actors_and_restart_materialize_one_durable_fire() -> None
     assert len(uow.schedule_fire_repo.items) == len(uow.run_repo.items) == 1
     assert uow.schedule_fire_repo.items[0].schedule_id == schedule.id
     assert next(iter(uow.run_repo.items.values())).status is RunStatus.QUEUED
+
+
+def test_enabled_policy_freezes_ready_plan_without_delivery_content() -> None:
+    uow, clock, factory, task = _prepared()
+    schedule = _schedule(factory, clock, task, T0 + timedelta(minutes=1))
+    uow.schedule_delivery_policy_repo.save(
+        ScheduleDeliveryPolicy.new(
+            schedule_id=schedule.id,
+            route_id="personal.notifications",
+            enabled=True,
+            now=T0,
+        )
+    )
+    clock.fixed_now = T0 + timedelta(minutes=1)
+
+    class Resolver:
+        def resolve(self, route_id: str) -> DeliveryRouteAuthority | None:
+            assert route_id == "personal.notifications"
+            return DeliveryRouteAuthority(route_id, True, "a" * 64)
+
+    assert (
+        MaterializeDueSchedules(
+            factory, clock, batch_size=10, delivery_route_authority_resolver=Resolver()
+        ).execute()
+        == 1
+    )
+    fire = uow.schedule_fire_repo.items[0]
+    plan = uow.schedule_fire_delivery_plan_repo.get_by_fire(fire.id)
+    assert plan is not None
+    assert plan.route_fingerprint == "a" * 64
+    assert plan.execution_id == fire.run_id
+
+
+def test_missing_route_suppresses_delivery_without_blocking_run_or_fire() -> None:
+    uow, clock, factory, task = _prepared()
+    schedule = _schedule(factory, clock, task, T0 + timedelta(minutes=1))
+    uow.schedule_delivery_policy_repo.save(
+        ScheduleDeliveryPolicy.new(
+            schedule_id=schedule.id, route_id="personal.notifications", enabled=True, now=T0
+        )
+    )
+    clock.fixed_now = T0 + timedelta(minutes=1)
+
+    class MissingResolver:
+        def resolve(self, route_id: str) -> DeliveryRouteAuthority | None:
+            return None
+
+    assert (
+        MaterializeDueSchedules(
+            factory, clock, batch_size=10, delivery_route_authority_resolver=MissingResolver()
+        ).execute()
+        == 1
+    )
+    assert len(uow.run_repo.items) == len(uow.schedule_fire_repo.items) == 1
+    plan = next(iter(uow.schedule_fire_delivery_plan_repo.items.values()))
+    assert plan.reason_code == "schedule_delivery_route_missing"
 
 
 def test_one_broken_schedule_does_not_starve_other_due_schedules(

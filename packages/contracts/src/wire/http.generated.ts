@@ -177,6 +177,14 @@ export interface ScheduleFire {
   run_id: string;
 }
 
+export interface ScheduleDeliveryPolicy {
+  schedule_id: string;
+  route: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface StartRunResponse {
   task_id: string;
   run_id: string;
@@ -740,6 +748,28 @@ const schema = {
         },
       },
     },
+    ScheduleDeliveryPolicy: {
+      type: "object",
+      additionalProperties: false,
+      required: ["schedule_id", "route", "enabled", "created_at", "updated_at"],
+      properties: {
+        schedule_id: {
+          type: "string",
+        },
+        route: {
+          type: "string",
+        },
+        enabled: {
+          type: "boolean",
+        },
+        created_at: {
+          type: "string",
+        },
+        updated_at: {
+          type: "string",
+        },
+      },
+    },
     StartRunResponse: {
       type: "object",
       additionalProperties: false,
@@ -858,6 +888,9 @@ const schema = {
     },
     scheduleFire: {
       $ref: "#/definitions/ScheduleFire",
+    },
+    scheduleDeliveryPolicy: {
+      $ref: "#/definitions/ScheduleDeliveryPolicy",
     },
     conversation: {
       $ref: "#/definitions/Conversation",
@@ -1082,6 +1115,8 @@ export const validateSchedule: WireValidator = (value, path) =>
   assertWire("schedule", value, path);
 export const validateScheduleFire: WireValidator = (value, path) =>
   assertWire("scheduleFire", value, path);
+export const validateScheduleDeliveryPolicy: WireValidator = (value, path) =>
+  assertWire("scheduleDeliveryPolicy", value, path);
 export const validateConversation: WireValidator = (value, path) =>
   assertWire("conversation", value, path);
 export const validateConversationTurn: WireValidator = (value, path) =>

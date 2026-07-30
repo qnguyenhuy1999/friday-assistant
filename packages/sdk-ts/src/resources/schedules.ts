@@ -1,8 +1,14 @@
-import type { Page, Schedule, ScheduleFire } from "@friday/contracts";
+import type {
+  Page,
+  Schedule,
+  ScheduleDeliveryPolicy,
+  ScheduleFire,
+} from "@friday/contracts";
 import {
   validateSchedule,
   validateScheduleFirePage,
   validateSchedulePage,
+  validateScheduleDeliveryPolicy,
 } from "@friday/contracts";
 import type { FridayHttpClient } from "../http";
 
@@ -16,6 +22,10 @@ export interface ListSchedulesParams {
 export interface ListScheduleFiresParams {
   limit?: number;
   cursor?: string;
+}
+export interface PutScheduleDeliveryPolicyBody {
+  route: string;
+  enabled: boolean;
 }
 
 export class SchedulesResource {
@@ -62,6 +72,25 @@ export class SchedulesResource {
       path: `/v1/tasks/${taskId}/schedules/${scheduleId}/fires`,
       query: { limit: params.limit, cursor: params.cursor },
       validate: validateScheduleFirePage,
+    });
+  }
+  deliveryPolicy(taskId: string, scheduleId: string) {
+    return this.http.requestJson<ScheduleDeliveryPolicy>({
+      method: "GET",
+      path: `/v1/tasks/${taskId}/schedules/${scheduleId}/delivery-policy`,
+      validate: validateScheduleDeliveryPolicy,
+    });
+  }
+  putDeliveryPolicy(
+    taskId: string,
+    scheduleId: string,
+    input: PutScheduleDeliveryPolicyBody,
+  ) {
+    return this.http.requestJson<ScheduleDeliveryPolicy>({
+      method: "PUT",
+      path: `/v1/tasks/${taskId}/schedules/${scheduleId}/delivery-policy`,
+      body: input,
+      validate: validateScheduleDeliveryPolicy,
     });
   }
   private control(

@@ -108,6 +108,55 @@ class ScheduleFireRow(Base):
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
 
 
+class ScheduleDeliveryPolicyRow(Base):
+    __tablename__ = "schedule_delivery_policies"
+    __table_args__ = (
+        CheckConstraint(
+            "length(route_id) BETWEEN 1 AND 64", name="ck_schedule_delivery_policies_route_id"
+        ),
+        CheckConstraint("enabled IN (0, 1)", name="ck_schedule_delivery_policies_enabled"),
+    )
+    schedule_id: Mapped[str] = mapped_column(ForeignKey("schedules.id"), primary_key=True)
+    route_id: Mapped[str]
+    enabled: Mapped[bool]
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+
+
+class ScheduleFireDeliveryPlanRow(Base):
+    __tablename__ = "schedule_fire_delivery_plans"
+    __table_args__ = (
+        UniqueConstraint("schedule_fire_id", name="uq_schedule_fire_delivery_plans_fire"),
+        CheckConstraint(
+            "status IN ('ready', 'suppressed')", name="ck_schedule_fire_delivery_plans_status"
+        ),
+        CheckConstraint(
+            "content_source = 'final_agent_summary_v1'",
+            name="ck_schedule_fire_delivery_plans_content",
+        ),
+        CheckConstraint(
+            "route_fingerprint IS NULL OR (length(route_fingerprint) = 64 AND "
+            "route_fingerprint NOT GLOB '*[^0-9a-f]*')",
+            name="ck_schedule_fire_delivery_plans_fingerprint",
+        ),
+        CheckConstraint(
+            "(status = 'ready' AND route_fingerprint IS NOT NULL AND reason_code IS NULL) OR "  # noqa: E501
+            "(status = 'suppressed' AND route_fingerprint IS NULL AND reason_code IS NOT NULL)",
+            name="ck_schedule_fire_delivery_plans_shape",
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    schedule_fire_id: Mapped[str] = mapped_column(ForeignKey("schedule_fires.id"))
+    schedule_id: Mapped[str] = mapped_column(ForeignKey("schedules.id"))
+    execution_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    route_id: Mapped[str]
+    route_fingerprint: Mapped[str | None]
+    content_source: Mapped[str]
+    status: Mapped[str]
+    reason_code: Mapped[str | None]
+    created_at: Mapped[datetime]
+
+
 class ConversationRow(Base):
     __tablename__ = "conversations"
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from apps.api.dependencies import get_clock, get_uow_factory
 from apps.api.pagination import (
@@ -15,6 +15,8 @@ from apps.api.pagination import (
 )
 from apps.api.schemas.schedules import (
     CreateScheduleBody,
+    PutScheduleDeliveryPolicyBody,
+    ScheduleDeliveryPolicyResponse,
     ScheduleFirePageResponse,
     ScheduleFireResponse,
     SchedulePageResponse,
@@ -28,7 +30,8 @@ from friday.application.schedule_lifecycle import (
     ScheduleControl,
 )
 from friday.domain.identifiers import ScheduleId, TaskId
-from friday.domain.schedule import Schedule, ScheduleKind
+from friday.domain.schedule import TERMINAL_SCHEDULE_STATUSES, Schedule, ScheduleKind
+from friday.domain.schedule_delivery_policy import ScheduleDeliveryPolicy
 from friday.domain.schedule_fire import ScheduleFire
 
 router = APIRouter(prefix="/v1/tasks/{task_id}/schedules", tags=["schedules"])
@@ -59,6 +62,71 @@ def _fire(value: ScheduleFire) -> ScheduleFireResponse:
         fired_at=value.fired_at,
         run_id=str(value.run_id),
     )
+
+
+def _delivery_policy(value: ScheduleDeliveryPolicy) -> ScheduleDeliveryPolicyResponse:
+    return ScheduleDeliveryPolicyResponse(
+        schedule_id=str(value.schedule_id),
+        route=value.route_id,
+        enabled=value.enabled,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+    )
+
+
+@router.get(
+    "/{schedule_id}/delivery-policy",
+    response_model=ScheduleDeliveryPolicyResponse,
+    operation_id="getScheduleDeliveryPolicy",
+)
+def get_delivery_policy(
+    task_id: UUID, schedule_id: UUID, uow_factory: UowDependency
+) -> ScheduleDeliveryPolicyResponse:
+    schedule = GetSchedule(uow_factory).execute(
+        ScheduleId.parse(str(schedule_id)), task_id=TaskId.parse(str(task_id))
+    )
+    with uow_factory() as uow:
+        policy = uow.schedule_delivery_policies.get_for_schedule(schedule.id)
+    if policy is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="schedule delivery policy not found"
+        )
+    return _delivery_policy(policy)
+
+
+@router.put(
+    "/{schedule_id}/delivery-policy",
+    response_model=ScheduleDeliveryPolicyResponse,
+    operation_id="putScheduleDeliveryPolicy",
+)
+def put_delivery_policy(
+    task_id: UUID,
+    schedule_id: UUID,
+    body: PutScheduleDeliveryPolicyBody,
+    uow_factory: UowDependency,
+    clock: ClockDependency,
+) -> ScheduleDeliveryPolicyResponse:
+    schedule = GetSchedule(uow_factory).execute(
+        ScheduleId.parse(str(schedule_id)), task_id=TaskId.parse(str(task_id))
+    )
+    if schedule.status in TERMINAL_SCHEDULE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="terminal schedule cannot own delivery policy",
+        )
+    now = clock.now()
+    with uow_factory() as uow:
+        policy = uow.schedule_delivery_policies.get_for_schedule(schedule.id)
+        if policy is None:
+            policy = ScheduleDeliveryPolicy.new(
+                schedule_id=schedule.id, route_id=body.route, enabled=body.enabled, now=now
+            )
+        else:
+            policy.update_route(body.route, now)
+            policy.enable(now) if body.enabled else policy.disable(now)
+        uow.schedule_delivery_policies.save(policy)
+        uow.commit()
+    return _delivery_policy(policy)
 
 
 @router.post(

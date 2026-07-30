@@ -26,6 +26,16 @@ EXPECTED_OPERATIONS = {
     ("POST", "/v1/tasks/{task_id}/schedules/{schedule_id}/resume", "resumeSchedule"),
     ("POST", "/v1/tasks/{task_id}/schedules/{schedule_id}/cancel", "cancelSchedule"),
     ("GET", "/v1/tasks/{task_id}/schedules/{schedule_id}/fires", "listScheduleFires"),
+    (
+        "GET",
+        "/v1/tasks/{task_id}/schedules/{schedule_id}/delivery-policy",
+        "getScheduleDeliveryPolicy",
+    ),
+    (
+        "PUT",
+        "/v1/tasks/{task_id}/schedules/{schedule_id}/delivery-policy",
+        "putScheduleDeliveryPolicy",
+    ),
     ("GET", "/v1/tasks/{task_id}/runs", "listRunsForTask"),
     ("POST", "/v1/tasks/{task_id}/cancel", "cancelTask"),
     ("POST", "/v1/tasks/{task_id}/complete", "completeTask"),

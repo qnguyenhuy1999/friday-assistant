@@ -25,7 +25,7 @@ export class FridayNetworkError extends Error {
   }
 }
 export interface FridayRequestOptions {
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PUT";
   path: string;
   query?: Record<string, string | number | undefined>;
   body?: unknown;

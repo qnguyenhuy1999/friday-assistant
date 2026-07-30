@@ -40,6 +40,8 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "memory_retrieval_items",
             "schedules",
             "schedule_fires",
+            "schedule_delivery_policies",
+            "schedule_fire_delivery_plans",
             "conversations",
             "conversation_turns",
             "alembic_version",

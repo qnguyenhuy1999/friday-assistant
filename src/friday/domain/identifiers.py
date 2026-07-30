@@ -57,6 +57,10 @@ class ScheduleFireId(_Id):
     pass
 
 
+class ScheduleFireDeliveryPlanId(_Id):
+    pass
+
+
 class ConversationId(_Id):
     pass
 

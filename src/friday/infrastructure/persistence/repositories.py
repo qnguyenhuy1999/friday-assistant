@@ -34,7 +34,10 @@ from friday.domain import (
     RunStep,
     RunStepId,
     Schedule,
+    ScheduleDeliveryPolicy,
     ScheduleFire,
+    ScheduleFireDeliveryPlan,
+    ScheduleFireId,
     ScheduleId,
     Task,
     TaskEvent,
@@ -72,6 +75,10 @@ from friday.infrastructure.persistence.mappers import (
     run_step_from_row,
     run_step_to_row,
     run_to_row,
+    schedule_delivery_policy_from_row,
+    schedule_delivery_policy_to_row,
+    schedule_fire_delivery_plan_from_row,
+    schedule_fire_delivery_plan_to_row,
     schedule_fire_from_row,
     schedule_fire_to_row,
     schedule_from_row,
@@ -97,6 +104,8 @@ from friday.infrastructure.persistence.models import (
     RunEventSequenceCounterRow,
     RunRow,
     RunStepRow,
+    ScheduleDeliveryPolicyRow,
+    ScheduleFireDeliveryPlanRow,
     ScheduleFireRow,
     ScheduleRow,
     TaskEventRow,
@@ -432,6 +441,34 @@ class ScheduleFireRepository:
             .limit(1)
         )
         return self._session.execute(stmt).first() is not None
+
+
+class ScheduleDeliveryPolicyRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get_for_schedule(self, schedule_id: ScheduleId) -> ScheduleDeliveryPolicy | None:
+        row = self._session.get(ScheduleDeliveryPolicyRow, str(schedule_id))
+        return schedule_delivery_policy_from_row(row) if row is not None else None
+
+    def save(self, policy: ScheduleDeliveryPolicy) -> None:
+        self._session.merge(schedule_delivery_policy_to_row(policy))
+
+
+class ScheduleFireDeliveryPlanRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, plan: ScheduleFireDeliveryPlan) -> None:
+        self._session.add(schedule_fire_delivery_plan_to_row(plan))
+
+    def get_by_fire(self, schedule_fire_id: ScheduleFireId) -> ScheduleFireDeliveryPlan | None:
+        row = self._session.execute(
+            select(ScheduleFireDeliveryPlanRow).where(
+                ScheduleFireDeliveryPlanRow.schedule_fire_id == str(schedule_fire_id)
+            )
+        ).scalar_one_or_none()
+        return schedule_fire_delivery_plan_from_row(row) if row is not None else None
 
 
 class RunStepRepository:

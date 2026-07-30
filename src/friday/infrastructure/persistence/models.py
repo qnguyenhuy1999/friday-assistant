@@ -163,9 +163,9 @@ class ScheduleFireDeliveryPlanRow(Base):
         ),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
-    schedule_fire_id: Mapped[str] = mapped_column(ForeignKey("schedule_fires.id"))
-    schedule_id: Mapped[str] = mapped_column(ForeignKey("schedules.id"))
-    execution_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    schedule_fire_id: Mapped[str]
+    schedule_id: Mapped[str]
+    execution_id: Mapped[str]
     route_id: Mapped[str]
     route_fingerprint: Mapped[str | None]
     content_source: Mapped[str]

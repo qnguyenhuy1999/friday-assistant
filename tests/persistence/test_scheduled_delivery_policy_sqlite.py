@@ -333,6 +333,130 @@ class TestPolicyTOCTOUAndTerminalRace:
         assert row is not None
         assert _schedule_status_from_db(engine, schedule.id) in ("active",)
 
+    def test_create_policy_terminal_race(self, tmp_path: Path) -> None:
+        """Two sessions race: Actor A creates policy, Actor B transitions
+        schedule to terminal.  Only the serialization order determines the
+        durable outcome -- a policy write based on stale pre-terminal status
+        after the terminal mutation already committed is forbidden."""
+        _, engine, factory = _migrated_factory(tmp_path)
+        clock = FixedClock(T0)
+        schedule = _seed_task_and_schedule(factory, clock)
+        barrier = threading.Barrier(2)
+
+        policy_results: list[bool] = []
+        terminal_results: list[bool] = []
+        errors: list[BaseException] = []
+
+        def try_create_policy() -> None:
+            try:
+                barrier.wait(timeout=5)
+                policy = ScheduleDeliveryPolicy.new(
+                    schedule_id=schedule.id, route_id="ops.primary", enabled=True, now=T0
+                )
+                with factory() as uow:
+                    policy_results.append(
+                        uow.schedule_delivery_policies.put_for_nonterminal_schedule(policy)
+                    )
+                    uow.commit()
+            except BaseException as exc:
+                errors.append(exc)
+
+        def try_terminal_transition() -> None:
+            try:
+                barrier.wait(timeout=5)
+                _make_schedule_terminal(factory, schedule.id, status="cancelled")
+                terminal_results.append(True)
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=try_create_policy),
+            threading.Thread(target=try_terminal_transition),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert errors == []
+        schedule_status = _schedule_status_from_db(engine, schedule.id)
+        assert schedule_status in ("cancelled",)
+
+        if policy_results == [True]:
+            row = _policy_from_db(engine, schedule.id)
+            assert row is not None
+            assert row.route_id == "ops.primary"
+        else:
+            assert policy_results == [False]
+            assert _policy_from_db(engine, schedule.id) is None
+
+    def test_update_policy_terminal_race(self, tmp_path: Path) -> None:
+        """Seed existing policy (ops.primary / true).  Race an update to
+        ops.secondary / disabled against a terminal transition.  If the
+        terminal mutation wins, the existing policy must retain the
+        pre-race values."""
+        _, engine, factory = _migrated_factory(tmp_path)
+        clock = FixedClock(T0)
+        schedule = _seed_task_and_schedule(factory, clock)
+
+        policy = ScheduleDeliveryPolicy.new(
+            schedule_id=schedule.id, route_id="ops.primary", enabled=True, now=T0
+        )
+        with factory() as uow:
+            assert uow.schedule_delivery_policies.put_for_nonterminal_schedule(policy)
+            uow.commit()
+
+        barrier = threading.Barrier(2)
+        update_results: list[bool] = []
+        terminal_results: list[bool] = []
+        errors: list[BaseException] = []
+
+        def try_update_policy() -> None:
+            try:
+                barrier.wait(timeout=5)
+                updated = ScheduleDeliveryPolicy.new(
+                    schedule_id=schedule.id, route_id="ops.secondary", enabled=False, now=T0
+                )
+                with factory() as uow:
+                    update_results.append(
+                        uow.schedule_delivery_policies.put_for_nonterminal_schedule(updated)
+                    )
+                    uow.commit()
+            except BaseException as exc:
+                errors.append(exc)
+
+        def try_terminal_transition() -> None:
+            try:
+                barrier.wait(timeout=5)
+                _make_schedule_terminal(factory, schedule.id, status="completed")
+                terminal_results.append(True)
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=try_update_policy),
+            threading.Thread(target=try_terminal_transition),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert errors == []
+        schedule_status = _schedule_status_from_db(engine, schedule.id)
+        assert schedule_status == "completed"
+
+        row = _policy_from_db(engine, schedule.id)
+        assert row is not None
+
+        if terminal_results == [True] and update_results == [False]:
+            assert row.route_id == "ops.primary"
+            assert row.enabled is True
+        else:
+            assert update_results == [True]
+            assert row.route_id == "ops.secondary"
+            assert row.enabled is False
+
 
 # ===========================================================================
 # 2. Step-6 materialization proofs
@@ -574,6 +698,9 @@ class TestOccurrenceAtomicity:
 
 
 class TestCompositeFireBinding:
+    """Every raw-insert row is valid under all unrelated constraints first.
+    Then exactly one relationship is altered per rejection test."""
+
     def _seed_schedule_and_run(self, factory: UnitOfWorkFactory) -> tuple[str, str, str]:
         clock = FixedClock(T0)
         schedule = _seed_task_and_schedule(factory, clock)
@@ -584,81 +711,101 @@ class TestCompositeFireBinding:
             assert len(fires) == 1
             return str(fires[0].id), str(schedule.id), str(fires[0].run_id)
 
-    def test_fire_schedule_mismatch_rejected(self, tmp_path: Path) -> None:
+    def _valid_plan_values(
+        self,
+        fire_id: str,
+        sched_id: str,
+        run_id: str,
+    ) -> dict[str, object]:
+        """Return a dict that passes every CHECK constraint on
+        schedule_fire_delivery_plans: READY shape with 64-char hex
+        fingerprint, valid content_source, valid route_id."""
+        return {
+            "id": str(ScheduleFireDeliveryPlanId.new()),
+            "fid": fire_id,
+            "sid": sched_id,
+            "eid": run_id,
+            "rid": "ops.primary",
+            "rfp": "a" * 64,
+            "cs": "final_agent_summary_v1",
+            "st": "ready",
+            "ca": T0,
+        }
+
+    def test_wrong_schedule_id_rejected(self, tmp_path: Path) -> None:
+        """A. valid existing fire, wrong schedule_id, correct run => FK rejects."""
         _, engine, factory = _migrated_factory(tmp_path)
         fire_id, sched_id, run_id = self._seed_schedule_and_run(factory)
         other_schedule_id = str(ScheduleId.new())
 
-        with Session(engine) as session, pytest.raises(IntegrityError):
+        with Session(engine) as session, pytest.raises(IntegrityError) as excinfo:
             session.execute(
                 text(
                     "INSERT INTO schedule_fire_delivery_plans "
                     "(id, schedule_fire_id, schedule_id, execution_id, route_id, "
-                    " content_source, status, created_at) "
-                    "VALUES (:id, :fid, :sid, :eid, :rid, :cs, :st, :ca)"
+                    " route_fingerprint, content_source, status, created_at) "
+                    "VALUES (:id, :fid, :sid, :eid, :rid, :rfp, :cs, :st, :ca)"
                 ),
-                {
-                    "id": str(ScheduleFireDeliveryPlanId.new()),
-                    "fid": fire_id,
-                    "sid": other_schedule_id,
-                    "eid": run_id,
-                    "rid": "ops.primary",
-                    "cs": "final_agent_summary_v1",
-                    "st": "ready",
-                    "ca": T0,
-                },
+                self._valid_plan_values(fire_id, other_schedule_id, run_id),
             )
             session.flush()
+        err = str(excinfo.value)
+        assert "UNIQUE" not in err or "schedule_fire" not in err
 
-    def test_fire_run_mismatch_rejected(self, tmp_path: Path) -> None:
+    def test_wrong_execution_id_rejected(self, tmp_path: Path) -> None:
+        """B. valid existing fire, correct schedule, wrong execution_id => FK rejects."""
         _, engine, factory = _migrated_factory(tmp_path)
         fire_id, sched_id, run_id = self._seed_schedule_and_run(factory)
         other_run_id = str(RunId.new())
 
-        with Session(engine) as session, pytest.raises(IntegrityError):
+        with Session(engine) as session, pytest.raises(IntegrityError) as excinfo:
             session.execute(
                 text(
                     "INSERT INTO schedule_fire_delivery_plans "
                     "(id, schedule_fire_id, schedule_id, execution_id, route_id, "
-                    " content_source, status, created_at) "
-                    "VALUES (:id, :fid, :sid, :eid, :rid, :cs, :st, :ca)"
+                    " route_fingerprint, content_source, status, created_at) "
+                    "VALUES (:id, :fid, :sid, :eid, :rid, :rfp, :cs, :st, :ca)"
                 ),
-                {
-                    "id": str(ScheduleFireDeliveryPlanId.new()),
-                    "fid": fire_id,
-                    "sid": sched_id,
-                    "eid": other_run_id,
-                    "rid": "ops.primary",
-                    "cs": "final_agent_summary_v1",
-                    "st": "ready",
-                    "ca": T0,
-                },
+                self._valid_plan_values(fire_id, sched_id, other_run_id),
             )
             session.flush()
+        err = str(excinfo.value)
+        assert "UNIQUE" not in err or "schedule_fire" not in err
 
     def test_nonexistent_fire_rejected(self, tmp_path: Path) -> None:
+        """C. nonexistent fire, otherwise valid values => FK rejects."""
         _, engine, factory = _migrated_factory(tmp_path)
         fire_id, sched_id, run_id = self._seed_schedule_and_run(factory)
         fake_fire_id = str(ScheduleFireId.new())
 
-        with Session(engine) as session, pytest.raises(IntegrityError):
+        with Session(engine) as session, pytest.raises(IntegrityError) as excinfo:
             session.execute(
                 text(
                     "INSERT INTO schedule_fire_delivery_plans "
                     "(id, schedule_fire_id, schedule_id, execution_id, route_id, "
-                    " content_source, status, created_at) "
-                    "VALUES (:id, :fid, :sid, :eid, :rid, :cs, :st, :ca)"
+                    " route_fingerprint, content_source, status, created_at) "
+                    "VALUES (:id, :fid, :sid, :eid, :rid, :rfp, :cs, :st, :ca)"
                 ),
-                {
-                    "id": str(ScheduleFireDeliveryPlanId.new()),
-                    "fid": fake_fire_id,
-                    "sid": sched_id,
-                    "eid": run_id,
-                    "rid": "ops.primary",
-                    "cs": "final_agent_summary_v1",
-                    "st": "ready",
-                    "ca": T0,
-                },
+                self._valid_plan_values(fake_fire_id, sched_id, run_id),
+            )
+            session.flush()
+        err = str(excinfo.value)
+        assert "UNIQUE" not in err or "schedule_fire" not in err
+
+    def test_fully_valid_binding_accepted(self, tmp_path: Path) -> None:
+        """D. fully valid binding => row can be inserted."""
+        _, engine, factory = _migrated_factory(tmp_path)
+        fire_id, sched_id, run_id = self._seed_schedule_and_run(factory)
+
+        with Session(engine) as session:
+            session.execute(
+                text(
+                    "INSERT INTO schedule_fire_delivery_plans "
+                    "(id, schedule_fire_id, schedule_id, execution_id, route_id, "
+                    " route_fingerprint, content_source, status, created_at) "
+                    "VALUES (:id, :fid, :sid, :eid, :rid, :rfp, :cs, :st, :ca)"
+                ),
+                self._valid_plan_values(fire_id, sched_id, run_id),
             )
             session.flush()
 
@@ -821,6 +968,7 @@ class TestSchedulerRaceWithPlan:
         _, engine, factory = _migrated_factory(tmp_path)
         clock = FixedClock(T0)
         schedule = _seed_task_and_schedule(factory, clock)
+        original_next_fire = schedule.next_fire_at
 
         policy = ScheduleDeliveryPolicy.new(
             schedule_id=schedule.id, route_id="ops.primary", enabled=True, now=T0
@@ -867,15 +1015,44 @@ class TestSchedulerRaceWithPlan:
 
         assert not any(t.is_alive() for t in threads)
         assert errors == []
+        assert all(
+            not isinstance(e, exc_type)
+            for exc_type in (ConnectionError, TimeoutError, RuntimeError)
+            for e in errors
+        )
         assert sorted(results) == [0, 1]
 
         with factory() as uow:
             fires = uow.schedule_fires.list_for_schedule(schedule.id, limit=10)
             assert len(fires) == 1
             fire = fires[0]
+            run = uow.runs.get(fire.run_id)
+            assert run is not None
+            assert run.id == run.execution_id
             plan = uow.schedule_fire_delivery_plans.get_by_fire(fire.id)
             assert plan is not None
+            assert plan.schedule_fire_id == fire.id
+            assert plan.schedule_id == fire.schedule_id
+            assert plan.execution_id == fire.run_id
             assert plan.status is ScheduleFireDeliveryPlanStatus.READY
+            assert plan.route_fingerprint == "a" * 64
+            reloaded = uow.schedules.get(schedule.id)
+            assert reloaded is not None
+            assert reloaded.status.value == "completed"
+            assert reloaded.next_fire_at is None
+
+        with engine.connect() as connection:
+            run_count = connection.scalar(select(func.count()).select_from(text("runs")))
+            assert run_count == 1
+            fire_count = connection.scalar(select(func.count()).select_from(ScheduleFireRow))
+            assert fire_count == 1
+            plan_count = connection.scalar(
+                select(func.count()).select_from(ScheduleFireDeliveryPlanRow)
+            )
+            assert plan_count == 1
+
+        assert original_next_fire is not None
+        assert original_next_fire <= clock.now_value
 
 
 # ===========================================================================
@@ -1026,39 +1203,107 @@ class TestMigration0015:
         finally:
             engine2.dispose()
 
-    def test_downgrade_0015_to_0014_then_re_upgrade(self, tmp_path: Path) -> None:
+    def test_populated_downgrade_then_re_upgrade_data_survives(self, tmp_path: Path) -> None:
+        """Prove that populated historical ScheduleFire rows survive a
+        0014 -> 0015 -> 0014 -> 0015 cycle.  SQLite batch_alter_table
+        rewrites schedule_fires when adding/removing the composite
+        UNIQUE constraint, so we must verify the data round-trips."""
         db_path = tmp_path / "migrate2.db"
         config = _alembic_config(db_path)
-        command.upgrade(config, "0015")
+        command.upgrade(config, "0014")
 
         engine = create_engine(f"sqlite:///{db_path}")
         try:
-            inspector = inspect(engine)
-            assert "schedule_delivery_policies" in set(inspector.get_table_names())
-            assert "schedule_fire_delivery_plans" in set(inspector.get_table_names())
+            with Session(engine) as session, session.begin():
+                session.execute(text("PRAGMA foreign_keys=OFF"))
+                session.execute(
+                    text(
+                        "INSERT INTO tasks (id, title, description, status, created_at) "
+                        "VALUES (:id, :t, :d, :s, :ca)"
+                    ),
+                    {"id": "task-pdq", "t": "survival", "d": "", "s": "active", "ca": T0},
+                )
+                session.execute(
+                    text(
+                        "INSERT INTO runs (id, task_id, execution_id, status, created_at) "
+                        "VALUES (:id, :tid, :eid, :s, :ca)"
+                    ),
+                    {
+                        "id": "run-pdq-1",
+                        "tid": "task-pdq",
+                        "eid": "run-pdq-1",
+                        "s": "queued",
+                        "ca": T0,
+                    },
+                )
+                session.execute(
+                    text(
+                        "INSERT INTO schedules (id, task_id, kind, run_at, timezone, status, "
+                        "next_fire_at, created_at, updated_at) "
+                        "VALUES (:id, :tid, :k, :ra, :tz, :st, :nfa, :ca, :ua)"
+                    ),
+                    {
+                        "id": "sched-pdq",
+                        "tid": "task-pdq",
+                        "k": "once",
+                        "ra": T0,
+                        "tz": "UTC",
+                        "st": "active",
+                        "nfa": T0,
+                        "ca": T0,
+                        "ua": T0,
+                    },
+                )
+                session.execute(
+                    text(
+                        "INSERT INTO schedule_fires (id, schedule_id, scheduled_for, "
+                        "fired_at, run_id) "
+                        "VALUES (:id, :sid, :sf, :fa, :rid)"
+                    ),
+                    {
+                        "id": "fire-pdq-1",
+                        "sid": "sched-pdq",
+                        "sf": T0,
+                        "fa": T0,
+                        "rid": "run-pdq-1",
+                    },
+                )
+                session.execute(
+                    text(
+                        "INSERT INTO runs (id, task_id, execution_id, status, created_at) "
+                        "VALUES (:id, :tid, :eid, :s, :ca)"
+                    ),
+                    {
+                        "id": "run-pdq-2",
+                        "tid": "task-pdq",
+                        "eid": "run-pdq-2",
+                        "s": "queued",
+                        "ca": T0,
+                    },
+                )
+                session.execute(
+                    text(
+                        "INSERT INTO schedule_fires (id, schedule_id, scheduled_for, "
+                        "fired_at, run_id) "
+                        "VALUES (:id, :sid, :sf, :fa, :rid)"
+                    ),
+                    {
+                        "id": "fire-pdq-2",
+                        "sid": "sched-pdq",
+                        "sf": T0 + timedelta(minutes=1),
+                        "fa": T0 + timedelta(minutes=1),
+                        "rid": "run-pdq-2",
+                    },
+                )
         finally:
             engine.dispose()
 
-        command.downgrade(config, "0014")
-
-        engine2 = create_engine(f"sqlite:///{db_path}")
-        try:
-            inspector = inspect(engine2)
-            tables = set(inspector.get_table_names())
-            assert "schedule_delivery_policies" not in tables
-            assert "schedule_fire_delivery_plans" not in tables
-            binding = {
-                tuple(c["column_names"]) for c in inspector.get_unique_constraints("schedule_fires")
-            }
-            assert ("id", "schedule_id", "run_id") not in binding
-        finally:
-            engine2.dispose()
-
+        # ---- upgrade 0015 ----
         command.upgrade(config, "0015")
 
-        engine3 = create_engine(f"sqlite:///{db_path}")
+        engine_15 = create_engine(f"sqlite:///{db_path}")
         try:
-            inspector = inspect(engine3)
+            inspector = inspect(engine_15)
             tables = set(inspector.get_table_names())
             assert "schedule_delivery_policies" in tables
             assert "schedule_fire_delivery_plans" in tables
@@ -1066,5 +1311,68 @@ class TestMigration0015:
                 tuple(c["column_names"]) for c in inspector.get_unique_constraints("schedule_fires")
             }
             assert ("id", "schedule_id", "run_id") in binding
+            with engine_15.connect() as conn:
+                fires = conn.execute(
+                    select(ScheduleFireRow.id, ScheduleFireRow.schedule_id).order_by(
+                        ScheduleFireRow.scheduled_for
+                    )
+                ).all()
+                assert len(fires) == 2
+                assert fires[0].id == "fire-pdq-1"
+                assert fires[1].id == "fire-pdq-2"
+                plan_count = conn.scalar(
+                    select(func.count()).select_from(ScheduleFireDeliveryPlanRow)
+                )
+                assert plan_count == 0
         finally:
-            engine3.dispose()
+            engine_15.dispose()
+
+        # ---- downgrade 0014 ----
+        command.downgrade(config, "0014")
+
+        engine_14 = create_engine(f"sqlite:///{db_path}")
+        try:
+            inspector = inspect(engine_14)
+            tables = set(inspector.get_table_names())
+            assert "schedule_delivery_policies" not in tables
+            assert "schedule_fire_delivery_plans" not in tables
+            binding = {
+                tuple(c["column_names"]) for c in inspector.get_unique_constraints("schedule_fires")
+            }
+            assert ("id", "schedule_id", "run_id") not in binding
+            with engine_14.connect() as conn:
+                fire_count = conn.scalar(select(func.count()).select_from(ScheduleFireRow))
+                assert fire_count == 2
+                run_count = conn.scalar(select(func.count()).select_from(text("runs")))
+                assert run_count == 2
+                sched = conn.execute(
+                    select(text("id, status")).select_from(text("schedules"))
+                ).one()
+                assert sched.id == "sched-pdq"
+                task = conn.execute(select(text("id, title")).select_from(text("tasks"))).one()
+                assert task.title == "survival"
+        finally:
+            engine_14.dispose()
+
+        # ---- re-upgrade 0015 ----
+        command.upgrade(config, "0015")
+
+        engine_15b = create_engine(f"sqlite:///{db_path}")
+        try:
+            inspector = inspect(engine_15b)
+            tables = set(inspector.get_table_names())
+            assert "schedule_delivery_policies" in tables
+            assert "schedule_fire_delivery_plans" in tables
+            binding = {
+                tuple(c["column_names"]) for c in inspector.get_unique_constraints("schedule_fires")
+            }
+            assert ("id", "schedule_id", "run_id") in binding
+            with engine_15b.connect() as conn:
+                fire_count = conn.scalar(select(func.count()).select_from(ScheduleFireRow))
+                assert fire_count == 2
+                plan_count = conn.scalar(
+                    select(func.count()).select_from(ScheduleFireDeliveryPlanRow)
+                )
+                assert plan_count == 0
+        finally:
+            engine_15b.dispose()

@@ -37,6 +37,7 @@ from friday.domain.identifiers import (
     DeliveryId,
     RunId,
     RunStepId,
+    ScheduleFireId,
     ScheduleId,
     TaskId,
     ToolInvocationId,
@@ -44,7 +45,9 @@ from friday.domain.identifiers import (
 from friday.domain.outbound_delivery import OutboundDelivery
 from friday.domain.run import Run
 from friday.domain.schedule import Schedule
+from friday.domain.schedule_delivery_policy import ScheduleDeliveryPolicy
 from friday.domain.schedule_fire import ScheduleFire
+from friday.domain.schedule_fire_delivery_plan import ScheduleFireDeliveryPlan
 from friday.domain.step import RunStep
 from friday.domain.task import Task
 from friday.domain.task_event import TaskEvent
@@ -223,6 +226,16 @@ class ScheduleFireRepository(Protocol):
         after_id: str | None,
     ) -> list[ScheduleFire]: ...
     def has_non_terminal_execution_for_schedule(self, schedule_id: ScheduleId) -> bool: ...
+
+
+class ScheduleDeliveryPolicyRepository(Protocol):
+    def get_for_schedule(self, schedule_id: ScheduleId) -> ScheduleDeliveryPolicy | None: ...
+    def put_for_nonterminal_schedule(self, policy: ScheduleDeliveryPolicy) -> bool: ...
+
+
+class ScheduleFireDeliveryPlanRepository(Protocol):
+    def add_for_fire(self, plan: ScheduleFireDeliveryPlan, fire: ScheduleFire) -> None: ...
+    def get_by_fire(self, schedule_fire_id: ScheduleFireId) -> ScheduleFireDeliveryPlan | None: ...
 
 
 class ConversationRepository(Protocol):
@@ -546,6 +559,10 @@ class UnitOfWork(Protocol):
     def conversation_turns(self) -> ConversationTurnRepository: ...
     @property
     def schedule_fires(self) -> ScheduleFireRepository: ...
+    @property
+    def schedule_delivery_policies(self) -> ScheduleDeliveryPolicyRepository: ...
+    @property
+    def schedule_fire_delivery_plans(self) -> ScheduleFireDeliveryPlanRepository: ...
     @property
     def steps(self) -> RunStepRepository: ...
     @property

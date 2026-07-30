@@ -84,3 +84,9 @@ An attempt is one-way and cannot be created without a crossed boundary. There is
 Migration `0014` backfills one attempt per delivery that already had `dispatch_started_at` set before the ledger existed, reconstructed only from timestamps the old schema recorded truthfully. Without it, post-dispatch recovery — which fails closed when the matching attempt is absent — would leave those deliveries permanently unrecoverable. Pre-dispatch rows get no attempt, and data that cannot yield truthful audit history fails the migration rather than inventing a row.
 
 Generic webhook delivery currently has no verified provider idempotency contract. Therefore post-dispatch `FAILED` and `AMBIGUOUS` outcomes are never automatically retried. Automatic redrive requires a future provider-idempotency design.
+
+## Scheduled delivery authority
+
+`ScheduleDeliveryPolicy` is direct operator intent for future fires. It stores only a schedule-owned route alias and enabled state—never an endpoint, credential, or fingerprint. When the existing scheduler materializes a `ScheduleFire`, it resolves that alias through the worker's loaded messaging configuration and writes an immutable `ScheduleFireDeliveryPlan` for that occurrence.
+
+The plan freezes the route fingerprint and execution lineage, or a stable suppressed reason when the route is missing or disabled. Policy and route changes therefore affect future fires only; historical fires receive no migration backfill and are never retroactively authorized. This phase creates no message content, `OutboundDelivery`, network call, or agent-answer read.

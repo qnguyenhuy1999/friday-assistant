@@ -73,6 +73,7 @@ from friday.infrastructure.memory.graphify_cli import GraphifyCliIndexBuilder, G
 from friday.infrastructure.memory.graphify_json import GraphifyJsonIndex, GraphifyJsonIndexSettings
 from friday.infrastructure.memory.lexical_index import LexicalIndexStore
 from friday.infrastructure.memory.obsidian_vault import ObsidianVaultStore
+from friday.infrastructure.messaging.delivery_route_authority import MessagingRouteAuthorityResolver
 from friday.infrastructure.messaging.dispatcher import DeliveryDispatcher
 from friday.infrastructure.messaging.message_tool_gateway import (
     MessageToolGateway,
@@ -472,7 +473,12 @@ def _compose_worker(
             uow_factory, clock, batch_size=settings.maintenance_batch_size
         ),
         materialize_due_schedules=(
-            MaterializeDueSchedules(uow_factory, clock, batch_size=settings.maintenance_batch_size)
+            MaterializeDueSchedules(
+                uow_factory,
+                clock,
+                batch_size=settings.maintenance_batch_size,
+                delivery_route_authority_resolver=MessagingRouteAuthorityResolver(messaging_routes),
+            )
             if settings.scheduler_enabled
             else None
         ),

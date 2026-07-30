@@ -51,7 +51,10 @@ from friday.domain import (
     RunStepId,
     RunStepStatus,
     Schedule,
+    ScheduleDeliveryPolicy,
     ScheduleFire,
+    ScheduleFireDeliveryPlan,
+    ScheduleFireDeliveryPlanId,
     ScheduleFireId,
     ScheduleId,
     ScheduleKind,
@@ -67,6 +70,10 @@ from friday.domain import (
     ToolInvocationStatus,
 )
 from friday.domain.json_value import JsonValue
+from friday.domain.schedule_fire_delivery_plan import (
+    ScheduleFireDeliveryContentSource,
+    ScheduleFireDeliveryPlanStatus,
+)
 from friday.domain.tool_provenance import ToolProvenance
 from friday.infrastructure.persistence.models import (
     ApprovalRequestRow,
@@ -82,6 +89,8 @@ from friday.infrastructure.persistence.models import (
     RunRow,
     RunStepRow,
     RunWorkItemRow,
+    ScheduleDeliveryPolicyRow,
+    ScheduleFireDeliveryPlanRow,
     ScheduleFireRow,
     ScheduleRow,
     TaskEventRow,
@@ -289,6 +298,60 @@ def schedule_fire_from_row(row: ScheduleFireRow) -> ScheduleFire:
         scheduled_for=read_back_utc(row.scheduled_for),
         fired_at=read_back_utc(row.fired_at),
         run_id=RunId.parse(row.run_id),
+    )
+
+
+def schedule_delivery_policy_to_row(policy: ScheduleDeliveryPolicy) -> ScheduleDeliveryPolicyRow:
+    return ScheduleDeliveryPolicyRow(
+        schedule_id=str(policy.schedule_id),
+        route_id=policy.route_id,
+        enabled=policy.enabled,
+        created_at=policy.created_at,
+        updated_at=policy.updated_at,
+    )
+
+
+def schedule_delivery_policy_from_row(row: ScheduleDeliveryPolicyRow) -> ScheduleDeliveryPolicy:
+    return ScheduleDeliveryPolicy.reconstruct(
+        schedule_id=ScheduleId.parse(row.schedule_id),
+        route_id=row.route_id,
+        enabled=row.enabled,
+        created_at=read_back_utc(row.created_at),
+        updated_at=read_back_utc(row.updated_at),
+    )
+
+
+def schedule_fire_delivery_plan_to_row(
+    plan: ScheduleFireDeliveryPlan,
+) -> ScheduleFireDeliveryPlanRow:
+    return ScheduleFireDeliveryPlanRow(
+        id=str(plan.id),
+        schedule_fire_id=str(plan.schedule_fire_id),
+        schedule_id=str(plan.schedule_id),
+        execution_id=str(plan.execution_id),
+        route_id=plan.route_id,
+        route_fingerprint=plan.route_fingerprint,
+        content_source=plan.content_source.value,
+        status=plan.status.value,
+        reason_code=plan.reason_code,
+        created_at=plan.created_at,
+    )
+
+
+def schedule_fire_delivery_plan_from_row(
+    row: ScheduleFireDeliveryPlanRow,
+) -> ScheduleFireDeliveryPlan:
+    return ScheduleFireDeliveryPlan(
+        ScheduleFireDeliveryPlanId.parse(row.id),
+        ScheduleFireId.parse(row.schedule_fire_id),
+        ScheduleId.parse(row.schedule_id),
+        RunId.parse(row.execution_id),
+        row.route_id,
+        row.route_fingerprint,
+        ScheduleFireDeliveryContentSource(row.content_source),
+        ScheduleFireDeliveryPlanStatus(row.status),
+        row.reason_code,
+        read_back_utc(row.created_at),
     )
 
 

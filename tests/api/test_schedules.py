@@ -85,6 +85,27 @@ def test_schedule_controls_and_invalid_transitions(app: FastAPI) -> None:
     assert conflict.status_code == 409
 
 
+def test_schedule_delivery_policy_put_get_update_and_terminal_fence(app: FastAPI) -> None:
+    seeded = seed_active_run(app)
+    app.state.clock = _Clock(NOW)
+    with TestClient(app) as client:
+        created = _create(client, str(seeded.task_id))
+        path = f"/v1/tasks/{seeded.task_id}/schedules/{created['id']}/delivery-policy"
+        first = client.put(path, json={"route": "ops.primary", "enabled": True})
+        fetched = client.get(path)
+        updated = client.put(path, json={"route": "ops.secondary", "enabled": False})
+        client.post(f"/v1/tasks/{seeded.task_id}/schedules/{created['id']}/cancel")
+        terminal = client.put(path, json={"route": "ops.third", "enabled": True})
+
+    assert first.status_code == fetched.status_code == updated.status_code == 200
+    assert first.json()["route"] == fetched.json()["route"] == "ops.primary"
+    assert updated.json()["route"] == "ops.secondary"
+    assert updated.json()["enabled"] is False
+    assert terminal.status_code == 409
+    assert "fingerprint" not in updated.text
+    assert "endpoint" not in updated.text
+
+
 def test_schedule_validation_parent_fencing_and_fire_listing(app: FastAPI) -> None:
     seeded = seed_active_run(app)
     other = seed_active_run(app)

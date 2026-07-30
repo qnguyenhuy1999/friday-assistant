@@ -50,3 +50,16 @@ class ScheduleFireResponse(BaseModel):
 class ScheduleFirePageResponse(BaseModel):
     items: list[ScheduleFireResponse]
     next_cursor: str | None
+
+
+class PutScheduleDeliveryPolicyBody(BaseModel):
+    route: str = Field(min_length=1, max_length=64)
+    enabled: bool
+
+
+class ScheduleDeliveryPolicyResponse(BaseModel):
+    schedule_id: str
+    route: str
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime

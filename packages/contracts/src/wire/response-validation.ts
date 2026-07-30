@@ -20,6 +20,7 @@ export {
   validateTaskEventPage,
   validateStartRun,
   validateSchedule,
+  validateScheduleDeliveryPolicy,
   validateScheduleFire,
   validateScheduleFirePage,
   validateSchedulePage,

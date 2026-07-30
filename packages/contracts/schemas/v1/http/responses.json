@@ -332,6 +332,24 @@
         "run_id": { "type": "string" }
       }
     },
+    "ScheduleDeliveryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schedule_id",
+        "route",
+        "enabled",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "schedule_id": { "type": "string" },
+        "route": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      }
+    },
     "StartRunResponse": {
       "type": "object",
       "additionalProperties": false,
@@ -399,6 +417,9 @@
     "taskEvent": { "$ref": "#/definitions/TaskEvent" },
     "schedule": { "$ref": "#/definitions/Schedule" },
     "scheduleFire": { "$ref": "#/definitions/ScheduleFire" },
+    "scheduleDeliveryPolicy": {
+      "$ref": "#/definitions/ScheduleDeliveryPolicy"
+    },
     "conversation": { "$ref": "#/definitions/Conversation" },
     "conversationTurn": { "$ref": "#/definitions/ConversationTurn" },
     "taskPage": {

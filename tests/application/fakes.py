@@ -29,6 +29,8 @@ from friday.application.ports import (
     RunStepRepository,
     RunWorkItemView,
     RunWorkQueue,
+    ScheduleDeliveryPolicyRepository,
+    ScheduleFireDeliveryPlanRepository,
     ScheduleFireRepository,
     ScheduleRepository,
     TaskEventStore,
@@ -55,6 +57,7 @@ from friday.domain.identifiers import (
     DeliveryId,
     RunId,
     RunStepId,
+    ScheduleFireId,
     ScheduleId,
     TaskId,
     ToolInvocationId,
@@ -62,7 +65,9 @@ from friday.domain.identifiers import (
 from friday.domain.outbound_delivery import DeliveryStatus, OutboundDelivery
 from friday.domain.run import Run
 from friday.domain.schedule import Schedule, ScheduleStatus
+from friday.domain.schedule_delivery_policy import ScheduleDeliveryPolicy
 from friday.domain.schedule_fire import ScheduleFire
+from friday.domain.schedule_fire_delivery_plan import ScheduleFireDeliveryPlan
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES, RunStep
 from friday.domain.task import Task
 from friday.domain.task_event import TaskEvent
@@ -327,6 +332,60 @@ class FakeScheduleFireRepository:
             run.execution_id in roots and run.status not in TERMINAL_RUN_STATUSES
             for run in self._runs.items.values()
         )
+
+
+class FakeScheduleDeliveryPolicyRepository:
+    def __init__(self) -> None:
+        self.items: dict[ScheduleId, ScheduleDeliveryPolicy] = {}
+
+    def get_for_schedule(self, schedule_id: ScheduleId) -> ScheduleDeliveryPolicy | None:
+        policy = self.items.get(schedule_id)
+        return self._copy(policy) if policy is not None else None
+
+    def save(self, policy: ScheduleDeliveryPolicy) -> None:
+        # Compatibility seed helper for tests; production has no unrestricted
+        # policy save surface. Store a detached value like a real mapper.
+        self.items[policy.schedule_id] = self._copy(policy)
+
+    def put_for_nonterminal_schedule(self, policy: ScheduleDeliveryPolicy) -> bool:
+        self.items[policy.schedule_id] = self._copy(policy)
+        return True
+
+    @staticmethod
+    def _copy(policy: ScheduleDeliveryPolicy) -> ScheduleDeliveryPolicy:
+        return ScheduleDeliveryPolicy.reconstruct(
+            schedule_id=policy.schedule_id,
+            route_id=policy.route_id,
+            enabled=policy.enabled,
+            created_at=policy.created_at,
+            updated_at=policy.updated_at,
+        )
+
+
+class FakeScheduleFireDeliveryPlanRepository:
+    def __init__(self) -> None:
+        self.items: dict[ScheduleFireId, ScheduleFireDeliveryPlan] = {}
+
+    def add(self, plan: ScheduleFireDeliveryPlan) -> None:
+        if plan.schedule_fire_id in self.items:
+            from friday.application.errors import EntityConflict
+
+            raise EntityConflict("duplicate schedule fire delivery plan")
+        self.items[plan.schedule_fire_id] = plan
+
+    def add_for_fire(self, plan: ScheduleFireDeliveryPlan, fire: ScheduleFire) -> None:
+        if (
+            plan.schedule_fire_id != fire.id
+            or plan.schedule_id != fire.schedule_id
+            or plan.execution_id != fire.run_id
+        ):
+            from friday.application.errors import EntityConflict
+
+            raise EntityConflict("delivery plan must bind exactly to its ScheduleFire")
+        self.add(plan)
+
+    def get_by_fire(self, schedule_fire_id: ScheduleFireId) -> ScheduleFireDeliveryPlan | None:
+        return self.items.get(schedule_fire_id)
 
 
 class FakeRunEventStore:
@@ -1200,6 +1259,8 @@ class FakeUnitOfWork:
         self.conversation_turn_repo = FakeConversationTurnRepository()
         self.schedule_fire_repo = FakeScheduleFireRepository()
         self.schedule_fire_repo._runs = self.run_repo
+        self.schedule_delivery_policy_repo = FakeScheduleDeliveryPolicyRepository()
+        self.schedule_fire_delivery_plan_repo = FakeScheduleFireDeliveryPlanRepository()
         self.event_store = FakeRunEventStore()
         self.task_event_store = FakeTaskEventStore()
         self.step_repo = FakeRunStepRepository()
@@ -1238,6 +1299,14 @@ class FakeUnitOfWork:
     @property
     def schedule_fires(self) -> ScheduleFireRepository:
         return self.schedule_fire_repo
+
+    @property
+    def schedule_delivery_policies(self) -> ScheduleDeliveryPolicyRepository:
+        return self.schedule_delivery_policy_repo
+
+    @property
+    def schedule_fire_delivery_plans(self) -> ScheduleFireDeliveryPlanRepository:
+        return self.schedule_fire_delivery_plan_repo
 
     @property
     def steps(self) -> RunStepRepository:

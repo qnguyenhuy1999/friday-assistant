@@ -7,6 +7,7 @@ from typing import Any, cast
 from sqlalchemy import DateTime, Select, String, and_, exists, func, literal, or_, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from friday.application.memory.models import IndexSnapshot, IndexState, MemoryRetrievalRecord
@@ -34,7 +35,10 @@ from friday.domain import (
     RunStep,
     RunStepId,
     Schedule,
+    ScheduleDeliveryPolicy,
     ScheduleFire,
+    ScheduleFireDeliveryPlan,
+    ScheduleFireId,
     ScheduleId,
     Task,
     TaskEvent,
@@ -72,6 +76,10 @@ from friday.infrastructure.persistence.mappers import (
     run_step_from_row,
     run_step_to_row,
     run_to_row,
+    schedule_delivery_policy_from_row,
+    schedule_delivery_policy_to_row,
+    schedule_fire_delivery_plan_from_row,
+    schedule_fire_delivery_plan_to_row,
     schedule_fire_from_row,
     schedule_fire_to_row,
     schedule_from_row,
@@ -97,6 +105,8 @@ from friday.infrastructure.persistence.models import (
     RunEventSequenceCounterRow,
     RunRow,
     RunStepRow,
+    ScheduleDeliveryPolicyRow,
+    ScheduleFireDeliveryPlanRow,
     ScheduleFireRow,
     ScheduleRow,
     TaskEventRow,
@@ -432,6 +442,113 @@ class ScheduleFireRepository:
             .limit(1)
         )
         return self._session.execute(stmt).first() is not None
+
+
+class ScheduleDeliveryPolicyRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get_for_schedule(self, schedule_id: ScheduleId) -> ScheduleDeliveryPolicy | None:
+        row = self._session.get(ScheduleDeliveryPolicyRow, str(schedule_id))
+        return schedule_delivery_policy_from_row(row) if row is not None else None
+
+    def put_for_nonterminal_schedule(self, policy: ScheduleDeliveryPolicy) -> bool:
+        """Persist policy only while its schedule is durably non-terminal.
+
+        This is intentionally the only production policy write primitive: a
+        generic merge would let callers persist authority after a stale status
+        read. Every write path embeds its own non-terminal predicate so the
+        database evaluates authority atomically with state.
+        """
+        row = schedule_delivery_policy_to_row(policy)
+        values = {
+            "schedule_id": row.schedule_id,
+            "route_id": row.route_id,
+            "enabled": row.enabled,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+        conditions = (
+            ScheduleRow.id == values["schedule_id"],
+            ScheduleRow.status.not_in(
+                (ScheduleStatus.COMPLETED.value, ScheduleStatus.CANCELLED.value)
+            ),
+        )
+        nonterminal = exists(select(ScheduleRow.id).where(*conditions))
+
+        # ARM 1 — atomic INSERT … SELECT.
+        # The SELECT returns exactly one row only while the schedule is
+        # durably non‑terminal.  If the schedule has already been completed
+        # or cancelled the SELECT yields zero rows and the INSERT inserts
+        # nothing — no row is created even after a concurrent state change.
+        sel = (
+            select(
+                literal(values["schedule_id"]),
+                literal(values["route_id"]),
+                literal(values["enabled"]),
+                literal(values["created_at"]),
+                literal(values["updated_at"]),
+            )
+            .select_from(ScheduleRow)
+            .where(*conditions)
+        )
+        try:
+            result = cast(
+                CursorResult[Any],
+                self._session.execute(
+                    insert(ScheduleDeliveryPolicyRow).from_select(
+                        ["schedule_id", "route_id", "enabled", "created_at", "updated_at"],
+                        sel,
+                    )
+                ),
+            )
+            return result.rowcount == 1
+        except IntegrityError:
+            pass  # Row already exists; fall through to UPSERT.
+
+        # ARM 2 — UPSERT with non‑terminal predicate on the UPDATE arm.
+        # Only reachable when a row already exists (ARM 1 raised
+        # IntegrityError). The UPSERT's INSERT arm is unconditional in
+        # SQLite, so we rely on ARM 1 having already verified the
+        # schedule is non‑terminal. The `where=nonterminal` guards the
+        # UPDATE arm against a concurrent schedule-terminal race.
+        stmt = (
+            insert(ScheduleDeliveryPolicyRow)
+            .values(**values)
+            .on_conflict_do_update(
+                index_elements=[ScheduleDeliveryPolicyRow.schedule_id],
+                set_={
+                    "route_id": values["route_id"],
+                    "enabled": values["enabled"],
+                    "updated_at": values["updated_at"],
+                },
+                where=nonterminal,
+            )
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
+
+
+class ScheduleFireDeliveryPlanRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add_for_fire(self, plan: ScheduleFireDeliveryPlan, fire: ScheduleFire) -> None:
+        if (
+            plan.schedule_fire_id != fire.id
+            or plan.schedule_id != fire.schedule_id
+            or plan.execution_id != fire.run_id
+        ):
+            raise ValueError("delivery plan must bind exactly to its ScheduleFire")
+        self._session.add(schedule_fire_delivery_plan_to_row(plan))
+
+    def get_by_fire(self, schedule_fire_id: ScheduleFireId) -> ScheduleFireDeliveryPlan | None:
+        row = self._session.execute(
+            select(ScheduleFireDeliveryPlanRow).where(
+                ScheduleFireDeliveryPlanRow.schedule_fire_id == str(schedule_fire_id)
+            )
+        ).scalar_one_or_none()
+        return schedule_fire_delivery_plan_from_row(row) if row is not None else None
 
 
 class RunStepRepository:

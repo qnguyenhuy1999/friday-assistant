@@ -24,7 +24,6 @@ from friday.application.delivery_lifecycle import (
 )
 from friday.application.retry_policy import RetryPolicy
 from friday.domain import (
-    DeliveryAttempt,
     DeliveryAttemptId,
     DeliveryId,
     DeliverySourceKind,
@@ -509,13 +508,14 @@ def test_dispatch_started_at_rejects_direct_mutation_after_sqlite_round_trip(
     assert repo.mark_dispatch_started(
         fixture.delivery_id, "worker-a", "token-a", generation, boundary
     )
-    DeliveryAttemptRepository(fixture.session_a).add(
-        DeliveryAttempt.begin(
-            id=DeliveryAttemptId.new(),
-            delivery_id=fixture.delivery_id,
-            claim_generation=generation,
-            started_at=boundary,
-        )
+    assert DeliveryAttemptRepository(fixture.session_a).begin_for_claim(
+        DeliveryAttemptId.new(),
+        fixture.delivery_id,
+        "worker-a",
+        "token-a",
+        generation,
+        boundary,
+        boundary,
     )
     fixture.session_a.commit()
 
@@ -743,13 +743,14 @@ def test_state_and_recovery_survive_an_engine_restart(fixture: DeliveryFixture) 
     assert repo.mark_dispatch_started(
         fixture.delivery_id, "worker-a", "token-a", generation, boundary
     )
-    DeliveryAttemptRepository(fixture.session_a).add(
-        DeliveryAttempt.begin(
-            id=DeliveryAttemptId.new(),
-            delivery_id=fixture.delivery_id,
-            claim_generation=generation,
-            started_at=boundary,
-        )
+    assert DeliveryAttemptRepository(fixture.session_a).begin_for_claim(
+        DeliveryAttemptId.new(),
+        fixture.delivery_id,
+        "worker-a",
+        "token-a",
+        generation,
+        boundary,
+        boundary,
     )
     fixture.session_a.commit()
 

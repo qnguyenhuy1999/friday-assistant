@@ -94,9 +94,12 @@ def _failure_to_dict(failure: Failure | None) -> dict[str, Any] | None:
     return asdict(failure) if failure is not None else None
 
 
-def _read_back_utc(value: datetime) -> datetime:
+def read_back_utc(value: datetime) -> datetime:
     """Reattach UTC tzinfo SQLite drops on read-back (values are always
     written UTC-normalized, so a naive read-back is safely reinterpreted).
+
+    Public because repositories that validate a fenced write against a
+    persisted timestamp must reinterpret it exactly the way the mappers do.
     """
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
@@ -134,11 +137,11 @@ def task_from_row(row: TaskRow) -> Task:
         _title=row.title,
         _description=row.description,
         _status=TaskStatus(row.status),
-        _created_at=_read_back_utc(row.created_at),
-        _started_at=_read_back_utc(row.started_at) if row.started_at is not None else None,
-        _completed_at=_read_back_utc(row.completed_at) if row.completed_at is not None else None,
-        _failed_at=_read_back_utc(row.failed_at) if row.failed_at is not None else None,
-        _cancelled_at=_read_back_utc(row.cancelled_at) if row.cancelled_at is not None else None,
+        _created_at=read_back_utc(row.created_at),
+        _started_at=read_back_utc(row.started_at) if row.started_at is not None else None,
+        _completed_at=read_back_utc(row.completed_at) if row.completed_at is not None else None,
+        _failed_at=read_back_utc(row.failed_at) if row.failed_at is not None else None,
+        _cancelled_at=read_back_utc(row.cancelled_at) if row.cancelled_at is not None else None,
         _failure=_failure_from_dict(row.failure),
     )
 
@@ -154,8 +157,8 @@ def conversation_to_row(conversation: Conversation) -> ConversationRow:
 def conversation_from_row(row: ConversationRow) -> Conversation:
     return Conversation(
         _id=ConversationId.parse(row.id),
-        _created_at=_read_back_utc(row.created_at),
-        _updated_at=_read_back_utc(row.updated_at),
+        _created_at=read_back_utc(row.created_at),
+        _updated_at=read_back_utc(row.updated_at),
     )
 
 
@@ -183,7 +186,7 @@ def conversation_turn_from_row(row: ConversationTurnRow) -> ConversationTurn:
         recognition_language=row.recognition_language,
         task_id=TaskId.parse(row.task_id),
         run_id=RunId.parse(row.run_id),
-        created_at=_read_back_utc(row.created_at),
+        created_at=read_back_utc(row.created_at),
     )
 
 
@@ -204,7 +207,7 @@ def task_event_from_row(row: TaskEventRow) -> TaskEvent:
         task_id=TaskId.parse(row.task_id),
         type=TaskEventType(row.type),
         sequence=row.sequence,
-        occurred_at=_read_back_utc(row.occurred_at),
+        occurred_at=read_back_utc(row.occurred_at),
         payload=cast(JsonValue, row.payload),
     )
 
@@ -229,9 +232,9 @@ def run_from_row(row: RunRow) -> Run:
         _task_id=TaskId.parse(row.task_id),
         _execution_id=RunId.parse(row.execution_id),
         _status=RunStatus(row.status),
-        _created_at=_read_back_utc(row.created_at),
-        _started_at=_read_back_utc(row.started_at) if row.started_at is not None else None,
-        _ended_at=_read_back_utc(row.ended_at) if row.ended_at is not None else None,
+        _created_at=read_back_utc(row.created_at),
+        _started_at=read_back_utc(row.started_at) if row.started_at is not None else None,
+        _ended_at=read_back_utc(row.ended_at) if row.ended_at is not None else None,
         _failure=_failure_from_dict(row.failure),
         _approval_request_id=ApprovalRequestId.parse(row.approval_request_id)
         if row.approval_request_id
@@ -260,12 +263,12 @@ def schedule_from_row(row: ScheduleRow) -> Schedule:
         _task_id=TaskId.parse(row.task_id),
         _kind=ScheduleKind(row.kind),
         _cron=row.cron,
-        _run_at=_read_back_utc(row.run_at) if row.run_at else None,
+        _run_at=read_back_utc(row.run_at) if row.run_at else None,
         _timezone=row.timezone,
         _status=ScheduleStatus(row.status),
-        _next_fire_at=_read_back_utc(row.next_fire_at) if row.next_fire_at else None,
-        _created_at=_read_back_utc(row.created_at),
-        _updated_at=_read_back_utc(row.updated_at),
+        _next_fire_at=read_back_utc(row.next_fire_at) if row.next_fire_at else None,
+        _created_at=read_back_utc(row.created_at),
+        _updated_at=read_back_utc(row.updated_at),
     )
 
 
@@ -283,8 +286,8 @@ def schedule_fire_from_row(row: ScheduleFireRow) -> ScheduleFire:
     return ScheduleFire(
         id=ScheduleFireId.parse(row.id),
         schedule_id=ScheduleId.parse(row.schedule_id),
-        scheduled_for=_read_back_utc(row.scheduled_for),
-        fired_at=_read_back_utc(row.fired_at),
+        scheduled_for=read_back_utc(row.scheduled_for),
+        fired_at=read_back_utc(row.fired_at),
         run_id=RunId.parse(row.run_id),
     )
 
@@ -311,9 +314,9 @@ def run_step_from_row(row: RunStepRow) -> RunStep:
         _name=row.name,
         _position=row.position,
         _status=RunStepStatus(row.status),
-        _created_at=_read_back_utc(row.created_at),
-        _started_at=_read_back_utc(row.started_at) if row.started_at is not None else None,
-        _ended_at=_read_back_utc(row.ended_at) if row.ended_at is not None else None,
+        _created_at=read_back_utc(row.created_at),
+        _started_at=read_back_utc(row.started_at) if row.started_at is not None else None,
+        _ended_at=read_back_utc(row.ended_at) if row.ended_at is not None else None,
         _failure=_failure_from_dict(row.failure),
         _approval_request_id=ApprovalRequestId.parse(row.approval_request_id)
         if row.approval_request_id
@@ -353,13 +356,13 @@ def approval_from_row(row: ApprovalRequestRow) -> ApprovalRequest:
         _requested_action=row.requested_action,
         _requested_input=cast(JsonValue, row.requested_input),
         _status=ApprovalStatus(row.status),
-        _requested_at=_read_back_utc(row.requested_at),
-        _expires_at=_read_back_utc(row.expires_at) if row.expires_at is not None else None,
-        _resolved_at=_read_back_utc(row.resolved_at) if row.resolved_at is not None else None,
+        _requested_at=read_back_utc(row.requested_at),
+        _expires_at=read_back_utc(row.expires_at) if row.expires_at is not None else None,
+        _resolved_at=read_back_utc(row.resolved_at) if row.resolved_at is not None else None,
         _resolution_note=row.resolution_note,
         _resolver=row.resolver,
         _authorization_fingerprint=row.authorization_fingerprint,
-        _consumed_at=_read_back_utc(row.consumed_at) if row.consumed_at is not None else None,
+        _consumed_at=read_back_utc(row.consumed_at) if row.consumed_at is not None else None,
     )
 
 
@@ -388,7 +391,7 @@ def artifact_from_row(row: ArtifactRow) -> Artifact:
         name=row.name,
         media_type=row.media_type,
         location=row.location,
-        created_at=_read_back_utc(row.created_at),
+        created_at=read_back_utc(row.created_at),
         size=row.size,
         checksum=row.checksum,
         metadata=cast(JsonValue, row.artifact_metadata),
@@ -433,9 +436,9 @@ def tool_invocation_from_row(row: ToolInvocationRow) -> ToolInvocation:
         _tool_name=row.tool_name,
         _requested_input=cast(JsonValue, row.requested_input),
         _status=ToolInvocationStatus(row.status),
-        _requested_at=_read_back_utc(row.requested_at),
-        _started_at=_read_back_utc(row.started_at) if row.started_at is not None else None,
-        _completed_at=_read_back_utc(row.completed_at) if row.completed_at is not None else None,
+        _requested_at=read_back_utc(row.requested_at),
+        _started_at=read_back_utc(row.started_at) if row.started_at is not None else None,
+        _completed_at=read_back_utc(row.completed_at) if row.completed_at is not None else None,
         _output=cast(JsonValue, row.output),
         _output_set=row.output_set,
         _failure=_failure_from_dict(row.failure),
@@ -497,43 +500,39 @@ def outbound_delivery_from_row(row: OutboundDeliveryRow) -> OutboundDelivery:
         body=row.body,
         body_sha256=row.body_sha256,
         status=DeliveryStatus(row.status),
-        available_at=_read_back_utc(row.available_at),
+        available_at=read_back_utc(row.available_at),
         attempt_count=row.attempt_count,
         claim_owner=row.claim_owner,
         claim_token=row.claim_token,
         claim_generation=row.claim_generation,
-        claim_expires_at=(_read_back_utc(row.claim_expires_at) if row.claim_expires_at else None),
+        claim_expires_at=(read_back_utc(row.claim_expires_at) if row.claim_expires_at else None),
         provider_message_id=row.provider_message_id,
         failure_code=row.failure_code,
         failure_message=row.failure_message,
-        created_at=_read_back_utc(row.created_at),
-        updated_at=_read_back_utc(row.updated_at),
-        delivered_at=_read_back_utc(row.delivered_at) if row.delivered_at else None,
+        created_at=read_back_utc(row.created_at),
+        updated_at=read_back_utc(row.updated_at),
+        delivered_at=read_back_utc(row.delivered_at) if row.delivered_at else None,
         dispatch_started_at=(
-            _read_back_utc(row.dispatch_started_at) if row.dispatch_started_at else None
+            read_back_utc(row.dispatch_started_at) if row.dispatch_started_at else None
         ),
     )
 
 
-def delivery_attempt_to_row(attempt: DeliveryAttempt) -> DeliveryAttemptRow:
-    return DeliveryAttemptRow(
-        id=str(attempt.id),
-        delivery_id=str(attempt.delivery_id),
-        claim_generation=attempt.claim_generation,
-        started_at=attempt.started_at,
-        finished_at=attempt.finished_at,
-        outcome=attempt.outcome.value,
-        failure_code=attempt.failure_code,
-    )
-
-
 def delivery_attempt_from_row(row: DeliveryAttemptRow) -> DeliveryAttempt:
+    """Reconstruct a persisted attempt, terminal rows included.
+
+    There is deliberately no `delivery_attempt_to_row`: attempts are only ever
+    written by the repository's claim-fenced SQL, so an ORM insert helper would
+    be exactly the generic bypass this ledger must not have. Reconstruction
+    still runs the full constructor, so a row whose shape violates the domain
+    invariants fails loudly on read instead of being silently trusted.
+    """
     return DeliveryAttempt(
         DeliveryAttemptId.parse(row.id),
         DeliveryId.parse(row.delivery_id),
         row.claim_generation,
-        _read_back_utc(row.started_at),
-        _read_back_utc(row.finished_at) if row.finished_at else None,
+        read_back_utc(row.started_at),
+        read_back_utc(row.finished_at) if row.finished_at else None,
         DeliveryAttemptOutcome(row.outcome),
         row.failure_code,
     )
@@ -580,7 +579,7 @@ def run_event_from_row(row: RunEventRow) -> RunEvent:
         step_id=RunStepId.parse(row.step_id) if row.step_id else None,
         type=RunEventType(row.type),
         sequence=row.sequence,
-        occurred_at=_read_back_utc(row.occurred_at),
+        occurred_at=read_back_utc(row.occurred_at),
         payload=cast(JsonValue, row.payload),
     )
 
@@ -588,14 +587,14 @@ def run_event_from_row(row: RunEventRow) -> RunEvent:
 def run_work_item_from_row(row: RunWorkItemRow) -> RunWorkItemView:
     return RunWorkItemView(
         run_id=RunId.parse(row.run_id),
-        available_at=_read_back_utc(row.available_at),
-        enqueued_at=_read_back_utc(row.enqueued_at),
+        available_at=read_back_utc(row.available_at),
+        enqueued_at=read_back_utc(row.enqueued_at),
         claimed_by=row.claimed_by,
         claim_token=row.claim_token,
         claim_generation=row.claim_generation,
-        claimed_at=_read_back_utc(row.claimed_at) if row.claimed_at is not None else None,
-        heartbeat_at=_read_back_utc(row.heartbeat_at) if row.heartbeat_at is not None else None,
-        lease_expires_at=_read_back_utc(row.lease_expires_at)
+        claimed_at=read_back_utc(row.claimed_at) if row.claimed_at is not None else None,
+        heartbeat_at=read_back_utc(row.heartbeat_at) if row.heartbeat_at is not None else None,
+        lease_expires_at=read_back_utc(row.lease_expires_at)
         if row.lease_expires_at is not None
         else None,
     )
@@ -628,7 +627,7 @@ def index_snapshot_from_row(row: MemoryIndexSnapshotRow) -> IndexSnapshot:
         graph_checksum=row.graph_checksum,
         graphify_version=row.graphify_version,
         state=IndexState(row.status),
-        built_at=_read_back_utc(row.built_at),
+        built_at=read_back_utc(row.built_at),
         build_duration_seconds=0.0,
         file_count=row.file_count,
         source_total_bytes=0,
@@ -662,7 +661,7 @@ def memory_retrieval_record_from_row(
         query_hash=row.query_hash,
         source_snapshot_id=row.source_snapshot_id,
         index_snapshot_id=row.index_snapshot_id,
-        created_at=_read_back_utc(row.created_at),
+        created_at=read_back_utc(row.created_at),
         candidate_count=row.candidate_count,
         selected_count=row.selected_count,
         items=items,

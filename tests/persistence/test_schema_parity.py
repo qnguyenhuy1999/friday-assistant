@@ -41,6 +41,16 @@ def _normalize_default(default: Any) -> str | None:
     return text or None
 
 
+def _normalize_check(sqltext: Any) -> str:
+    """Compare CHECK bodies ignoring only whitespace layout.
+
+    Reflected and metadata SQL differ in line breaks, never in meaning, so
+    collapsing whitespace is enough — and keeping everything else significant is
+    the point: a weakened predicate must fail parity, not be normalized away.
+    """
+    return re.sub(r"\s+", " ", str(sqltext)).strip()
+
+
 def _metadata_snapshot() -> dict[str, dict[str, Any]]:
     tables: dict[str, dict[str, Any]] = {}
     for table in Base.metadata.sorted_tables:
@@ -71,12 +81,18 @@ def _metadata_snapshot() -> dict[str, dict[str, Any]]:
             (index.name, tuple(column.name for column in index.columns), index.unique)
             for index in table.indexes
         )
+        check_constraints = {
+            constraint.name: _normalize_check(constraint.sqltext)
+            for constraint in table.constraints
+            if isinstance(constraint, sa.CheckConstraint)
+        }
         tables[table.name] = {
             "columns": columns,
             "primary_key": tuple(column.name for column in table.primary_key.columns),
             "foreign_keys": foreign_keys,
             "unique_constraints": unique_constraints,
             "indexes": indexes,
+            "check_constraints": check_constraints,
         }
     return tables
 
@@ -119,12 +135,17 @@ def _database_snapshot(engine: Engine) -> dict[str, dict[str, Any]]:
             (index["name"], tuple(index["column_names"]), bool(index["unique"]))
             for index in inspector.get_indexes(table_name)
         )
+        check_constraints = {
+            str(constraint["name"]): _normalize_check(constraint["sqltext"])
+            for constraint in inspector.get_check_constraints(table_name)
+        }
         tables[table_name] = {
             "columns": columns,
             "primary_key": primary_key,
             "foreign_keys": foreign_keys,
             "unique_constraints": unique_constraints,
             "indexes": indexes,
+            "check_constraints": check_constraints,
         }
     return tables
 
@@ -166,8 +187,54 @@ def test_alembic_head_matches_sqlalchemy_metadata(tmp_path: Path) -> None:
             "primary_key": False,
             "default": None,
         }
+
+        # The attempt ledger's CHECK constraints are the durable half of the
+        # DeliveryAttempt invariants, so name them: a silently weakened or
+        # dropped predicate must be reported as this specific loss, not just
+        # appear somewhere inside a large dict diff.
+        attempt_checks = actual["delivery_attempts"]["check_constraints"]
+        assert set(attempt_checks) == {
+            "ck_delivery_attempts_claim_generation",
+            "ck_delivery_attempts_outcome",
+            "ck_delivery_attempts_lifecycle",
+            "ck_delivery_attempts_finished_after_started",
+            "ck_delivery_attempts_failure_code_shape",
+        }
+        assert attempt_checks == expected["delivery_attempts"]["check_constraints"]
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        # A dropped constraint.
+        lambda checks: checks.pop("ck_delivery_attempts_lifecycle"),
+        # A weakened predicate that still parses and still has the same name —
+        # the drift a name-only assertion would miss entirely.
+        lambda checks: checks.update({"ck_delivery_attempts_failure_code_shape": "1 = 1"}),
+        # A relaxed length bound smuggled into an otherwise-identical predicate.
+        lambda checks: checks.update(
+            {
+                "ck_delivery_attempts_failure_code_shape": checks[
+                    "ck_delivery_attempts_failure_code_shape"
+                ].replace("1 AND 128", "1 AND 4096")
+            }
+        ),
+    ],
+    ids=["dropped", "weakened_to_tautology", "relaxed_length_bound"],
+)
+def test_check_constraint_parity_detects_delivery_attempt_drift(
+    mutate: Any,
+) -> None:
+    """Parity must fail on a weakened CHECK, not only on a missing one."""
+    expected = _metadata_snapshot()
+    drifted = deepcopy(expected)
+    mutate(drifted["delivery_attempts"]["check_constraints"])
+
+    assert drifted != expected
+    with pytest.raises(AssertionError):
+        assert drifted == expected
 
 
 def test_schema_snapshot_comparison_detects_representative_drift() -> None:

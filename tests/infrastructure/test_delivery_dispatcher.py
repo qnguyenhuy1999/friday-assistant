@@ -16,6 +16,7 @@ from friday.application.delivery_lifecycle import (
 )
 from friday.application.errors import ClaimLost
 from friday.application.retry_policy import RetryPolicy
+from friday.domain.delivery_attempt import DeliveryAttempt, DeliveryAttemptOutcome
 from friday.domain.identifiers import DeliveryId, RunId, ToolInvocationId
 from friday.domain.outbound_delivery import DeliverySourceKind, DeliveryStatus, OutboundDelivery
 from friday.infrastructure.messaging.config import MessagingRoute
@@ -276,3 +277,137 @@ def test_secret_values_are_not_exposed_by_transport_models_or_routes() -> None:
     assert SECRET_ENDPOINT not in repr(route)
     assert SECRET_ENDPOINT not in repr(request)
     assert SECRET_BODY not in repr(request)
+
+
+def _ledger(uow: FakeUnitOfWork, delivery_id: DeliveryId) -> list[DeliveryAttempt]:
+    return uow.delivery_attempts.list_for_delivery(delivery_id, 10)
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_dispatch", "expected_outcome"),
+    [
+        (
+            TransportResult.delivered(),
+            DispatchResult.DELIVERED,
+            DeliveryAttemptOutcome.DELIVERED,
+        ),
+        (
+            TransportResult.failed("webhook_http_5xx"),
+            DispatchResult.FAILED,
+            DeliveryAttemptOutcome.FAILED,
+        ),
+        (
+            TransportResult.ambiguous("webhook_timeout"),
+            DispatchResult.AMBIGUOUS,
+            DeliveryAttemptOutcome.AMBIGUOUS,
+        ),
+    ],
+    ids=["delivered", "definite_failure", "ambiguous_transport"],
+)
+def test_every_dispatch_outcome_closes_exactly_one_attempt(
+    result: TransportResult,
+    expected_dispatch: DispatchResult,
+    expected_outcome: DeliveryAttemptOutcome,
+) -> None:
+    uow, clock, route = FakeUnitOfWork(), FakeClock(T0), _route()
+    delivery = _delivery(route)
+    uow.deliveries.add(delivery)
+
+    assert (
+        _dispatcher(uow, clock, RecordingTransport(result), (route,)).dispatch_once()
+        is expected_dispatch
+    )
+
+    attempts = _ledger(uow, delivery.id)
+    assert len(attempts) == 1
+    assert attempts[0].outcome is expected_outcome
+    assert attempts[0].started_at == T0
+    assert attempts[0].finished_at is not None
+
+
+@pytest.mark.parametrize(
+    ("routes", "expected"),
+    [
+        ((), ROUTE_MISSING),
+        ((_route(enabled=False),), ROUTE_DISABLED),
+        (
+            (_route(endpoint="https://hook.example.test/changed-secret"),),
+            ROUTE_FINGERPRINT_MISMATCH,
+        ),
+    ],
+    ids=["missing", "disabled", "fingerprint_mismatch"],
+)
+def test_route_authority_drift_creates_no_attempt(
+    routes: tuple[MessagingRoute, ...], expected: str
+) -> None:
+    """No boundary crossed means no audit row, in every drift case."""
+    uow, clock, route, transport = FakeUnitOfWork(), FakeClock(T0), _route(), RecordingTransport()
+    delivery = _delivery(route)
+    uow.deliveries.add(delivery)
+
+    assert _dispatcher(uow, clock, transport, routes).dispatch_once() is DispatchResult.AMBIGUOUS
+
+    stored = uow.deliveries.get(delivery.id)
+    assert stored is not None and stored.dispatch_started_at is None
+    assert stored.failure_code == expected
+    assert transport.requests is None
+    assert _ledger(uow, delivery.id) == []
+
+
+def test_transport_exception_closes_the_attempt_without_leaking_text() -> None:
+    uow, clock, route = FakeUnitOfWork(), FakeClock(T0), _route()
+    delivery = _delivery(route)
+    uow.deliveries.add(delivery)
+    dispatcher = _dispatcher(
+        uow,
+        clock,
+        RecordingTransport(exception=RuntimeError(f"{SECRET_ENDPOINT} {SECRET_BODY}")),
+        (route,),
+    )
+
+    assert dispatcher.dispatch_once() is DispatchResult.AMBIGUOUS
+
+    attempts = _ledger(uow, delivery.id)
+    assert len(attempts) == 1
+    assert attempts[0].outcome is DeliveryAttemptOutcome.AMBIGUOUS
+    assert attempts[0].failure_code == TRANSPORT_EXCEPTION
+    assert SECRET_ENDPOINT not in repr(attempts[0])
+    assert SECRET_BODY not in repr(attempts[0])
+
+
+def test_an_already_dispatched_delivery_gains_no_second_attempt() -> None:
+    """Regression: the ALREADY_DISPATCHED stop must not open a new ledger row."""
+    uow, clock, route, transport = FakeUnitOfWork(), FakeClock(T0), _route(), RecordingTransport()
+    delivery = _delivery(route)
+    uow.deliveries.add(delivery)
+    factory = CountingUnitOfWorkFactory(uow)
+    claim = ClaimNextDelivery(
+        factory,
+        clock,
+        RETRY,
+        worker_id="delivery-worker",
+        lease_duration=LEASE,
+        candidate_limit=10,
+    ).execute()
+    assert claim is not None
+    MarkDeliveryDispatchStarted(factory, clock).execute(claim)
+    assert len(_ledger(uow, delivery.id)) == 1
+
+    class StaticClaim:
+        def execute(self) -> DeliveryClaim:
+            return cast(DeliveryClaim, claim)
+
+    dispatcher = DeliveryDispatcher(
+        StaticClaim(),
+        MarkDeliveryDispatchStarted(factory, clock),
+        PersistDeliveryOutcome(factory, clock),
+        factory,
+        (route,),
+        transport,
+    )
+    assert dispatcher.dispatch_once() is DispatchResult.AMBIGUOUS
+
+    assert transport.requests is None
+    attempts = _ledger(uow, delivery.id)
+    assert len(attempts) == 1
+    assert attempts[0].outcome is DeliveryAttemptOutcome.AMBIGUOUS

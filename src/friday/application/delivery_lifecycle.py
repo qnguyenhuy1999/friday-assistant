@@ -34,7 +34,7 @@ from datetime import datetime, timedelta
 from friday.application.errors import ClaimLost, TransactionFailure
 from friday.application.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from friday.application.retry_policy import RetryPolicy
-from friday.domain.delivery_attempt import DeliveryAttempt, DeliveryAttemptOutcome
+from friday.domain.delivery_attempt import DeliveryAttemptOutcome
 from friday.domain.identifiers import DeliveryAttemptId, DeliveryId
 from friday.domain.outbound_delivery import (
     DeliveryStatus,
@@ -205,9 +205,14 @@ class VerifyDeliveryClaim:
 class BeginDeliveryAttempt:
     """Atomically commit the durable boundary and its in-progress ledger row.
 
-    A future dispatcher must call this immediately before its first external
-    write. Once committed, a crash can no longer be recovered as "nothing was
-    sent" — recovery will park the delivery as AMBIGUOUS instead.
+    A dispatcher must call this immediately before its first external write.
+    Once committed, a crash can no longer be recovered as "nothing was sent" —
+    recovery will park the delivery as AMBIGUOUS instead.
+
+    Both writes are fenced on the same exact claim and land in one short
+    transaction that commits before returning, so the boundary marker and its
+    matching IN_PROGRESS attempt are never observable apart. No network I/O is
+    inside this transaction; the caller sends only after `execute` returns.
     """
 
     def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
@@ -224,14 +229,21 @@ class BeginDeliveryAttempt:
                 claim.claim_generation,
                 now,
             )
-            if marked:
-                uow.delivery_attempts.add(
-                    DeliveryAttempt.begin(
-                        id=DeliveryAttemptId.new(),
-                        delivery_id=claim.delivery_id,
-                        claim_generation=claim.claim_generation,
-                        started_at=now,
-                    )
+            if marked and not uow.delivery_attempts.begin_for_claim(
+                DeliveryAttemptId.new(),
+                claim.delivery_id,
+                claim.worker_id,
+                claim.claim_token,
+                claim.claim_generation,
+                now,
+                now,
+            ):
+                # The marker was written under this exact claim in this very
+                # transaction, so the ledger insert cannot legitimately find
+                # nothing to fence against. Refuse to commit a boundary with no
+                # audit row rather than leave recovery unable to close it.
+                raise TransactionFailure(
+                    "dispatch boundary could not open its delivery attempt ledger row"
                 )
             uow.commit()
         if not marked:

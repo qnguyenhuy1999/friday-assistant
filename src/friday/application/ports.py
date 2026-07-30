@@ -26,12 +26,14 @@ from friday.domain.approval import ApprovalRequest
 from friday.domain.artifact import Artifact
 from friday.domain.conversation import Conversation
 from friday.domain.conversation_turn import ConversationTurn
+from friday.domain.delivery_attempt import DeliveryAttempt, DeliveryAttemptOutcome
 from friday.domain.event import RunEvent, RunEventType
 from friday.domain.identifiers import (
     ApprovalRequestId,
     ArtifactId,
     ConversationId,
     ConversationTurnId,
+    DeliveryAttemptId,
     DeliveryId,
     RunId,
     RunStepId,
@@ -429,6 +431,86 @@ class OutboundDeliveryRepository(Protocol):
         ...
 
 
+#: Hard ceiling on one bounded attempt-history read. The ledger is an audit
+#: trail, so a caller must always name how much of it it wants; there is no
+#: "read everything" mode to accidentally rely on.
+MAX_DELIVERY_ATTEMPT_HISTORY_LIMIT = 1000
+
+
+def validate_delivery_attempt_history_limit(limit: int) -> int:
+    """Return `limit` if it is within `1..MAX_DELIVERY_ATTEMPT_HISTORY_LIMIT`.
+
+    Zero, negative, and over-max values are rejected rather than clamped. A
+    negative LIMIT is *unbounded* in SQLite, so silently passing one through
+    would turn a bounded audit read into a full-table scan; clamping instead of
+    raising would hide the caller's bug.
+    """
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        raise ValueError("delivery attempt history limit must be an integer")
+    if limit < 1 or limit > MAX_DELIVERY_ATTEMPT_HISTORY_LIMIT:
+        raise ValueError(
+            "delivery attempt history limit must be between 1 and "
+            f"{MAX_DELIVERY_ATTEMPT_HISTORY_LIMIT}, got {limit}"
+        )
+    return limit
+
+
+class DeliveryAttemptRepository(Protocol):
+    """Claim-fenced audit ledger. Deliberately has no generic `add`/`save`.
+
+    A durable attempt row means "Friday crossed the external boundary for this
+    exact claim generation". Allowing an unrestricted insert would let any
+    caller manufacture that statement, so the only creation path is
+    `begin_for_claim`, whose fencing is enforced inside the database.
+    """
+
+    def begin_for_claim(
+        self,
+        attempt_id: DeliveryAttemptId,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        started_at: datetime,
+        now: datetime,
+    ) -> bool:
+        """Create one IN_PROGRESS attempt, fenced on an exact active claim.
+
+        Returns false — writing nothing — unless the delivery is SENDING, owned
+        by this exact (worker_id, claim_token, claim_generation), its lease is
+        unexpired, and `dispatch_started_at` already equals `started_at`.
+        """
+        ...
+
+    def get_for_generation(
+        self, delivery_id: DeliveryId, claim_generation: int
+    ) -> DeliveryAttempt | None: ...
+    def list_for_delivery(self, delivery_id: DeliveryId, limit: int) -> list[DeliveryAttempt]:
+        """Newest first by (started_at DESC, id DESC); bounded by `limit`.
+
+        `limit` must satisfy `1 <= limit <= MAX_DELIVERY_ATTEMPT_HISTORY_LIMIT`.
+        """
+        ...
+
+    def complete_for_claim(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+        outcome: DeliveryAttemptOutcome,
+        failure_code: str | None,
+    ) -> bool: ...
+    def close_expired_as_ambiguous(
+        self,
+        delivery_id: DeliveryId,
+        claim_generation: int,
+        now: datetime,
+        failure_code: str,
+    ) -> bool: ...
+
+
 class TaskEventStore(Protocol):
     def append(self, event: TaskEvent) -> None: ...
 
@@ -474,6 +556,8 @@ class UnitOfWork(Protocol):
     def tool_invocations(self) -> ToolInvocationRepository: ...
     @property
     def deliveries(self) -> OutboundDeliveryRepository: ...
+    @property
+    def delivery_attempts(self) -> DeliveryAttemptRepository: ...
     @property
     def events(self) -> RunEventStore: ...
     @property

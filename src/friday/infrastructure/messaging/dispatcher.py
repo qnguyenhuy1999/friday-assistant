@@ -8,8 +8,8 @@ from enum import StrEnum
 from typing import Protocol
 
 from friday.application.delivery_lifecycle import (
+    BeginDeliveryAttempt,
     DeliveryClaim,
-    MarkDeliveryDispatchStarted,
     PersistDeliveryOutcome,
 )
 from friday.application.errors import ClaimLost
@@ -56,7 +56,7 @@ class DeliveryDispatcher:
     """Dispatch one claim at a time with no transaction spanning network I/O."""
 
     claim_next: DeliveryClaimer
-    dispatch_started: MarkDeliveryDispatchStarted
+    dispatch_started: BeginDeliveryAttempt
     persist_outcome: PersistDeliveryOutcome
     uow_factory: UnitOfWorkFactory
     routes: tuple[MessagingRoute, ...]

@@ -320,6 +320,50 @@ class OutboundDeliveryRow(Base):
     dispatch_started_at: Mapped[datetime | None]
 
 
+class DeliveryAttemptRow(Base):
+    __tablename__ = "delivery_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "delivery_id", "claim_generation", name="uq_delivery_attempts_delivery_generation"
+        ),
+        Index("ix_delivery_attempts_delivery_started", "delivery_id", "started_at"),
+        CheckConstraint("claim_generation > 0", name="ck_delivery_attempts_claim_generation"),
+        CheckConstraint(
+            "outcome IN ('in_progress', 'delivered', 'failed', 'ambiguous')",
+            name="ck_delivery_attempts_outcome",
+        ),
+        # The full lifecycle shape, enforced in the database so no write path
+        # (ORM, raw SQL, or a future migration) can persist a combination the
+        # domain's validate_delivery_attempt_shape would have rejected.
+        CheckConstraint(
+            "(outcome = 'in_progress' AND finished_at IS NULL AND failure_code IS NULL) OR "
+            "(outcome = 'delivered' AND finished_at IS NOT NULL AND failure_code IS NULL) OR "
+            "(outcome IN ('failed', 'ambiguous') AND finished_at IS NOT NULL "
+            "AND failure_code IS NOT NULL)",
+            name="ck_delivery_attempts_lifecycle",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR finished_at >= started_at",
+            name="ck_delivery_attempts_finished_after_started",
+        ),
+        # Stable lowercase code, bounded length, never free-form provider text.
+        # GLOB is case-sensitive in SQLite (unlike LIKE), so the negated class
+        # rejects anything outside [a-z0-9_] including uppercase and whitespace.
+        CheckConstraint(
+            "failure_code IS NULL OR (length(failure_code) BETWEEN 1 AND 128 "
+            "AND failure_code NOT GLOB '*[^a-z0-9_]*')",
+            name="ck_delivery_attempts_failure_code_shape",
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    delivery_id: Mapped[str] = mapped_column(ForeignKey("outbound_deliveries.id"), nullable=False)
+    claim_generation: Mapped[int]
+    started_at: Mapped[datetime]
+    finished_at: Mapped[datetime | None]
+    outcome: Mapped[str]
+    failure_code: Mapped[str | None]
+
+
 class RunEventRow(Base):
     __tablename__ = "run_events"
     __table_args__ = (

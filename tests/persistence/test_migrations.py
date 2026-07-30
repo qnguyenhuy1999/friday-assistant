@@ -30,6 +30,7 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "artifacts",
             "tool_invocations",
             "outbound_deliveries",
+            "delivery_attempts",
             "run_events",
             "run_work_items",
             "run_event_sequence_counters",

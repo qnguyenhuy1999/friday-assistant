@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import builtins
+from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import Select, and_, func, or_, select, update
+from sqlalchemy import DateTime, Select, String, and_, exists, func, literal, or_, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from friday.application.memory.models import IndexSnapshot, IndexState, MemoryRetrievalRecord
+from friday.application.ports import validate_delivery_attempt_history_limit
 from friday.domain import (
     ApprovalRequest,
     ApprovalRequestId,
@@ -19,6 +21,9 @@ from friday.domain import (
     ConversationId,
     ConversationTurn,
     ConversationTurnId,
+    DeliveryAttempt,
+    DeliveryAttemptId,
+    DeliveryAttemptOutcome,
     DeliveryId,
     DeliveryStatus,
     OutboundDelivery,
@@ -37,6 +42,7 @@ from friday.domain import (
     ToolInvocation,
     ToolInvocationId,
 )
+from friday.domain.delivery_attempt import validate_delivery_attempt_shape
 from friday.domain.run import TERMINAL_RUN_STATUSES
 from friday.domain.schedule import ScheduleStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
@@ -50,6 +56,7 @@ from friday.infrastructure.persistence.mappers import (
     conversation_to_row,
     conversation_turn_from_row,
     conversation_turn_to_row,
+    delivery_attempt_from_row,
     index_snapshot_from_row,
     index_snapshot_to_row,
     memory_retrieval_item_from_row,
@@ -58,6 +65,7 @@ from friday.infrastructure.persistence.mappers import (
     memory_retrieval_record_to_row,
     outbound_delivery_from_row,
     outbound_delivery_to_row,
+    read_back_utc,
     run_event_from_row,
     run_event_to_row,
     run_from_row,
@@ -80,6 +88,7 @@ from friday.infrastructure.persistence.models import (
     ArtifactRow,
     ConversationRow,
     ConversationTurnRow,
+    DeliveryAttemptRow,
     MemoryIndexSnapshotRow,
     MemoryRetrievalItemRow,
     MemoryRetrievalRecordRow,
@@ -1018,6 +1027,224 @@ class OutboundDeliveryRepository:
         )
         result = cast(CursorResult[Any], self._session.execute(stmt))
         return result.rowcount == 1
+
+
+class DeliveryAttemptRepository:
+    """Claim-fenced audit ledger writes; no generic row insert or save exists.
+
+    Every write here is a single fenced statement whose WHERE clause proves,
+    inside the database, that the caller still owns the exact claim it thinks
+    it owns. There is deliberately no `add()`: a durable attempt row must not
+    be creatable without an active claim that crossed the dispatch boundary,
+    so the only insert path is `begin_for_claim`.
+
+    Terminal writes reuse the domain's `validate_delivery_attempt_shape`
+    before touching SQL, so a direct repository call cannot persist a
+    lifecycle shape `DeliveryAttempt.complete()` would have rejected.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def begin_for_claim(
+        self,
+        attempt_id: DeliveryAttemptId,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        started_at: object,
+        now: object,
+    ) -> bool:
+        """Insert exactly one IN_PROGRESS attempt, fenced on an active claim.
+
+        `INSERT ... SELECT` rather than a plain insert: the row only
+        materializes if the SELECT still finds a SENDING delivery owned by
+        this exact (worker, token, generation) with an unexpired lease whose
+        `dispatch_started_at` already equals this boundary. A stale, expired,
+        unclaimed, or not-yet-dispatched delivery selects zero rows, so no
+        attempt is written and the caller learns it lost the claim.
+
+        `UNIQUE(delivery_id, claim_generation)` remains the race fence: two
+        concurrent begins for one generation cannot both commit.
+        """
+        source = select(
+            literal(str(attempt_id)),
+            OutboundDeliveryRow.id,
+            OutboundDeliveryRow.claim_generation,
+            literal(started_at, DateTime),
+            literal(None, DateTime),
+            literal(DeliveryAttemptOutcome.IN_PROGRESS.value),
+            literal(None, String),
+        ).where(
+            OutboundDeliveryRow.id == str(delivery_id),
+            OutboundDeliveryRow.status == DeliveryStatus.SENDING.value,
+            OutboundDeliveryRow.claim_owner == worker_id,
+            OutboundDeliveryRow.claim_token == claim_token,
+            OutboundDeliveryRow.claim_generation == claim_generation,
+            OutboundDeliveryRow.claim_expires_at.is_not(None),
+            OutboundDeliveryRow.claim_expires_at > now,
+            # The boundary for *this* generation must already be durable.
+            OutboundDeliveryRow.dispatch_started_at.is_not(None),
+            OutboundDeliveryRow.dispatch_started_at == started_at,
+        )
+        stmt = insert(DeliveryAttemptRow).from_select(
+            [
+                "id",
+                "delivery_id",
+                "claim_generation",
+                "started_at",
+                "finished_at",
+                "outcome",
+                "failure_code",
+            ],
+            source,
+        )
+        return cast(CursorResult[Any], self._session.execute(stmt)).rowcount == 1
+
+    def get_for_generation(
+        self, delivery_id: DeliveryId, claim_generation: int
+    ) -> DeliveryAttempt | None:
+        row = self._session.execute(
+            select(DeliveryAttemptRow).where(
+                DeliveryAttemptRow.delivery_id == str(delivery_id),
+                DeliveryAttemptRow.claim_generation == claim_generation,
+            )
+        ).scalar_one_or_none()
+        return delivery_attempt_from_row(row) if row is not None else None
+
+    def list_for_delivery(self, delivery_id: DeliveryId, limit: int) -> list[DeliveryAttempt]:
+        """Read at most `limit` attempts, newest boundary crossing first.
+
+        `limit` is validated rather than passed through: SQLite treats a
+        negative LIMIT as unbounded, so an unchecked value would silently turn
+        a bounded audit read into a full-table scan.
+        """
+        validate_delivery_attempt_history_limit(limit)
+        rows = self._session.execute(
+            select(DeliveryAttemptRow)
+            .where(DeliveryAttemptRow.delivery_id == str(delivery_id))
+            .order_by(DeliveryAttemptRow.started_at.desc(), DeliveryAttemptRow.id.desc())
+            .limit(limit)
+        ).scalars()
+        return [delivery_attempt_from_row(row) for row in rows]
+
+    @staticmethod
+    def _active_delivery_exists(
+        delivery_id: DeliveryId, worker_id: str, claim_token: str, generation: int, now: object
+    ) -> Any:
+        return exists(
+            select(1)
+            .select_from(OutboundDeliveryRow)
+            .where(
+                OutboundDeliveryRow.id == str(delivery_id),
+                OutboundDeliveryRow.status == DeliveryStatus.SENDING.value,
+                OutboundDeliveryRow.claim_owner == worker_id,
+                OutboundDeliveryRow.claim_token == claim_token,
+                OutboundDeliveryRow.claim_generation == generation,
+                OutboundDeliveryRow.claim_expires_at.is_not(None),
+                OutboundDeliveryRow.claim_expires_at > now,
+            )
+        )
+
+    def _validated_terminal_write(
+        self,
+        delivery_id: DeliveryId,
+        claim_generation: int,
+        now: object,
+        outcome: DeliveryAttemptOutcome,
+        failure_code: str | None,
+    ) -> str | None:
+        """Reject a terminal shape the domain would reject, before any SQL.
+
+        The row's own `started_at` is read back so `finished_at >= started_at`
+        is checked against the persisted boundary rather than against a
+        caller's claim about it. When there is no closeable IN_PROGRESS row the
+        ordering rule has nothing to compare against, so it degenerates while
+        every outcome/failure-code rule still applies — the fenced UPDATE that
+        follows matches zero rows regardless.
+        """
+        finished_at = cast(datetime, now)
+        started_at = self._session.execute(
+            select(DeliveryAttemptRow.started_at).where(
+                DeliveryAttemptRow.delivery_id == str(delivery_id),
+                DeliveryAttemptRow.claim_generation == claim_generation,
+                DeliveryAttemptRow.outcome == DeliveryAttemptOutcome.IN_PROGRESS.value,
+            )
+        ).scalar_one_or_none()
+        return validate_delivery_attempt_shape(
+            outcome=outcome,
+            started_at=read_back_utc(started_at) if started_at is not None else finished_at,
+            finished_at=finished_at,
+            failure_code=failure_code,
+        )
+
+    def complete_for_claim(
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: object,
+        outcome: DeliveryAttemptOutcome,
+        failure_code: str | None,
+    ) -> bool:
+        code = self._validated_terminal_write(
+            delivery_id, claim_generation, now, outcome, failure_code
+        )
+        stmt = (
+            update(DeliveryAttemptRow)
+            .where(
+                DeliveryAttemptRow.delivery_id == str(delivery_id),
+                DeliveryAttemptRow.claim_generation == claim_generation,
+                DeliveryAttemptRow.outcome == DeliveryAttemptOutcome.IN_PROGRESS.value,
+                self._active_delivery_exists(
+                    delivery_id, worker_id, claim_token, claim_generation, now
+                ),
+            )
+            .values(outcome=outcome.value, finished_at=now, failure_code=code)
+            .execution_options(synchronize_session=False)
+        )
+        return cast(CursorResult[Any], self._session.execute(stmt)).rowcount == 1
+
+    def close_expired_as_ambiguous(
+        self, delivery_id: DeliveryId, claim_generation: int, now: object, failure_code: str
+    ) -> bool:
+        code = self._validated_terminal_write(
+            delivery_id,
+            claim_generation,
+            now,
+            DeliveryAttemptOutcome.AMBIGUOUS,
+            failure_code,
+        )
+        expired = exists(
+            select(1)
+            .select_from(OutboundDeliveryRow)
+            .where(
+                OutboundDeliveryRow.id == str(delivery_id),
+                OutboundDeliveryRow.status == DeliveryStatus.SENDING.value,
+                OutboundDeliveryRow.claim_generation == claim_generation,
+                OutboundDeliveryRow.claim_expires_at.is_not(None),
+                OutboundDeliveryRow.claim_expires_at <= now,
+                OutboundDeliveryRow.dispatch_started_at.is_not(None),
+            )
+        )
+        stmt = (
+            update(DeliveryAttemptRow)
+            .where(
+                DeliveryAttemptRow.delivery_id == str(delivery_id),
+                DeliveryAttemptRow.claim_generation == claim_generation,
+                DeliveryAttemptRow.outcome == DeliveryAttemptOutcome.IN_PROGRESS.value,
+                expired,
+            )
+            .values(
+                outcome=DeliveryAttemptOutcome.AMBIGUOUS.value,
+                finished_at=now,
+                failure_code=code,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return cast(CursorResult[Any], self._session.execute(stmt)).rowcount == 1
 
 
 class RunEventStore:

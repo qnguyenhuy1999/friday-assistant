@@ -31,10 +31,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from friday.application.errors import ClaimLost
+from friday.application.errors import ClaimLost, TransactionFailure
 from friday.application.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from friday.application.retry_policy import RetryPolicy
-from friday.domain.identifiers import DeliveryId
+from friday.domain.delivery_attempt import DeliveryAttemptOutcome
+from friday.domain.identifiers import DeliveryAttemptId, DeliveryId
 from friday.domain.outbound_delivery import (
     DeliveryStatus,
     OutboundDelivery,
@@ -93,13 +94,23 @@ class RecoverExpiredDeliveryClaims:
     def _recover_one(self, uow: UnitOfWork, delivery: OutboundDelivery, now: datetime) -> bool:
         if delivery.dispatch_started_at is not None:
             # Case B: the side effect may already have happened.
-            return uow.deliveries.mark_expired_post_dispatch_ambiguous(
+            closed = uow.delivery_attempts.close_expired_as_ambiguous(
+                delivery.id, delivery.claim_generation, now, LEASE_EXPIRED_AFTER_DISPATCH
+            )
+            if not closed:
+                raise TransactionFailure(
+                    "delivery attempt history is inconsistent at post-dispatch recovery"
+                )
+            parked = uow.deliveries.mark_expired_post_dispatch_ambiguous(
                 delivery.id,
                 delivery.claim_generation,
                 now,
                 LEASE_EXPIRED_AFTER_DISPATCH,
                 _POST_DISPATCH_AMBIGUOUS_MESSAGE,
             )
+            if not parked:
+                raise TransactionFailure("delivery claim changed during post-dispatch recovery")
+            return True
         # Case A: definitely nothing was sent, so a bounded retry is safe.
         if delivery.attempt_count < self._retry_policy.max_attempts:
             next_attempt = delivery.attempt_count + 1
@@ -191,12 +202,17 @@ class VerifyDeliveryClaim:
         return active
 
 
-class MarkDeliveryDispatchStarted:
-    """Commit the durable external side-effect boundary.
+class BeginDeliveryAttempt:
+    """Atomically commit the durable boundary and its in-progress ledger row.
 
-    A future dispatcher must call this immediately before its first external
-    write. Once committed, a crash can no longer be recovered as "nothing was
-    sent" — recovery will park the delivery as AMBIGUOUS instead.
+    A dispatcher must call this immediately before its first external write.
+    Once committed, a crash can no longer be recovered as "nothing was sent" —
+    recovery will park the delivery as AMBIGUOUS instead.
+
+    Both writes are fenced on the same exact claim and land in one short
+    transaction that commits before returning, so the boundary marker and its
+    matching IN_PROGRESS attempt are never observable apart. No network I/O is
+    inside this transaction; the caller sends only after `execute` returns.
     """
 
     def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
@@ -213,10 +229,32 @@ class MarkDeliveryDispatchStarted:
                 claim.claim_generation,
                 now,
             )
+            if marked and not uow.delivery_attempts.begin_for_claim(
+                DeliveryAttemptId.new(),
+                claim.delivery_id,
+                claim.worker_id,
+                claim.claim_token,
+                claim.claim_generation,
+                now,
+                now,
+            ):
+                # The marker was written under this exact claim in this very
+                # transaction, so the ledger insert cannot legitimately find
+                # nothing to fence against. Refuse to commit a boundary with no
+                # audit row rather than leave recovery unable to close it.
+                raise TransactionFailure(
+                    "dispatch boundary could not open its delivery attempt ledger row"
+                )
             uow.commit()
         if not marked:
             raise ClaimLost(f"dispatch boundary lost claim for delivery {claim.delivery_id}")
         return now
+
+
+# Compatibility name for Step 4 callers. New dispatcher wiring should use the
+# truthful Step 5 operation name: the boundary cannot be started without its
+# matching durable attempt.
+MarkDeliveryDispatchStarted = BeginDeliveryAttempt
 
 
 class PersistDeliveryOutcome:
@@ -277,6 +315,26 @@ class PersistDeliveryOutcome:
             ):
                 raise ClaimLost(f"outcome lost claim for delivery {claim.delivery_id}")
             transition(delivery, now)
+            if delivery.dispatch_started_at is not None:
+                attempt_outcome = {
+                    DeliveryStatus.DELIVERED: DeliveryAttemptOutcome.DELIVERED,
+                    DeliveryStatus.FAILED: DeliveryAttemptOutcome.FAILED,
+                    DeliveryStatus.AMBIGUOUS: DeliveryAttemptOutcome.AMBIGUOUS,
+                }.get(delivery.status)
+                if attempt_outcome is None:
+                    raise TransactionFailure(
+                        "post-dispatch outcome requires a terminal delivery state"
+                    )
+                if not uow.delivery_attempts.complete_for_claim(
+                    claim.delivery_id,
+                    claim.worker_id,
+                    claim.claim_token,
+                    claim.claim_generation,
+                    now,
+                    attempt_outcome,
+                    delivery.failure_code,
+                ):
+                    raise ClaimLost(f"outcome attempt lost claim for delivery {claim.delivery_id}")
             saved = uow.deliveries.save_claimed_lifecycle(
                 delivery, claim.worker_id, claim.claim_token, claim.claim_generation, now
             )

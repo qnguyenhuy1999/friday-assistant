@@ -22,6 +22,7 @@ from friday.application.ports import (
     ArtifactRepository,
     ConversationRepository,
     ConversationTurnRepository,
+    DeliveryAttemptRepository,
     OutboundDeliveryRepository,
     RunEventStore,
     RunRepository,
@@ -33,17 +34,24 @@ from friday.application.ports import (
     TaskEventStore,
     TaskRepository,
     ToolInvocationRepository,
+    validate_delivery_attempt_history_limit,
 )
 from friday.domain.approval import ApprovalRequest, ApprovalStatus
 from friday.domain.artifact import Artifact
 from friday.domain.conversation import Conversation
 from friday.domain.conversation_turn import ConversationTurn
+from friday.domain.delivery_attempt import (
+    DeliveryAttempt,
+    DeliveryAttemptOutcome,
+    validate_delivery_attempt_shape,
+)
 from friday.domain.event import RunEvent, RunEventType
 from friday.domain.identifiers import (
     ApprovalRequestId,
     ArtifactId,
     ConversationId,
     ConversationTurnId,
+    DeliveryAttemptId,
     DeliveryId,
     RunId,
     RunStepId,
@@ -694,6 +702,133 @@ class FakeOutboundDeliveryRepository:
         return delivery
 
 
+class FakeDeliveryAttemptRepository:
+    """In-memory mirror of the claim-fenced ledger, with no generic insert.
+
+    Deliberately exposes the same surface as the real repository — including
+    the absence of `add`/`save` — so a test cannot manufacture a durable
+    attempt the production code path could not have produced.
+    """
+
+    def __init__(self, deliveries: FakeOutboundDeliveryRepository) -> None:
+        self._deliveries = deliveries
+        self.items: dict[tuple[DeliveryId, int], DeliveryAttempt] = {}
+
+    def begin_for_claim(  # noqa: PLR0913 — mirrors the port signature exactly
+        self,
+        attempt_id: DeliveryAttemptId,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        started_at: datetime,
+        now: datetime,
+    ) -> bool:
+        delivery = self._deliveries._active_claim(
+            delivery_id, worker_id, claim_token, claim_generation, now
+        )
+        if (
+            delivery is None
+            or delivery.dispatch_started_at is None
+            or delivery.dispatch_started_at != started_at
+        ):
+            return False
+        key = (delivery_id, claim_generation)
+        if key in self.items:
+            # Mirrors UNIQUE(delivery_id, claim_generation) in SQLite.
+            from friday.application.errors import EntityConflict
+
+            raise EntityConflict("write violated a uniqueness or state constraint")
+        self.items[key] = DeliveryAttempt.begin(
+            id=attempt_id,
+            delivery_id=delivery_id,
+            claim_generation=claim_generation,
+            started_at=started_at,
+        )
+        return True
+
+    def get_for_generation(
+        self, delivery_id: DeliveryId, claim_generation: int
+    ) -> DeliveryAttempt | None:
+        found = self.items.get((delivery_id, claim_generation))
+        return deepcopy(found) if found else None
+
+    def list_for_delivery(self, delivery_id: DeliveryId, limit: int) -> list[DeliveryAttempt]:
+        validate_delivery_attempt_history_limit(limit)
+        return [
+            deepcopy(item)
+            for item in sorted(
+                (a for a in self.items.values() if a.delivery_id == delivery_id),
+                key=lambda a: (a.started_at, str(a.id)),
+                reverse=True,
+            )[:limit]
+        ]
+
+    def _validated_terminal_write(
+        self,
+        delivery_id: DeliveryId,
+        claim_generation: int,
+        now: datetime,
+        outcome: DeliveryAttemptOutcome,
+        failure_code: str | None,
+    ) -> None:
+        """Reject an invalid terminal shape before any state changes.
+
+        Matches the real repository: validation runs first and raises, so an
+        invalid outcome/failure-code pair produces zero durable mutation
+        whether or not a closeable row exists.
+        """
+        attempt = self.items.get((delivery_id, claim_generation))
+        closeable = attempt is not None and attempt.outcome is DeliveryAttemptOutcome.IN_PROGRESS
+        validate_delivery_attempt_shape(
+            outcome=outcome,
+            started_at=attempt.started_at if closeable and attempt is not None else now,
+            finished_at=now,
+            failure_code=failure_code,
+        )
+
+    def complete_for_claim(  # noqa: PLR0913 — mirrors the port signature exactly
+        self,
+        delivery_id: DeliveryId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+        outcome: DeliveryAttemptOutcome,
+        failure_code: str | None,
+    ) -> bool:
+        self._validated_terminal_write(delivery_id, claim_generation, now, outcome, failure_code)
+        if not self._deliveries.is_claim_active(
+            delivery_id, worker_id, claim_token, claim_generation, now
+        ):
+            return False
+        attempt = self.items.get((delivery_id, claim_generation))
+        if attempt is None or attempt.outcome is not DeliveryAttemptOutcome.IN_PROGRESS:
+            return False
+        attempt.complete(outcome=outcome, finished_at=now, failure_code=failure_code)
+        return True
+
+    def close_expired_as_ambiguous(
+        self, delivery_id: DeliveryId, claim_generation: int, now: datetime, failure_code: str
+    ) -> bool:
+        self._validated_terminal_write(
+            delivery_id, claim_generation, now, DeliveryAttemptOutcome.AMBIGUOUS, failure_code
+        )
+        delivery = self._deliveries._expired_claim(delivery_id, claim_generation, now)
+        attempt = self.items.get((delivery_id, claim_generation))
+        if (
+            delivery is None
+            or delivery.dispatch_started_at is None
+            or attempt is None
+            or attempt.outcome is not DeliveryAttemptOutcome.IN_PROGRESS
+        ):
+            return False
+        attempt.complete(
+            outcome=DeliveryAttemptOutcome.AMBIGUOUS, finished_at=now, failure_code=failure_code
+        )
+        return True
+
+
 class FakeApprovalRepository:
     def __init__(self) -> None:
         self.items: dict[ApprovalRequestId, ApprovalRequest] = {}
@@ -1070,6 +1205,7 @@ class FakeUnitOfWork:
         self.step_repo = FakeRunStepRepository()
         self.tool_repo = FakeToolInvocationRepository()
         self.delivery_repo = FakeOutboundDeliveryRepository()
+        self.delivery_attempt_repo = FakeDeliveryAttemptRepository(self.delivery_repo)
         self.approval_repo = FakeApprovalRepository()
         self.artifact_repo = FakeArtifactRepository()
         self.work_queue_repo = FakeRunWorkQueue()
@@ -1122,6 +1258,10 @@ class FakeUnitOfWork:
     @property
     def deliveries(self) -> OutboundDeliveryRepository:
         return self.delivery_repo
+
+    @property
+    def delivery_attempts(self) -> DeliveryAttemptRepository:
+        return self.delivery_attempt_repo
 
     @property
     def events(self) -> RunEventStore:

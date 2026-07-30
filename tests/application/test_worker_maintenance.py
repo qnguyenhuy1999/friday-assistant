@@ -5,11 +5,27 @@ from datetime import datetime, timedelta
 from friday.application.approval_workflow import RequestApproval
 from friday.application.commands import RequestApprovalCommand
 from friday.application.results import ApprovalRequestResult
-from friday.application.worker_maintenance import ExpireDueApprovals, RecoverExpiredLeases
+from friday.application.worker_maintenance import (
+    ExpireDueApprovals,
+    MaterializeScheduledAnswerDeliveries,
+    RecoverExpiredLeases,
+)
 from friday.domain.approval import ApprovalCategory, ApprovalStatus
+from friday.domain.event import RunEvent, RunEventType
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import ApprovalRequestId, RunId, TaskId
+from friday.domain.identifiers import (
+    ApprovalRequestId,
+    RunEventId,
+    RunId,
+    ScheduleFireDeliveryPlanId,
+    ScheduleFireId,
+    ScheduleId,
+    TaskId,
+)
+from friday.domain.json_value import JsonValue
+from friday.domain.outbound_delivery import DeliverySourceKind
 from friday.domain.run import Run, RunStatus
+from friday.domain.schedule_fire_delivery_plan import ScheduleFireDeliveryPlan
 from tests.application.fakes import T0, CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
 
 LEASE = timedelta(minutes=1)
@@ -183,3 +199,103 @@ def test_expire_due_approvals_respects_batch_size() -> None:
         uow.approval_repo.items[result.approval_id].status is ApprovalStatus.EXPIRED
         for result in results
     )
+
+
+def _ready_plan(uow: FakeUnitOfWork, run: Run) -> ScheduleFireId:
+    fire_id = ScheduleFireId.new()
+    uow.schedule_fire_delivery_plan_repo.add(
+        ScheduleFireDeliveryPlan.ready(
+            id=ScheduleFireDeliveryPlanId.new(),
+            schedule_fire_id=fire_id,
+            schedule_id=ScheduleId.new(),
+            execution_id=run.execution_id,
+            route_id="scheduled-route",
+            route_fingerprint="a" * 64,
+            created_at=T0,
+        )
+    )
+    return fire_id
+
+
+def _finished(uow: FakeUnitOfWork, run: Run, payload: JsonValue, sequence: int = 1) -> None:
+    uow.event_store.append(
+        RunEvent(
+            id=RunEventId.new(),
+            run_id=run.id,
+            type=RunEventType.AGENT_FINISHED,
+            sequence=sequence,
+            occurred_at=T0,
+            payload=payload,
+        )
+    )
+
+
+def test_materialize_scheduled_answer_uses_canonical_root_summary_once() -> None:
+    uow = FakeUnitOfWork()
+    run = Run.new(id=RunId.new(), task_id=TaskId.new(), created_at=T0)
+    run.start(T0)
+    run.succeed(NOW)
+    uow.runs.add(run)
+    fire_id = _ready_plan(uow, run)
+    _finished(uow, run, {"summary": "  hello\r\nworld  ", "details": {"secret": "never"}})
+
+    materializer = MaterializeScheduledAnswerDeliveries(
+        CountingUnitOfWorkFactory(uow), FakeClock(NOW), batch_size=10
+    )
+    assert materializer.execute() == 1
+    assert materializer.execute() == 0
+    delivery = next(iter(uow.delivery_repo.items.values()))
+    assert delivery.source_kind is DeliverySourceKind.SCHEDULED_RUN_ANSWER
+    assert delivery.source_run_id == run.id
+    assert delivery.source_schedule_fire_id == fire_id
+    assert delivery.route_id == "scheduled-route"
+    assert delivery.route_fingerprint == "a" * 64
+    assert delivery.body == "hello\nworld"
+    assert "never" not in delivery.body
+
+
+def test_materialize_scheduled_answer_uses_latest_successful_retry_only() -> None:
+    uow = FakeUnitOfWork()
+    root = Run.new(id=RunId.new(), task_id=TaskId.new(), created_at=T0)
+    root.start(T0)
+    root.fail(NOW, Failure("x", "failed", True, FailureCause.RUNTIME))
+    retry = Run.new(id=RunId.new(), task_id=root.task_id, created_at=NOW, execution_id=root.id)
+    retry.start(NOW)
+    retry.succeed(NOW + LEASE)
+    uow.runs.add(root)
+    uow.runs.add(retry)
+    _ready_plan(uow, root)
+    _finished(uow, root, {"summary": "root must not escape"})
+    _finished(uow, retry, {"summary": "retry answer"})
+
+    assert (
+        MaterializeScheduledAnswerDeliveries(
+            CountingUnitOfWorkFactory(uow), FakeClock(NOW), batch_size=10
+        ).execute()
+        == 1
+    )
+    delivery = next(iter(uow.delivery_repo.items.values()))
+    assert delivery.source_run_id == retry.id
+    assert delivery.body == "retry answer"
+
+
+def test_materialize_scheduled_answer_leaves_active_or_invalid_lineages_eligible() -> None:
+    uow = FakeUnitOfWork()
+    root = Run.new(id=RunId.new(), task_id=TaskId.new(), created_at=T0)
+    root.start(T0)
+    root.fail(NOW, Failure("x", "failed", True, FailureCause.RUNTIME))
+    retry = Run.new(id=RunId.new(), task_id=root.task_id, created_at=NOW, execution_id=root.id)
+    uow.runs.add(root)
+    uow.runs.add(retry)
+    _ready_plan(uow, root)
+    materializer = MaterializeScheduledAnswerDeliveries(
+        CountingUnitOfWorkFactory(uow), FakeClock(NOW), batch_size=10
+    )
+    assert materializer.execute() == 0
+    assert not uow.delivery_repo.items
+    retry.start(NOW)
+    retry.succeed(NOW + LEASE)
+    _finished(uow, retry, {"summary": "\x00unsafe"})
+    assert materializer.execute() == 0
+    _finished(uow, retry, {"summary": "safe", "details": {"claim_token": "nope"}}, sequence=2)
+    assert materializer.execute() == 1

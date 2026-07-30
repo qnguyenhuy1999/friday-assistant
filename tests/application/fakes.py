@@ -387,6 +387,11 @@ class FakeScheduleFireDeliveryPlanRepository:
     def get_by_fire(self, schedule_fire_id: ScheduleFireId) -> ScheduleFireDeliveryPlan | None:
         return self.items.get(schedule_fire_id)
 
+    def list_ready_without_delivery(self, limit: int) -> list[ScheduleFireId]:
+        ready = [plan for plan in self.items.values() if plan.status.value == "ready"]
+        ready.sort(key=lambda plan: (plan.created_at, str(plan.id)))
+        return [plan.schedule_fire_id for plan in ready[:limit]]
+
 
 class FakeRunEventStore:
     def __init__(self) -> None:
@@ -577,6 +582,14 @@ class FakeOutboundDeliveryRepository:
     ) -> OutboundDelivery | None:
         for delivery in self.items.values():
             if delivery.source_tool_invocation_id == invocation_id:
+                return deepcopy(delivery)
+        return None
+
+    def get_by_source_schedule_fire_id(
+        self, schedule_fire_id: ScheduleFireId
+    ) -> OutboundDelivery | None:
+        for delivery in self.items.values():
+            if delivery.source_schedule_fire_id == schedule_fire_id:
                 return deepcopy(delivery)
         return None
 

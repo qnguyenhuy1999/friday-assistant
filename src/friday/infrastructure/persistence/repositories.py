@@ -550,6 +550,23 @@ class ScheduleFireDeliveryPlanRepository:
         ).scalar_one_or_none()
         return schedule_fire_delivery_plan_from_row(row) if row is not None else None
 
+    def list_ready_without_delivery(self, limit: int) -> list[ScheduleFireId]:
+        stmt = (
+            select(ScheduleFireDeliveryPlanRow.schedule_fire_id)
+            .outerjoin(
+                OutboundDeliveryRow,
+                OutboundDeliveryRow.source_schedule_fire_id
+                == ScheduleFireDeliveryPlanRow.schedule_fire_id,
+            )
+            .where(
+                ScheduleFireDeliveryPlanRow.status == "ready",
+                OutboundDeliveryRow.id.is_(None),
+            )
+            .order_by(ScheduleFireDeliveryPlanRow.created_at, ScheduleFireDeliveryPlanRow.id)
+            .limit(limit)
+        )
+        return [ScheduleFireId(value) for value in self._session.execute(stmt).scalars()]
+
 
 class RunStepRepository:
     def __init__(self, session: Session) -> None:
@@ -867,6 +884,16 @@ class OutboundDeliveryRepository:
         row = self._session.execute(
             select(OutboundDeliveryRow).where(
                 OutboundDeliveryRow.source_tool_invocation_id == str(invocation_id)
+            )
+        ).scalar_one_or_none()
+        return outbound_delivery_from_row(row) if row is not None else None
+
+    def get_by_source_schedule_fire_id(
+        self, schedule_fire_id: ScheduleFireId
+    ) -> OutboundDelivery | None:
+        row = self._session.execute(
+            select(OutboundDeliveryRow).where(
+                OutboundDeliveryRow.source_schedule_fire_id == str(schedule_fire_id)
             )
         ).scalar_one_or_none()
         return outbound_delivery_from_row(row) if row is not None else None

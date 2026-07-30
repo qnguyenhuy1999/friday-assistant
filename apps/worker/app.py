@@ -62,7 +62,11 @@ from friday.application.worker_coordination import (
     RequeueClaimedRun,
     VerifyRunClaim,
 )
-from friday.application.worker_maintenance import ExpireDueApprovals, RecoverExpiredLeases
+from friday.application.worker_maintenance import (
+    ExpireDueApprovals,
+    MaterializeScheduledAnswerDeliveries,
+    RecoverExpiredLeases,
+)
 from friday.infrastructure.brain.claude_cli import (
     ClaudeCliBrainRuntime,
     ClaudeCliSettings,
@@ -481,6 +485,9 @@ def _compose_worker(
             )
             if settings.scheduler_enabled
             else None
+        ),
+        materialize_scheduled_answers=MaterializeScheduledAnswerDeliveries(
+            uow_factory, clock, batch_size=settings.maintenance_batch_size
         ),
         delivery_worker=DeliveryWorker(
             DeliveryDispatcher(

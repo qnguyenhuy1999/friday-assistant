@@ -9,6 +9,21 @@ from friday.domain.identifiers import RunId, TaskId
 from friday.domain.task_event import TaskEvent
 
 
+def canonical_final_agent_summary(event: RunEvent | None) -> str | None:
+    """The sole canonical final-answer projection shared by result readers.
+
+    This intentionally does not reconstruct the event stream or consult
+    details.  Callers which externalize this value apply their own safety gate.
+    """
+    if event is None or event.type is not RunEventType.AGENT_FINISHED:
+        return None
+    payload = event.payload
+    if not isinstance(payload, dict):
+        return None
+    summary = payload.get("summary")
+    return summary if isinstance(summary, str) else None
+
+
 class ListRunEvents(LifecycleEvents):
     def execute(self, run_id: RunId) -> list[RunEvent]:
         with self._uow_factory() as uow:

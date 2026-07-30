@@ -20,7 +20,11 @@ from friday.application.worker_coordination import (
     RenewRunLease,
     RequeueClaimedRun,
 )
-from friday.application.worker_maintenance import ExpireDueApprovals, RecoverExpiredLeases
+from friday.application.worker_maintenance import (
+    ExpireDueApprovals,
+    MaterializeScheduledAnswerDeliveries,
+    RecoverExpiredLeases,
+)
 from friday.domain.failure import Failure, FailureCause
 
 logger = logging.getLogger(__name__)
@@ -53,6 +57,7 @@ class WorkerLoop:
         refresh_memory_index: MemoryIndexRefresh | None = None,
         memory_index_maintenance_interval_seconds: float | None = None,
         materialize_due_schedules: MaterializeDueSchedules | None = None,
+        materialize_scheduled_answers: MaterializeScheduledAnswerDeliveries | None = None,
         delivery_worker: OutboundDeliveryWorker | None = None,
     ) -> None:
         self._claim_next_run = claim_next_run
@@ -64,6 +69,7 @@ class WorkerLoop:
         self._recover_expired_leases = recover_expired_leases
         self._expire_due_approvals = expire_due_approvals
         self._materialize_due_schedules = materialize_due_schedules
+        self._materialize_scheduled_answers = materialize_scheduled_answers
         self._delivery_worker = delivery_worker
         self._clock = clock
         self._refresh_memory_index = refresh_memory_index
@@ -248,6 +254,15 @@ class WorkerLoop:
             materialized = 0
             lifecycle_log(logger, logging.WARNING, "scheduler.materialization_failed")
         try:
+            scheduled_answers = (
+                self._materialize_scheduled_answers.execute()
+                if self._materialize_scheduled_answers
+                else 0
+            )
+        except Exception:  # noqa: BLE001 - scheduled answers must not stop maintenance
+            scheduled_answers = 0
+            lifecycle_log(logger, logging.WARNING, "scheduler.answer_materialization_failed")
+        try:
             recovered = self._recover_expired_leases.execute()
         except Exception:  # noqa: BLE001 - maintenance jobs are isolated from one another
             recovered = 0
@@ -261,6 +276,12 @@ class WorkerLoop:
             logger, logging.INFO, "worker.expired_leases_recovered", recovered_count=recovered
         )
         lifecycle_log(logger, logging.INFO, "scheduler.materialized", run_count=materialized)
+        lifecycle_log(
+            logger,
+            logging.INFO,
+            "scheduler.answers_materialized",
+            delivery_count=scheduled_answers,
+        )
         lifecycle_log(
             logger,
             logging.INFO,

@@ -849,6 +849,39 @@ class TestCompositeFireBinding:
                 uow.schedule_fire_delivery_plans.add_for_fire(dup, fire)
                 uow.commit()
 
+    def test_suppressed_plan_with_nonnull_route_max_body_chars_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        """A SUPPRESSED plan must have route_max_body_chars = NULL at the DB
+        level, matching the domain's ScheduleFireDeliveryPlan invariant."""
+        _, engine, factory = _migrated_factory(tmp_path)
+        binder = TestCompositeFireBinding()
+        fire_id, sched_id, run_id = binder._seed_schedule_and_run(factory)
+
+        with Session(engine) as session, pytest.raises(IntegrityError) as excinfo:
+            session.execute(
+                text(
+                    "INSERT INTO schedule_fire_delivery_plans "
+                    "(id, schedule_fire_id, schedule_id, execution_id, route_id, "
+                    " route_fingerprint, route_max_body_chars, content_source, status, "
+                    " reason_code, created_at) "
+                    "VALUES (:id, :fid, :sid, :eid, :rid, NULL, :rmax, :cs, 'suppressed', "
+                    " 'schedule_delivery_route_disabled', :ca)"
+                ),
+                {
+                    "id": str(ScheduleFireDeliveryPlanId.new()),
+                    "fid": fire_id,
+                    "sid": sched_id,
+                    "eid": run_id,
+                    "rid": "ops.primary",
+                    "rmax": 1000,
+                    "cs": "final_agent_summary_v1",
+                    "ca": T0,
+                },
+            )
+            session.flush()
+        assert "ck_schedule_fire_delivery_plans_shape" in str(excinfo.value)
+
 
 # ===========================================================================
 # 5. Route rotation — future-fire only

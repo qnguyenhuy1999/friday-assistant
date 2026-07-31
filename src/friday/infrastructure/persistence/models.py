@@ -158,7 +158,8 @@ class ScheduleFireDeliveryPlanRow(Base):
         ),
         CheckConstraint(
             "(status = 'ready' AND route_fingerprint IS NOT NULL AND reason_code IS NULL) OR "  # noqa: E501
-            "(status = 'suppressed' AND route_fingerprint IS NULL AND reason_code IN "
+            "(status = 'suppressed' AND route_fingerprint IS NULL AND route_max_body_chars IS NULL "
+            "AND reason_code IN "
             "('schedule_delivery_route_missing', 'schedule_delivery_route_disabled'))",
             name="ck_schedule_fire_delivery_plans_shape",
         ),

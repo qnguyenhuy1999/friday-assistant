@@ -618,6 +618,36 @@ class TestUnicodeControlRejection:
             engine.dispose()
 
 
+class TestUnpairedSurrogateRejection:
+    def test_unpaired_surrogate_is_durably_rejected_and_does_not_starve_later_valid_candidate(
+        self, tmp_path: Path
+    ) -> None:
+        engine, factory = _factory(tmp_path)
+        try:
+            poisoned_id, poisoned_run_id = _seed_case(
+                factory, summary="pre\ud800post", plan_created_at=T0
+            )
+            valid_id, valid_run_id = _seed_case(
+                factory, summary="answer", plan_created_at=T0 + timedelta(seconds=1)
+            )
+            materializer = MaterializeScheduledAnswerDeliveries(factory, FixedClock(), batch_size=1)
+
+            assert materializer.execute() == 0
+            with factory() as uow:
+                assert uow.deliveries.get_by_source_schedule_fire_id(poisoned_id) is None
+                poisoned_plan = uow.schedule_fire_delivery_plans.get_by_fire(poisoned_id)
+            assert poisoned_plan is not None
+            assert poisoned_plan.content_rejected_run_id == poisoned_run_id
+
+            assert materializer.execute() == 1
+            with factory() as uow:
+                delivery = uow.deliveries.get_by_source_schedule_fire_id(valid_id)
+            assert delivery is not None and delivery.source_run_id == valid_run_id
+            assert _delivery_count(engine) == 1
+        finally:
+            engine.dispose()
+
+
 class TestPerCandidateFailureIsolation:
     def test_unexpected_candidate_failure_does_not_abort_batch_and_logs_only_safe_fields(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

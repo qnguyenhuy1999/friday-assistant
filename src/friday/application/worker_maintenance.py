@@ -40,6 +40,10 @@ class ScheduledAnswerContentGate:
             return None
         if any(unicodedata.category(char) == "Cc" and char != "\n" for char in normalized):
             return None
+        try:
+            normalized.encode("utf-8")
+        except UnicodeEncodeError:
+            return None
         return normalized
 
 

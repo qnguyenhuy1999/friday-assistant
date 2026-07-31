@@ -11,6 +11,19 @@ branch_labels = None
 depends_on = None
 
 
+_OLD_SHAPE = (
+    "(status = 'ready' AND route_fingerprint IS NOT NULL AND reason_code IS NULL) OR "
+    "(status = 'suppressed' AND route_fingerprint IS NULL AND reason_code IN "
+    "('schedule_delivery_route_missing', 'schedule_delivery_route_disabled'))"
+)
+
+_NEW_SHAPE = (
+    "(status = 'ready' AND route_fingerprint IS NOT NULL AND reason_code IS NULL) OR "
+    "(status = 'suppressed' AND route_fingerprint IS NULL AND route_max_body_chars IS NULL "
+    "AND reason_code IN ('schedule_delivery_route_missing', 'schedule_delivery_route_disabled'))"
+)
+
+
 def upgrade() -> None:
     # Historical plans predate the body-bound snapshot.  Leave them NULL: Step
     # 7 must fail closed instead of inferring authority from current config.
@@ -21,10 +34,14 @@ def upgrade() -> None:
             "ck_schedule_fire_delivery_plans_route_max_body_chars",
             "route_max_body_chars IS NULL OR route_max_body_chars > 0",
         )
+        batch.drop_constraint("ck_schedule_fire_delivery_plans_shape", type_="check")
+        batch.create_check_constraint("ck_schedule_fire_delivery_plans_shape", _NEW_SHAPE)
 
 
 def downgrade() -> None:
     with op.batch_alter_table("schedule_fire_delivery_plans") as batch:
+        batch.drop_constraint("ck_schedule_fire_delivery_plans_shape", type_="check")
+        batch.create_check_constraint("ck_schedule_fire_delivery_plans_shape", _OLD_SHAPE)
         batch.drop_constraint("ck_schedule_fire_delivery_plans_route_max_body_chars", type_="check")
         batch.drop_column("content_rejected_run_id")
         batch.drop_column("route_max_body_chars")

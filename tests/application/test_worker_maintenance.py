@@ -388,3 +388,6 @@ class TestScheduledAnswerContentGate:
     def test_accepts_ordinary_unicode_user_facing_text(self) -> None:
         summary = "Café — 東京 中文 مرحبا 🚀"
         assert ScheduledAnswerContentGate().validate(summary, 16000) == summary
+
+    def test_rejects_unpaired_utf16_surrogate(self) -> None:
+        assert ScheduledAnswerContentGate().validate("pre\ud800post", 16000) is None

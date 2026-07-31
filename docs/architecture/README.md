@@ -1,9 +1,9 @@
 # Architecture Overview
 
-This document describes the implemented source organization through Phase 20:
-domain and application logic, SQLite persistence, API and worker delivery,
-Claude runtime, memory, computer use, contracts, SDK, web control plane,
-durable scheduled automations, and the versioned skill registry.
+This document describes the implemented source organization through Phase 20
+Step 1: domain and application logic, SQLite persistence, API and worker
+delivery, Claude runtime, memory, computer use, contracts, SDK, web control
+plane, durable scheduled automations, and the versioned skill registry.
 
 ## Source Tree
 
@@ -104,7 +104,7 @@ reverse.
 
 ## Status
 
-Implemented through **Phase 20 — versioned skill registry**:
+Implemented through **Phase 20 Step 1 — Versioned Skill Registry**:
 
 - **Phase 4–5** — framework-independent domain model, application ports, JSON
   Schema contracts, and the SQLite persistence adapter (see
@@ -136,10 +136,6 @@ Implemented through **Phase 20 — versioned skill registry**:
   revisions and a database-enforced active-revision ownership fence (see
   [phase-20-skills.md](phase-20-skills.md)).
 
-Later phases add a messaging gateway, skill retrieval/self-improvement (Step 2+),
-and multi-agent delegation. None of those are implemented yet.
+Remaining core work adds Phase 20 skill resolution/self-improvement and Phase 21
+multi-agent delegation. None of those are implemented yet.
 The adapter and migration behavior are covered by `tests/persistence`.
-
-Later phases add the FastAPI delivery boundary, leased worker coordination,
-Claude/tool execution, curated memory, computer use, TypeScript SDK and React
-control plane, operational hardening, and durable scheduled automations.

@@ -27,6 +27,8 @@ from friday.domain.identifiers import (
     ScheduleFireDeliveryPlanId,
     ScheduleFireId,
     ScheduleId,
+    SkillId,
+    SkillRevisionId,
     TaskEventId,
     TaskId,
     ToolInvocationId,
@@ -47,6 +49,7 @@ from friday.domain.schedule_fire_delivery_plan import (
     ScheduleFireDeliveryPlan,
     ScheduleFireDeliveryPlanStatus,
 )
+from friday.domain.skill import Skill, SkillRevision, SkillRevisionSourceKind, SkillStatus
 from friday.domain.step import RunStep, RunStepStatus
 from friday.domain.task import Task, TaskStatus
 from friday.domain.task_event import TaskEvent, TaskEventType
@@ -110,6 +113,12 @@ __all__ = [
     "ToolInvocation",
     "ToolInvocationId",
     "ToolInvocationStatus",
+    "Skill",
+    "SkillId",
+    "SkillRevision",
+    "SkillRevisionId",
+    "SkillRevisionSourceKind",
+    "SkillStatus",
     "ensure_json_value",
     "ensure_utc",
 ]

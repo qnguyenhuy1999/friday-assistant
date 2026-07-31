@@ -17,6 +17,43 @@ class Base(DeclarativeBase):
     pass
 
 
+class SkillRow(Base):
+    __tablename__ = "skills"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'disabled', 'archived')", name="ck_skills_status"),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(unique=True)
+    display_name: Mapped[str]
+    description: Mapped[str]
+    status: Mapped[str]
+    active_revision_id: Mapped[str | None]
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+
+
+class SkillRevisionRow(Base):
+    __tablename__ = "skill_revisions"
+    __table_args__ = (
+        UniqueConstraint("skill_id", "version", name="uq_skill_revisions_skill_version"),
+        CheckConstraint("version > 0", name="ck_skill_revisions_version"),
+        CheckConstraint(
+            "length(content_sha256) = 64 AND content_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_skill_revisions_sha256",
+        ),
+        CheckConstraint(
+            "source_kind IN ('operator', 'imported')", name="ck_skill_revisions_source_kind"
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    skill_id: Mapped[str] = mapped_column(ForeignKey("skills.id"), index=True)
+    version: Mapped[int]
+    instructions: Mapped[str]
+    content_sha256: Mapped[str]
+    source_kind: Mapped[str]
+    created_at: Mapped[datetime]
+
+
 class TaskRow(Base):
     __tablename__ = "tasks"
 

@@ -33,6 +33,8 @@ from friday.application.ports import (
     ScheduleFireDeliveryPlanRepository,
     ScheduleFireRepository,
     ScheduleRepository,
+    SkillRepository,
+    SkillRevisionRepository,
     TaskEventStore,
     TaskRepository,
     ToolInvocationRepository,
@@ -59,6 +61,8 @@ from friday.domain.identifiers import (
     RunStepId,
     ScheduleFireId,
     ScheduleId,
+    SkillId,
+    SkillRevisionId,
     TaskId,
     ToolInvocationId,
 )
@@ -68,6 +72,7 @@ from friday.domain.schedule import Schedule, ScheduleStatus
 from friday.domain.schedule_delivery_policy import ScheduleDeliveryPolicy
 from friday.domain.schedule_fire import ScheduleFire
 from friday.domain.schedule_fire_delivery_plan import ScheduleFireDeliveryPlan
+from friday.domain.skill import Skill, SkillRevision
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES, RunStep
 from friday.domain.task import Task
 from friday.domain.task_event import TaskEvent
@@ -1287,9 +1292,50 @@ class FakeMemoryRetrievalRecordRepository:
         self.added.append(record)
 
 
+class FakeSkillRepository:
+    def __init__(self) -> None:
+        self.items: dict[SkillId, Skill] = {}
+
+    def add(self, value: Skill) -> None:
+        self.items[value.id] = value
+
+    def get(self, value: SkillId) -> Skill | None:
+        return self.items.get(value)
+
+    def get_by_key(self, key: str) -> Skill | None:
+        return next((x for x in self.items.values() if x.key == key), None)
+
+    def save(self, value: Skill) -> None:
+        self.items[value.id] = value
+
+    def list(self, limit: int) -> list[Skill]:
+        return list(self.items.values())[:limit]
+
+
+class FakeSkillRevisionRepository:
+    def __init__(self) -> None:
+        self.items: dict[SkillRevisionId, SkillRevision] = {}
+
+    def add(self, value: SkillRevision) -> None:
+        self.items[value.id] = value
+
+    def get(self, value: SkillRevisionId) -> SkillRevision | None:
+        return self.items.get(value)
+
+    def list_for_skill(self, skill_id: SkillId) -> list[SkillRevision]:
+        return sorted(
+            (x for x in self.items.values() if x.skill_id == skill_id), key=lambda x: x.version
+        )
+
+    def next_version(self, skill_id: SkillId) -> int:
+        return len(self.list_for_skill(skill_id)) + 1
+
+
 class FakeUnitOfWork:
     def __init__(self) -> None:
         self.task_repo = FakeTaskRepository()
+        self.skill_repo = FakeSkillRepository()
+        self.skill_revision_repo = FakeSkillRevisionRepository()
         self.run_repo = FakeRunRepository()
         self.schedule_repo = FakeScheduleRepository()
         self.conversation_repo = FakeConversationRepository()
@@ -1318,6 +1364,14 @@ class FakeUnitOfWork:
     @property
     def tasks(self) -> TaskRepository:
         return self.task_repo
+
+    @property
+    def skills(self) -> SkillRepository:
+        return self.skill_repo
+
+    @property
+    def skill_revisions(self) -> SkillRevisionRepository:
+        return self.skill_revision_repo
 
     @property
     def runs(self) -> RunRepository:

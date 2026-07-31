@@ -23,6 +23,7 @@ from apps.api.routes.events import router as events_router
 from apps.api.routes.health import router as health_router
 from apps.api.routes.runs import router as runs_router
 from apps.api.routes.schedules import router as schedules_router
+from apps.api.routes.skills import router as skills_router
 from apps.api.routes.steps import router as steps_router
 from apps.api.routes.tasks import router as tasks_router
 from apps.api.routes.tool_invocations import router as tool_invocations_router
@@ -57,6 +58,7 @@ def create_app(settings: ApiSettings) -> FastAPI:
     register_exception_handlers(app)
     app.include_router(health_router, responses=ERROR_RESPONSES)
     app.include_router(tasks_router, responses=ERROR_RESPONSES)
+    app.include_router(skills_router, responses=ERROR_RESPONSES)
     app.include_router(schedules_router, responses=ERROR_RESPONSES)
     app.include_router(conversations_router, responses=ERROR_RESPONSES)
     app.include_router(runs_router, responses=ERROR_RESPONSES)

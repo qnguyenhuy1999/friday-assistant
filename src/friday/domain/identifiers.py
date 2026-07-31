@@ -99,3 +99,11 @@ class DeliveryId(_Id):
 
 class DeliveryAttemptId(_Id):
     pass
+
+
+class SkillId(_Id):
+    pass
+
+
+class SkillRevisionId(_Id):
+    pass

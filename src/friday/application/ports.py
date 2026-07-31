@@ -39,6 +39,8 @@ from friday.domain.identifiers import (
     RunStepId,
     ScheduleFireId,
     ScheduleId,
+    SkillId,
+    SkillRevisionId,
     TaskId,
     ToolInvocationId,
 )
@@ -48,6 +50,7 @@ from friday.domain.schedule import Schedule
 from friday.domain.schedule_delivery_policy import ScheduleDeliveryPolicy
 from friday.domain.schedule_fire import ScheduleFire
 from friday.domain.schedule_fire_delivery_plan import ScheduleFireDeliveryPlan
+from friday.domain.skill import Skill, SkillRevision
 from friday.domain.step import RunStep
 from friday.domain.task import Task
 from friday.domain.task_event import TaskEvent
@@ -160,6 +163,21 @@ class TaskRepository(Protocol):
     def list_page(
         self, limit: int, after_created_at: datetime | None, after_id: str | None
     ) -> builtins.list[Task]: ...
+
+
+class SkillRepository(Protocol):
+    def add(self, skill: Skill) -> None: ...
+    def get(self, skill_id: SkillId) -> Skill | None: ...
+    def get_by_key(self, key: str) -> Skill | None: ...
+    def save(self, skill: Skill) -> None: ...
+    def list(self, limit: int) -> list[Skill]: ...
+
+
+class SkillRevisionRepository(Protocol):
+    def add(self, revision: SkillRevision) -> None: ...
+    def get(self, revision_id: SkillRevisionId) -> SkillRevision | None: ...
+    def list_for_skill(self, skill_id: SkillId) -> list[SkillRevision]: ...
+    def next_version(self, skill_id: SkillId) -> int: ...
 
 
 class RunRepository(Protocol):
@@ -554,6 +572,10 @@ class UnitOfWork(Protocol):
 
     @property
     def tasks(self) -> TaskRepository: ...
+    @property
+    def skills(self) -> SkillRepository: ...
+    @property
+    def skill_revisions(self) -> SkillRevisionRepository: ...
     @property
     def runs(self) -> RunRepository: ...
     @property

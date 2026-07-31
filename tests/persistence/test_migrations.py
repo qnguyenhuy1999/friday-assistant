@@ -50,9 +50,19 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "schedule_fire_delivery_plans",
             "conversations",
             "conversation_turns",
+            "skills",
+            "skill_revisions",
             "alembic_version",
         }
         assert "execution_id" in {column["name"] for column in inspector.get_columns("runs")}
+        skill_uniques = {
+            tuple(x["column_names"]) for x in inspector.get_unique_constraints("skills")
+        }
+        assert ("key",) in skill_uniques
+        revision_uniques = {
+            tuple(x["column_names"]) for x in inspector.get_unique_constraints("skill_revisions")
+        }
+        assert ("skill_id", "version") in revision_uniques
         checks = {check["name"] for check in inspector.get_check_constraints("schedules")}
         assert {
             "ck_schedules_kind",

@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import text
+from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
 
 from friday.application.errors import EntityConflict
@@ -44,7 +44,7 @@ class Clock:
         return datetime(2026, 1, 2, 3, tzinfo=UTC)
 
 
-def _migrated_engine(tmp_path: Path):
+def _migrated_engine(tmp_path: Path) -> Engine:
     db_path = tmp_path / "skill-registry.db"
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
@@ -52,7 +52,7 @@ def _migrated_engine(tmp_path: Path):
     return create_engine(f"sqlite:///{db_path}")
 
 
-def _insert_skill(engine, skill_id: str, key: str) -> None:
+def _insert_skill(engine: Engine, skill_id: str, key: str) -> None:
     with engine.begin() as connection:
         connection.execute(
             text("INSERT INTO skills VALUES (:id, :key, 'n', '', 'active', NULL, :at, :at)"),
@@ -60,7 +60,7 @@ def _insert_skill(engine, skill_id: str, key: str) -> None:
         )
 
 
-def _insert_revision(engine, revision_id: str, skill_id: str, version: int) -> None:
+def _insert_revision(engine: Engine, revision_id: str, skill_id: str, version: int) -> None:
     with engine.begin() as connection:
         connection.execute(
             text(
@@ -79,7 +79,7 @@ def _insert_revision(engine, revision_id: str, skill_id: str, version: int) -> N
         )
 
 
-def _try_set_active(engine, skill_id: str, revision_id: str) -> None:
+def _try_set_active(engine: Engine, skill_id: str, revision_id: str) -> None:
     with engine.begin() as connection:
         connection.execute(
             text("UPDATE skills SET active_revision_id = :revision_id WHERE id = :skill_id"),

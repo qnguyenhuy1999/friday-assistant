@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
+from typing import cast
 
 from fastapi import FastAPI
 from starlette.testclient import TestClient
@@ -20,7 +21,7 @@ def _create_skill(client: TestClient, *, key: str = "research.roundtrip") -> dic
         json={"key": key, "display_name": "Roundtrip", "description": "desc"},
     )
     assert response.status_code == 201
-    return response.json()
+    return cast(dict[str, object], response.json())
 
 
 def _create_revision(
@@ -31,7 +32,7 @@ def _create_revision(
         json={"instructions": instructions, "source_kind": "operator"},
     )
     assert response.status_code == 201
-    return response.json()
+    return cast(dict[str, object], response.json())
 
 
 def test_skill_revision_create_reload_roundtrip_preserves_content(app: FastAPI) -> None:

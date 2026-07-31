@@ -40,6 +40,10 @@ from friday.domain import (
     ScheduleFireDeliveryPlan,
     ScheduleFireId,
     ScheduleId,
+    Skill,
+    SkillId,
+    SkillRevision,
+    SkillRevisionId,
     Task,
     TaskEvent,
     TaskId,
@@ -84,6 +88,10 @@ from friday.infrastructure.persistence.mappers import (
     schedule_fire_to_row,
     schedule_from_row,
     schedule_to_row,
+    skill_from_row,
+    skill_revision_from_row,
+    skill_revision_to_row,
+    skill_to_row,
     task_event_from_row,
     task_event_to_row,
     task_from_row,
@@ -109,11 +117,75 @@ from friday.infrastructure.persistence.models import (
     ScheduleFireDeliveryPlanRow,
     ScheduleFireRow,
     ScheduleRow,
+    SkillRevisionRow,
+    SkillRow,
     TaskEventRow,
     TaskEventSequenceCounterRow,
     TaskRow,
     ToolInvocationRow,
 )
+
+
+class SkillRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, skill: Skill) -> None:
+        self._session.add(skill_to_row(skill))
+
+    def get(self, skill_id: SkillId) -> Skill | None:
+        row = self._session.get(SkillRow, str(skill_id))
+        return skill_from_row(row) if row else None
+
+    def get_by_key(self, key: str) -> Skill | None:
+        row = self._session.scalar(select(SkillRow).where(SkillRow.key == key))
+        return skill_from_row(row) if row else None
+
+    def save(self, skill: Skill) -> None:
+        self._session.merge(skill_to_row(skill))
+
+    def list(self, limit: int) -> list[Skill]:
+        return [
+            skill_from_row(row)
+            for row in self._session.execute(
+                select(SkillRow).order_by(SkillRow.created_at, SkillRow.id).limit(limit)
+            ).scalars()
+        ]
+
+
+class SkillRevisionRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, revision: SkillRevision) -> None:
+        self._session.add(skill_revision_to_row(revision))
+
+    def get(self, revision_id: SkillRevisionId) -> SkillRevision | None:
+        row = self._session.get(SkillRevisionRow, str(revision_id))
+        return skill_revision_from_row(row) if row else None
+
+    def list_for_skill(self, skill_id: SkillId) -> list[SkillRevision]:
+        return [
+            skill_revision_from_row(row)
+            for row in self._session.execute(
+                select(SkillRevisionRow)
+                .where(SkillRevisionRow.skill_id == str(skill_id))
+                .order_by(SkillRevisionRow.version)
+            ).scalars()
+        ]
+
+    def next_version(self, skill_id: SkillId) -> int:
+        return (
+            int(
+                self._session.scalar(
+                    select(func.coalesce(func.max(SkillRevisionRow.version), 0)).where(
+                        SkillRevisionRow.skill_id == str(skill_id)
+                    )
+                )
+                or 0
+            )
+            + 1
+        )
 
 
 class TaskRepository:

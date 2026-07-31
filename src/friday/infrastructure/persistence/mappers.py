@@ -59,6 +59,8 @@ from friday.domain import (
     ScheduleId,
     ScheduleKind,
     ScheduleStatus,
+    SkillId,
+    SkillRevisionId,
     Task,
     TaskEvent,
     TaskEventId,
@@ -74,6 +76,7 @@ from friday.domain.schedule_fire_delivery_plan import (
     ScheduleFireDeliveryContentSource,
     ScheduleFireDeliveryPlanStatus,
 )
+from friday.domain.skill import Skill, SkillRevision, SkillRevisionSourceKind, SkillStatus
 from friday.domain.tool_provenance import ToolProvenance
 from friday.infrastructure.persistence.models import (
     ApprovalRequestRow,
@@ -93,10 +96,64 @@ from friday.infrastructure.persistence.models import (
     ScheduleFireDeliveryPlanRow,
     ScheduleFireRow,
     ScheduleRow,
+    SkillRevisionRow,
+    SkillRow,
     TaskEventRow,
     TaskRow,
     ToolInvocationRow,
 )
+
+
+def skill_to_row(value: Skill) -> SkillRow:
+    return SkillRow(
+        id=str(value.id),
+        key=value.key,
+        display_name=value.display_name,
+        description=value.description,
+        status=value.status.value,
+        active_revision_id=str(value.active_revision_id) if value.active_revision_id else None,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+    )
+
+
+def skill_from_row(row: SkillRow) -> Skill:
+    return Skill(
+        _id=SkillId.parse(row.id),
+        _key=row.key,
+        _display_name=row.display_name,
+        _description=row.description,
+        _status=SkillStatus(row.status),
+        _active_revision_id=SkillRevisionId.parse(row.active_revision_id)
+        if row.active_revision_id
+        else None,
+        _created_at=read_back_utc(row.created_at),
+        _updated_at=read_back_utc(row.updated_at),
+    )
+
+
+def skill_revision_to_row(value: SkillRevision) -> SkillRevisionRow:
+    return SkillRevisionRow(
+        id=str(value.id),
+        skill_id=str(value.skill_id),
+        version=value.version,
+        instructions=value.instructions,
+        content_sha256=value.content_sha256,
+        source_kind=value.source_kind.value,
+        created_at=value.created_at,
+    )
+
+
+def skill_revision_from_row(row: SkillRevisionRow) -> SkillRevision:
+    return SkillRevision(
+        SkillRevisionId.parse(row.id),
+        SkillId.parse(row.skill_id),
+        row.version,
+        row.instructions,
+        row.content_sha256,
+        SkillRevisionSourceKind(row.source_kind),
+        read_back_utc(row.created_at),
+    )
 
 
 def _failure_to_dict(failure: Failure | None) -> dict[str, Any] | None:

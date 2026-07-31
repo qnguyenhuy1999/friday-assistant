@@ -213,6 +213,27 @@ export interface RunResult {
   details: JsonValue;
 }
 
+export interface Skill {
+  id: string;
+  key: string;
+  display_name: string;
+  description: string;
+  status: "active" | "disabled" | "archived";
+  active_revision_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkillRevision {
+  id: string;
+  skill_id: string;
+  version: number;
+  instructions: string;
+  content_sha256: string;
+  source_kind: "operator" | "imported";
+  created_at: string;
+}
+
 export type TaskStatus = Task["status"];
 export type RunStatus = Run["status"];
 export type RunStepStatus = RunStep["status"];
@@ -223,6 +244,7 @@ export type ArtifactKind = Artifact["kind"];
 export type RunEventType = RunEvent["type"];
 export type TaskEventType = TaskEvent["type"];
 
+export type SkillPage = Page<Skill>;
 export type TaskPage = Page<Task>;
 export type RunPage = Page<Run>;
 export type StepPage = Page<RunStep>;
@@ -854,6 +876,82 @@ const schema = {
         details: {},
       },
     },
+    Skill: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "key",
+        "display_name",
+        "description",
+        "status",
+        "active_revision_id",
+        "created_at",
+        "updated_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        key: {
+          type: "string",
+        },
+        display_name: {
+          type: "string",
+        },
+        description: {
+          type: "string",
+        },
+        status: {
+          enum: ["active", "disabled", "archived"],
+        },
+        active_revision_id: {
+          type: ["string", "null"],
+        },
+        created_at: {
+          type: "string",
+        },
+        updated_at: {
+          type: "string",
+        },
+      },
+    },
+    SkillRevision: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "skill_id",
+        "version",
+        "instructions",
+        "content_sha256",
+        "source_kind",
+        "created_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        skill_id: {
+          type: "string",
+        },
+        version: {
+          type: "integer",
+        },
+        instructions: {
+          type: "string",
+        },
+        content_sha256: {
+          type: "string",
+        },
+        source_kind: {
+          enum: ["operator", "imported"],
+        },
+        created_at: {
+          type: "string",
+        },
+      },
+    },
   },
   responses: {
     task: {
@@ -897,6 +995,34 @@ const schema = {
     },
     conversationTurn: {
       $ref: "#/definitions/ConversationTurn",
+    },
+    skill: {
+      $ref: "#/definitions/Skill",
+    },
+    skillRevision: {
+      $ref: "#/definitions/SkillRevision",
+    },
+    skillRevisions: {
+      type: "array",
+      items: {
+        $ref: "#/definitions/SkillRevision",
+      },
+    },
+    skillPage: {
+      type: "object",
+      additionalProperties: false,
+      required: ["items", "next_cursor"],
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/Skill",
+          },
+        },
+        next_cursor: {
+          type: ["string", "null"],
+        },
+      },
     },
     taskPage: {
       type: "object",
@@ -1121,6 +1247,14 @@ export const validateConversation: WireValidator = (value, path) =>
   assertWire("conversation", value, path);
 export const validateConversationTurn: WireValidator = (value, path) =>
   assertWire("conversationTurn", value, path);
+export const validateSkill: WireValidator = (value, path) =>
+  assertWire("skill", value, path);
+export const validateSkillRevision: WireValidator = (value, path) =>
+  assertWire("skillRevision", value, path);
+export const validateSkillRevisions: WireValidator = (value, path) =>
+  assertWire("skillRevisions", value, path);
+export const validateSkillPage: WireValidator = (value, path) =>
+  assertWire("skillPage", value, path);
 export const validateTaskPage: WireValidator = (value, path) =>
   assertWire("taskPage", value, path);
 export const validateRunPage: WireValidator = (value, path) =>

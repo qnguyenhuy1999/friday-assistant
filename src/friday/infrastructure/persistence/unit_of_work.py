@@ -43,6 +43,8 @@ from friday.infrastructure.persistence.repositories import (
     ScheduleFireDeliveryPlanRepository,
     ScheduleFireRepository,
     ScheduleRepository,
+    SkillRepository,
+    SkillRevisionRepository,
     TaskEventStore,
     TaskRepository,
     ToolInvocationRepository,
@@ -64,6 +66,8 @@ class SqlAlchemyUnitOfWork:
     def __init__(self, session: Session) -> None:
         self._session = session
         self._tasks = TaskRepository(session)
+        self._skills = SkillRepository(session)
+        self._skill_revisions = SkillRevisionRepository(session)
         self._runs = RunRepository(session)
         self._schedules = ScheduleRepository(session)
         self._conversations = ConversationRepository(session)
@@ -86,6 +90,14 @@ class SqlAlchemyUnitOfWork:
     @property
     def tasks(self) -> TaskRepository:
         return self._tasks
+
+    @property
+    def skills(self) -> SkillRepository:
+        return self._skills
+
+    @property
+    def skill_revisions(self) -> SkillRevisionRepository:
+        return self._skill_revisions
 
     @property
     def runs(self) -> RunRepository:

@@ -1,9 +1,9 @@
 # Architecture Overview
 
-This document describes the implemented source organization through Phase 18:
-domain and application logic, SQLite persistence, API and worker delivery,
-Claude runtime, memory, computer use, contracts, SDK, web control plane, and
-durable scheduled automations.
+This document describes the implemented source organization through Phase 20
+Step 1: domain and application logic, SQLite persistence, API and worker
+delivery, Claude runtime, memory, computer use, contracts, SDK, web control
+plane, durable scheduled automations, and the versioned skill registry.
 
 ## Source Tree
 
@@ -104,7 +104,7 @@ reverse.
 
 ## Status
 
-Implemented through **Phase 18 — Friday-owned MCP & External Integrations**:
+Implemented through **Phase 20 Step 1 — Versioned Skill Registry**:
 
 - **Phase 4–5** — framework-independent domain model, application ports, JSON
   Schema contracts, and the SQLite persistence adapter (see
@@ -129,11 +129,13 @@ Implemented through **Phase 18 — Friday-owned MCP & External Integrations**:
 - **Phase 18** — Friday-owned, allow-listed MCP integrations behind the
   existing tool gateway and approval model (see
   [mcp-integrations.md](mcp-integrations.md)).
+- **Phase 19** — durable outbound messaging and scheduled delivery with
+  per-fire authority snapshots (see
+  [messaging-and-scheduled-delivery.md](messaging-and-scheduled-delivery.md)).
+- **Phase 20 Step 1** — versioned skill registry with immutable, hash-checked
+  revisions and a database-enforced active-revision ownership fence (see
+  [phase-20-skills.md](phase-20-skills.md)).
 
-Later phases add a messaging gateway, skills and self-improvement, and
+Remaining core work adds Phase 20 skill resolution/self-improvement and Phase 21
 multi-agent delegation. None of those are implemented yet.
 The adapter and migration behavior are covered by `tests/persistence`.
-
-Later phases add the FastAPI delivery boundary, leased worker coordination,
-Claude/tool execution, curated memory, computer use, TypeScript SDK and React
-control plane, operational hardening, and durable scheduled automations.

@@ -27,5 +27,9 @@ export {
   validateConversation,
   validateConversationTurn,
   validateConversationTurnPage,
+  validateSkill,
+  validateSkillPage,
+  validateSkillRevision,
+  validateSkillRevisions,
   type WireValidator,
 } from "./http.generated";

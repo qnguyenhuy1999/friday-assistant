@@ -32,6 +32,7 @@ from friday.application.put_schedule_delivery_policy import (
 )
 from friday.application.retry_policy import RetryPolicy
 from friday.application.schedule_lifecycle import CreateSchedule, CreateScheduleCommand
+from friday.application.worker_coordination import ApplySucceededOutcome, ClaimNextRun
 from friday.application.worker_maintenance import MaterializeScheduledAnswerDeliveries
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
@@ -290,23 +291,42 @@ def test_sqlite_scheduled_delivery_runs_from_policy_to_existing_dispatcher(tmp_p
             assert plan.route_id == route.route_id
             assert plan.route_fingerprint == route.fingerprint
             assert plan.route_max_body_chars == route.max_body_chars
-            assert run is not None
-            run.start(clock.now())
-            run.succeed(clock.now())
-            uow.runs.save(run)
-            LifecycleEvents.append_run_events(
-                uow,
-                run,
-                T0,
-                [
-                    (
-                        RunEventType.AGENT_FINISHED,
-                        {"summary": "  hello\r\nworld  ", "details": {"secret": "no"}},
-                        None,
-                    )
-                ],
+            # The scheduler leaves a queued Run plus its work item; the worker
+            # path below is what production uses to settle both.
+            assert run is not None and run.status is RunStatus.QUEUED
+            assert uow.work_queue.get(run.id) is not None
+
+        claim = ClaimNextRun(
+            factory,
+            clock,
+            worker_id="worker",
+            lease_duration=timedelta(minutes=1),
+            candidate_limit=10,
+        ).execute()
+        assert claim is not None and claim.run_id == fire.run_id
+
+        with factory() as uow:
+            claimed = uow.runs.get(fire.run_id)
+            assert claimed is not None and claimed.status is RunStatus.RUNNING
+
+        ApplySucceededOutcome(factory, clock).execute(
+            claim.run_id,
+            claim.worker_id,
+            claim.claim_token,
+            claim.claim_generation,
+            final_response=("  hello\r\nworld  ", {"secret": "no"}),
+        )
+
+        with factory() as uow:
+            settled = uow.runs.get(fire.run_id)
+            assert settled is not None and settled.status is RunStatus.SUCCEEDED
+            # Claim fencing removed the scheduler's work item, and the canonical
+            # final answer came from the real outcome path, not the test.
+            assert uow.work_queue.get(fire.run_id) is None
+            assert (
+                uow.events.latest_of_type_for_run(fire.run_id, RunEventType.AGENT_FINISHED)
+                is not None
             )
-            uow.commit()
 
         assert MaterializeScheduledAnswerDeliveries(factory, clock, batch_size=10).execute() == 1
         with factory() as uow:

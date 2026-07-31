@@ -8,7 +8,7 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
 from friday.application.worker_maintenance import MaterializeScheduledAnswerDeliveries
-from friday.domain.identifiers import ScheduleFireId
+from friday.domain.identifiers import RunId, ScheduleFireId
 from friday.infrastructure.persistence.database import create_session_factory
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
 
@@ -243,6 +243,20 @@ def test_0016_preserves_historical_delivery_plans_without_inferred_authority(
                 ),
                 {"at": at},
             )
+            # The READY plan's Run carries a valid canonical final answer, so a
+            # later fail-close cannot be explained by a missing AGENT_FINISHED.
+            # It isolates the invariant under proof: historical authority is
+            # absent, therefore delivery must be refused.
+            connection.execute(
+                text(
+                    "INSERT INTO run_events "
+                    "(id, run_id, step_id, type, sequence, occurred_at, payload) VALUES "
+                    "('00000000-0000-0000-0000-00000000000a', "
+                    "'00000000-0000-0000-0000-000000000002', NULL, 'agent_finished', 1, :at, "
+                    ":payload)"
+                ),
+                {"at": at, "payload": '{"summary": "historical answer"}'},
+            )
     finally:
         engine.dispose()
 
@@ -261,10 +275,13 @@ def test_0016_preserves_historical_delivery_plans_without_inferred_authority(
             ("00000000-0000-0000-0000-000000000009", None, None, "suppressed"),
         ]
         checks = {
-            check["sqltext"]
+            check["name"]: check["sqltext"]
             for check in inspect(engine).get_check_constraints("schedule_fire_delivery_plans")
         }
-        assert any("route_max_body_chars IS NULL" in check for check in checks)
+        # Indexed by name: the substring alone also matches the generic
+        # "route_max_body_chars IS NULL OR route_max_body_chars > 0" check.
+        shape = checks["ck_schedule_fire_delivery_plans_shape"]
+        assert "route_max_body_chars IS NULL" in shape
     finally:
         engine.dispose()
 
@@ -284,7 +301,14 @@ def test_0016_preserves_historical_delivery_plans_without_inferred_authority(
                 ScheduleFireId.parse("00000000-0000-0000-0000-000000000007")
             )
         assert ready is not None and ready.route_max_body_chars is None
-        assert ready.content_rejected_run_id is not None
+        # No delivery intent may exist: the frozen body authority is absent even
+        # though the canonical summary is present and valid.
+        with engine.connect() as connection:
+            assert (
+                connection.execute(text("SELECT count(*) FROM outbound_deliveries")).scalar_one()
+                == 0
+            )
+        assert ready.content_rejected_run_id == RunId.parse("00000000-0000-0000-0000-000000000002")
         assert suppressed is not None and suppressed.status.value == "suppressed"
     finally:
         engine.dispose()

@@ -18,9 +18,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import friday.infrastructure.persistence.unit_of_work as uow_mod
+from friday.application.delivery_lifecycle import (
+    BeginDeliveryAttempt,
+    ClaimNextDelivery,
+    PersistDeliveryOutcome,
+)
 from friday.application.lifecycle_events import LifecycleEvents
+from friday.application.materialize_due_schedule import MaterializeDueSchedules
 from friday.application.ports import UnitOfWorkFactory
+from friday.application.put_schedule_delivery_policy import (
+    PutScheduleDeliveryPolicy,
+    PutScheduleDeliveryPolicyCommand,
+)
+from friday.application.retry_policy import RetryPolicy
 from friday.application.schedule_lifecycle import CreateSchedule, CreateScheduleCommand
+from friday.application.worker_coordination import ApplySucceededOutcome, ClaimNextRun
 from friday.application.worker_maintenance import MaterializeScheduledAnswerDeliveries
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
@@ -40,6 +52,10 @@ from friday.domain.schedule_fire_delivery_plan import (
     ScheduleFireDeliveryPlanStatus,
 )
 from friday.domain.task import Task
+from friday.infrastructure.messaging.config import MessagingRoute
+from friday.infrastructure.messaging.delivery_route_authority import MessagingRouteAuthorityResolver
+from friday.infrastructure.messaging.dispatcher import DeliveryDispatcher, DispatchResult
+from friday.infrastructure.messaging.transport_models import TransportRequest, TransportResult
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.models import OutboundDeliveryRow
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
@@ -217,6 +233,135 @@ def test_sqlite_materializes_retry_answer_from_effective_run(tmp_path: Path) -> 
         with factory() as uow:
             delivery = uow.deliveries.get_by_source_schedule_fire_id(fire_id)
         assert delivery is not None and delivery.source_run_id == retry_id
+    finally:
+        engine.dispose()
+
+
+def test_sqlite_scheduled_delivery_runs_from_policy_to_existing_dispatcher(tmp_path: Path) -> None:
+    """The scheduled path creates one frozen intent and uses the normal dispatcher."""
+    engine, factory = _factory(tmp_path)
+    try:
+
+        class MutableClock:
+            def __init__(self, now: datetime) -> None:
+                self.now_value = now
+
+            def now(self) -> datetime:
+                return self.now_value
+
+        clock = MutableClock(T0)
+        task = Task.new(id=TaskId.new(), title="scheduled", description="", created_at=T0)
+        with factory() as uow:
+            uow.tasks.add(task)
+            uow.commit()
+        schedule = CreateSchedule(factory, clock).execute(
+            CreateScheduleCommand(task.id, ScheduleKind.ONCE, run_at=T0 + timedelta(minutes=1))
+        )
+        route = MessagingRoute(
+            "ops.primary",
+            "Ops",
+            True,
+            "https_webhook",
+            "ops",
+            "ENDPOINT",
+            "https://hook.test/secret",
+            "body",
+            1000,
+            5.0,
+        )
+        PutScheduleDeliveryPolicy(factory, clock).execute(
+            PutScheduleDeliveryPolicyCommand(schedule.id, task.id, route.route_id, True)
+        )
+        clock.now_value = T0 + timedelta(minutes=1)
+        assert (
+            MaterializeDueSchedules(
+                factory,
+                clock,
+                batch_size=10,
+                delivery_route_authority_resolver=MessagingRouteAuthorityResolver((route,)),
+            ).execute()
+            == 1
+        )
+
+        with factory() as uow:
+            fire = uow.schedule_fires.list_for_schedule(schedule.id, limit=1)[0]
+            plan = uow.schedule_fire_delivery_plans.get_by_fire(fire.id)
+            run = uow.runs.get(fire.run_id)
+            assert plan is not None and plan.status is ScheduleFireDeliveryPlanStatus.READY
+            assert plan.route_id == route.route_id
+            assert plan.route_fingerprint == route.fingerprint
+            assert plan.route_max_body_chars == route.max_body_chars
+            # The scheduler leaves a queued Run plus its work item; the worker
+            # path below is what production uses to settle both.
+            assert run is not None and run.status is RunStatus.QUEUED
+            assert uow.work_queue.get(run.id) is not None
+
+        claim = ClaimNextRun(
+            factory,
+            clock,
+            worker_id="worker",
+            lease_duration=timedelta(minutes=1),
+            candidate_limit=10,
+        ).execute()
+        assert claim is not None and claim.run_id == fire.run_id
+
+        with factory() as uow:
+            claimed = uow.runs.get(fire.run_id)
+            assert claimed is not None and claimed.status is RunStatus.RUNNING
+
+        ApplySucceededOutcome(factory, clock).execute(
+            claim.run_id,
+            claim.worker_id,
+            claim.claim_token,
+            claim.claim_generation,
+            final_response=("  hello\r\nworld  ", {"secret": "no"}),
+        )
+
+        with factory() as uow:
+            settled = uow.runs.get(fire.run_id)
+            assert settled is not None and settled.status is RunStatus.SUCCEEDED
+            # Claim fencing removed the scheduler's work item, and the canonical
+            # final answer came from the real outcome path, not the test.
+            assert uow.work_queue.get(fire.run_id) is None
+            assert (
+                uow.events.latest_of_type_for_run(fire.run_id, RunEventType.AGENT_FINISHED)
+                is not None
+            )
+
+        assert MaterializeScheduledAnswerDeliveries(factory, clock, batch_size=10).execute() == 1
+        with factory() as uow:
+            delivery = uow.deliveries.get_by_source_schedule_fire_id(fire.id)
+        assert delivery is not None
+        assert delivery.source_run_id == fire.run_id
+        assert delivery.route_id == route.route_id
+        assert delivery.route_fingerprint == route.fingerprint
+        assert delivery.body == "hello\nworld"
+        assert delivery.body_sha256 == hashlib.sha256(b"hello\nworld").hexdigest()
+
+        seen: list[TransportRequest] = []
+
+        class RecordingTransport:
+            def send(self, request: TransportRequest) -> TransportResult:
+                seen.append(request)
+                return TransportResult.delivered()
+
+        dispatcher = DeliveryDispatcher(
+            ClaimNextDelivery(
+                factory,
+                clock,
+                RetryPolicy(3, timedelta(seconds=1), 2.0, timedelta(seconds=30)),
+                worker_id="worker",
+                lease_duration=timedelta(minutes=1),
+                candidate_limit=10,
+            ),
+            BeginDeliveryAttempt(factory, clock),
+            PersistDeliveryOutcome(factory, clock),
+            factory,
+            (route,),
+            RecordingTransport(),
+        )
+        assert dispatcher.dispatch_once() is DispatchResult.DELIVERED
+        assert len(seen) == 1 and seen[0].body == "hello\nworld"
     finally:
         engine.dispose()
 

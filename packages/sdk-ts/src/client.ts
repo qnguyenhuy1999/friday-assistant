@@ -7,6 +7,7 @@ import { HealthResource } from "./resources/health";
 import { RunsResource } from "./resources/runs";
 import { StepsResource } from "./resources/steps";
 import { SchedulesResource } from "./resources/schedules";
+import { SkillsResource } from "./resources/skills";
 import { TasksResource } from "./resources/tasks";
 import { ToolInvocationsResource } from "./resources/tool-invocations";
 export interface FridayClientOptions {
@@ -25,6 +26,7 @@ export class FridayClient {
   readonly health;
   readonly schedules;
   readonly conversations;
+  readonly skills;
   constructor(options: FridayClientOptions) {
     const http = new FridayHttpClient(options);
     this.tasks = new TasksResource(http);
@@ -37,5 +39,6 @@ export class FridayClient {
     this.health = new HealthResource(http);
     this.schedules = new SchedulesResource(http);
     this.conversations = new ConversationsResource(http);
+    this.skills = new SkillsResource(http);
   }
 }

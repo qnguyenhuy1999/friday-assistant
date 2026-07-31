@@ -63,6 +63,12 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             tuple(x["column_names"]) for x in inspector.get_unique_constraints("skill_revisions")
         }
         assert ("skill_id", "version") in revision_uniques
+        assert ("skill_id", "id") in revision_uniques
+        skill_fks = {
+            (fk["referred_table"], tuple(fk["constrained_columns"]), tuple(fk["referred_columns"]))
+            for fk in inspector.get_foreign_keys("skills")
+        }
+        assert ("skill_revisions", ("id", "active_revision_id"), ("skill_id", "id")) in skill_fks
         checks = {check["name"] for check in inspector.get_check_constraints("schedules")}
         assert {
             "ck_schedules_kind",

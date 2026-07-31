@@ -15,6 +15,8 @@ from friday.domain.identifiers import (
     RunId,
     RunStepId,
     ScheduleId,
+    SkillId,
+    SkillRevisionId,
     TaskId,
     ToolInvocationId,
 )
@@ -76,6 +78,18 @@ class ArtifactNotFound(ApplicationError):
     def __init__(self, artifact_id: ArtifactId) -> None:
         self.artifact_id = artifact_id
         super().__init__(f"Artifact not found: {artifact_id}")
+
+
+class SkillNotFound(ApplicationError):
+    def __init__(self, skill_id: SkillId) -> None:
+        self.skill_id = skill_id
+        super().__init__(f"Skill not found: {skill_id}")
+
+
+class SkillRevisionNotFound(ApplicationError):
+    def __init__(self, revision_id: SkillRevisionId) -> None:
+        self.revision_id = revision_id
+        super().__init__(f"Skill revision not found: {revision_id}")
 
 
 class EntityConflict(ApplicationError):

@@ -1,0 +1,96 @@
+import {
+  validateSkill,
+  validateSkillPage,
+  validateSkillRevision,
+  validateSkillRevisions,
+} from "@friday/contracts";
+import { describe, expect, it, vi } from "vitest";
+import { FridayHttpClient } from "../http";
+import { SkillsResource } from "./skills";
+
+describe("SkillsResource", () => {
+  it("maps create, list, get, revision, and lifecycle operations", async () => {
+    const requestJson = vi.fn().mockResolvedValue({});
+    const skills = new SkillsResource({
+      requestJson,
+    } as unknown as FridayHttpClient);
+
+    await skills.create({
+      key: "research.roundtrip",
+      display_name: "Roundtrip",
+      description: "desc",
+    });
+    await skills.list();
+    await skills.get("s-1");
+    await skills.createRevision("s-1", {
+      instructions: "Repair tests",
+      source_kind: "operator",
+    });
+    await skills.listRevisions("s-1");
+    await skills.activateRevision("s-1", "r-1");
+    await skills.disable("s-1");
+    await skills.archive("s-1");
+
+    expect(requestJson).toHaveBeenNthCalledWith(1, {
+      method: "POST",
+      path: "/v1/skills",
+      body: {
+        key: "research.roundtrip",
+        display_name: "Roundtrip",
+        description: "desc",
+      },
+      validate: validateSkill,
+    });
+    expect(requestJson).toHaveBeenNthCalledWith(2, {
+      method: "GET",
+      path: "/v1/skills",
+      validate: validateSkillPage,
+    });
+    expect(requestJson).toHaveBeenNthCalledWith(3, {
+      method: "GET",
+      path: "/v1/skills/s-1",
+      validate: validateSkill,
+    });
+    expect(requestJson).toHaveBeenNthCalledWith(4, {
+      method: "POST",
+      path: "/v1/skills/s-1/revisions",
+      body: { instructions: "Repair tests", source_kind: "operator" },
+      validate: validateSkillRevision,
+    });
+    expect(requestJson).toHaveBeenNthCalledWith(5, {
+      method: "GET",
+      path: "/v1/skills/s-1/revisions",
+      validate: validateSkillRevisions,
+    });
+    expect(requestJson).toHaveBeenNthCalledWith(6, {
+      method: "POST",
+      path: "/v1/skills/s-1/revisions/r-1/activate",
+      validate: validateSkill,
+    });
+    expect(requestJson).toHaveBeenNthCalledWith(7, {
+      method: "POST",
+      path: "/v1/skills/s-1/disable",
+      validate: validateSkill,
+    });
+    expect(requestJson).toHaveBeenNthCalledWith(8, {
+      method: "POST",
+      path: "/v1/skills/s-1/archive",
+      validate: validateSkill,
+    });
+  });
+
+  it("uses contract validation for skill responses", async () => {
+    const skills = new SkillsResource(
+      new FridayHttpClient({
+        baseUrl: "http://api.test",
+        fetchImpl: vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ id: "missing-required-fields" })),
+          ),
+      }),
+    );
+
+    await expect(skills.get("s-1")).rejects.toThrow(/wire contract/);
+  });
+});

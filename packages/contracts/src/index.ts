@@ -4,6 +4,12 @@ export * from "./wire/pagination";
 export type { CreateTaskBody } from "./wire/task";
 export type { CreateStepBody } from "./wire/step";
 export type {
+  CreateSkillBody,
+  CreateSkillRevisionBody,
+  SkillRevisionSourceKind,
+  SkillStatus,
+} from "./wire/skill";
+export type {
   CancelApprovalBody,
   RequestApprovalBody,
   ResolveApprovalBody,
@@ -37,6 +43,8 @@ export type {
   Schedule,
   ScheduleDeliveryPolicy,
   ScheduleFire,
+  Skill,
+  SkillRevision,
   StartRunResponse,
   Task,
   TaskEvent,
@@ -70,6 +78,10 @@ export {
   validateScheduleFire,
   validateScheduleFirePage,
   validateSchedulePage,
+  validateSkill,
+  validateSkillPage,
+  validateSkillRevision,
+  validateSkillRevisions,
   validateConversation,
   validateConversationTurn,
   validateConversationTurnPage,

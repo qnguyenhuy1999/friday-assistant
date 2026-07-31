@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from friday.application.errors import EntityConflict
+from friday.application.errors import EntityConflict, SkillNotFound, SkillRevisionNotFound
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.domain import (
     Skill,
@@ -10,10 +10,6 @@ from friday.domain import (
     SkillRevisionSourceKind,
     SkillStatus,
 )
-
-
-class SkillNotFound(EntityConflict):
-    pass
 
 
 class CreateSkill:
@@ -44,7 +40,7 @@ class CreateSkillRevision:
         with self._uow_factory() as uow:
             skill = uow.skills.get(skill_id)
             if skill is None:
-                raise SkillNotFound("skill not found")
+                raise SkillNotFound(skill_id)
             if skill.status is SkillStatus.ARCHIVED:
                 raise EntityConflict("archived skill cannot receive revisions")
             revision = SkillRevision.new(
@@ -66,9 +62,12 @@ class ActivateSkillRevision:
 
     def execute(self, *, skill_id: SkillId, revision_id: SkillRevisionId) -> Skill:
         with self._uow_factory() as uow:
-            skill, revision = uow.skills.get(skill_id), uow.skill_revisions.get(revision_id)
-            if skill is None or revision is None:
-                raise SkillNotFound("skill or revision not found")
+            skill = uow.skills.get(skill_id)
+            if skill is None:
+                raise SkillNotFound(skill_id)
+            revision = uow.skill_revisions.get(revision_id)
+            if revision is None:
+                raise SkillRevisionNotFound(revision_id)
             skill.activate(revision, self._clock.now())
             uow.skills.save(skill)
             uow.commit()
@@ -83,7 +82,7 @@ class _SkillLifecycle:
         with self._uow_factory() as uow:
             skill = uow.skills.get(skill_id)
             if skill is None:
-                raise SkillNotFound("skill not found")
+                raise SkillNotFound(skill_id)
             getattr(skill, action)(self._clock.now())
             uow.skills.save(skill)
             uow.commit()
@@ -98,3 +97,21 @@ class DisableSkill(_SkillLifecycle):
 class ArchiveSkill(_SkillLifecycle):
     def execute(self, skill_id: SkillId) -> Skill:
         return self._change(skill_id, "archive")
+
+
+class GetSkill:
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def execute(self, skill_id: SkillId) -> Skill:
+        with self._uow_factory() as uow:
+            skill = uow.skills.get(skill_id)
+            if skill is None:
+                raise SkillNotFound(skill_id)
+            return skill
+
+    def list_revisions(self, skill_id: SkillId) -> list[SkillRevision]:
+        with self._uow_factory() as uow:
+            if uow.skills.get(skill_id) is None:
+                raise SkillNotFound(skill_id)
+            return uow.skill_revisions.list_for_skill(skill_id)

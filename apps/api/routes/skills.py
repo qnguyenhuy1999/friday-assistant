@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 
 from apps.api.dependencies import get_clock, get_uow_factory
 from apps.api.schemas.skills import (
@@ -20,6 +20,7 @@ from friday.application.skill_registry import (
     CreateSkill,
     CreateSkillRevision,
     DisableSkill,
+    GetSkill,
 )
 from friday.domain import Skill, SkillId, SkillRevision, SkillRevisionId, SkillRevisionSourceKind
 
@@ -46,6 +47,7 @@ def _revision(x: SkillRevision) -> SkillRevisionResponse:
         id=str(x.id),
         skill_id=str(x.skill_id),
         version=x.version,
+        instructions=x.instructions,
         content_sha256=x.content_sha256,
         source_kind=x.source_kind.value,
         created_at=x.created_at,
@@ -74,11 +76,7 @@ def list_skills(uow: Uow) -> SkillPageResponse:
 
 @router.get("/{skill_id}", response_model=SkillResponse, operation_id="getSkill")
 def get_skill(skill_id: UUID, uow: Uow) -> SkillResponse:
-    with uow() as tx:
-        value = tx.skills.get(SkillId.parse(str(skill_id)))
-    if value is None:
-        raise HTTPException(404, "skill not found")
-    return _skill(value)
+    return _skill(GetSkill(uow).execute(SkillId.parse(str(skill_id))))
 
 
 @router.post(
@@ -105,10 +103,7 @@ def create_revision(
     operation_id="listSkillRevisions",
 )
 def list_revisions(skill_id: UUID, uow: Uow) -> list[SkillRevisionResponse]:
-    with uow() as tx:
-        return [
-            _revision(x) for x in tx.skill_revisions.list_for_skill(SkillId.parse(str(skill_id)))
-        ]
+    return [_revision(x) for x in GetSkill(uow).list_revisions(SkillId.parse(str(skill_id)))]
 
 
 @router.post(

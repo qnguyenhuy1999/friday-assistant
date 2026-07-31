@@ -26,6 +26,8 @@ from friday.application.errors import (
     RunNotFound,
     RunStepNotFound,
     ScheduleNotFound,
+    SkillNotFound,
+    SkillRevisionNotFound,
     TaskNotFound,
     ToolInvocationNotFound,
     TransactionFailure,
@@ -61,6 +63,8 @@ _NOT_FOUND_TYPES: dict[type[ApplicationError], str] = {
     ApprovalNotFound: "approval_not_found",
     ToolInvocationNotFound: "tool_invocation_not_found",
     ArtifactNotFound: "artifact_not_found",
+    SkillNotFound: "skill_not_found",
+    SkillRevisionNotFound: "skill_revision_not_found",
 }
 
 _CONFLICT_TYPES: dict[type[ApplicationError], str] = {

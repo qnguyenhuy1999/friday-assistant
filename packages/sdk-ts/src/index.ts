@@ -32,3 +32,4 @@ export type {
   ListScheduleFiresParams,
   ListSchedulesParams,
 } from "./resources/schedules";
+export { SkillsResource } from "./resources/skills";

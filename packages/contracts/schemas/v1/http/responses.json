@@ -403,6 +403,52 @@
         "summary": { "type": ["string", "null"] },
         "details": {}
       }
+    },
+    "Skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "key",
+        "display_name",
+        "description",
+        "status",
+        "active_revision_id",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "key": { "type": "string" },
+        "display_name": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "enum": ["active", "disabled", "archived"] },
+        "active_revision_id": { "type": ["string", "null"] },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      }
+    },
+    "SkillRevision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "skill_id",
+        "version",
+        "instructions",
+        "content_sha256",
+        "source_kind",
+        "created_at"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "skill_id": { "type": "string" },
+        "version": { "type": "integer" },
+        "instructions": { "type": "string" },
+        "content_sha256": { "type": "string" },
+        "source_kind": { "enum": ["operator", "imported"] },
+        "created_at": { "type": "string" }
+      }
     }
   },
   "responses": {
@@ -422,6 +468,24 @@
     },
     "conversation": { "$ref": "#/definitions/Conversation" },
     "conversationTurn": { "$ref": "#/definitions/ConversationTurn" },
+    "skill": { "$ref": "#/definitions/Skill" },
+    "skillRevision": { "$ref": "#/definitions/SkillRevision" },
+    "skillRevisions": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/SkillRevision" }
+    },
+    "skillPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Skill" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
     "taskPage": {
       "type": "object",
       "additionalProperties": false,

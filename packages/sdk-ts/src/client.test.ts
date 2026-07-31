@@ -6,6 +6,7 @@ import {
   EventsResource,
   HealthResource,
   RunsResource,
+  SkillsResource,
   StepsResource,
   TasksResource,
   ToolInvocationsResource,
@@ -22,6 +23,7 @@ describe("FridayClient", () => {
     expect(friday.artifacts).toBeInstanceOf(ArtifactsResource);
     expect(friday.events).toBeInstanceOf(EventsResource);
     expect(friday.health).toBeInstanceOf(HealthResource);
+    expect(friday.skills).toBeInstanceOf(SkillsResource);
   });
 
   it("routes every resource through the one configured base URL", async () => {

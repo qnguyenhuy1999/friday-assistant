@@ -32,6 +32,7 @@ class SkillRevisionResponse(BaseModel):
     id: str
     skill_id: str
     version: int
+    instructions: str
     content_sha256: str
     source_kind: str
     created_at: datetime
@@ -39,3 +40,4 @@ class SkillRevisionResponse(BaseModel):
 
 class SkillPageResponse(BaseModel):
     items: list[SkillResponse]
+    next_cursor: str | None = None

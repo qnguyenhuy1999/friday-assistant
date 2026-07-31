@@ -4,14 +4,16 @@ import hashlib
 
 import pytest
 
-from friday.application.errors import EntityConflict
+from friday.application.errors import EntityConflict, SkillNotFound, SkillRevisionNotFound
 from friday.application.skill_registry import (
     ActivateSkillRevision,
     ArchiveSkill,
     CreateSkill,
     CreateSkillRevision,
+    GetSkill,
 )
 from friday.domain.errors import DomainValidationError
+from friday.domain.identifiers import SkillId, SkillRevisionId
 from friday.domain.skill import SkillRevisionSourceKind, SkillStatus
 from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
 
@@ -83,3 +85,25 @@ def test_instruction_content_is_validated(content: str) -> None:
         .version
         == 1
     )
+
+
+def test_missing_skill_and_revision_raise_not_found_errors() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    with pytest.raises(SkillNotFound):
+        CreateSkillRevision(factory, clock).execute(
+            skill_id=SkillId.new(),
+            instructions="Nope",
+            source_kind=SkillRevisionSourceKind.OPERATOR,
+        )
+    with pytest.raises(SkillNotFound):
+        GetSkill(factory).execute(SkillId.new())
+    skill = CreateSkill(factory, clock).execute(
+        key="research.notfound", display_name="N", description=""
+    )
+    with pytest.raises(SkillNotFound):
+        GetSkill(factory).list_revisions(SkillId.new())
+    with pytest.raises(SkillRevisionNotFound):
+        ActivateSkillRevision(factory, clock).execute(
+            skill_id=skill.id, revision_id=SkillRevisionId.new()
+        )

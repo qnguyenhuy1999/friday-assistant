@@ -27,11 +27,16 @@ class DeliveryRouteAuthority:
     route_id: str
     enabled: bool
     fingerprint: str
+    max_body_chars: int
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "route_id", validate_route_id(self.route_id))
-        if not isinstance(self.enabled, bool) or not re.fullmatch(
-            r"[0-9a-f]{64}", self.fingerprint
+        if (
+            not isinstance(self.enabled, bool)
+            or not re.fullmatch(r"[0-9a-f]{64}", self.fingerprint)
+            or not isinstance(self.max_body_chars, int)
+            or isinstance(self.max_body_chars, bool)
+            or self.max_body_chars <= 0
         ):
             raise DomainValidationError("delivery route authority is invalid")
 

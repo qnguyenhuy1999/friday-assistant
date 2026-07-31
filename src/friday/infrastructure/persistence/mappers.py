@@ -331,9 +331,13 @@ def schedule_fire_delivery_plan_to_row(
         execution_id=str(plan.execution_id),
         route_id=plan.route_id,
         route_fingerprint=plan.route_fingerprint,
+        route_max_body_chars=plan.route_max_body_chars,
         content_source=plan.content_source.value,
         status=plan.status.value,
         reason_code=plan.reason_code,
+        content_rejected_run_id=(
+            str(plan.content_rejected_run_id) if plan.content_rejected_run_id is not None else None
+        ),
         created_at=plan.created_at,
     )
 
@@ -348,9 +352,15 @@ def schedule_fire_delivery_plan_from_row(
         RunId.parse(row.execution_id),
         row.route_id,
         row.route_fingerprint,
+        row.route_max_body_chars,
         ScheduleFireDeliveryContentSource(row.content_source),
         ScheduleFireDeliveryPlanStatus(row.status),
         row.reason_code,
+        (
+            RunId.parse(row.content_rejected_run_id)
+            if row.content_rejected_run_id is not None
+            else None
+        ),
         read_back_utc(row.created_at),
     )
 

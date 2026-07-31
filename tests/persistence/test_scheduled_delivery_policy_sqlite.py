@@ -65,15 +65,19 @@ class Resolver:
         route_id: str = "ops.primary",
         enabled: bool = True,
         fingerprint: str = "a" * 64,
+        max_body_chars: int = 16_000,
     ) -> None:
         self._route_id = route_id
         self._enabled = enabled
         self._fingerprint = fingerprint
+        self._max_body_chars = max_body_chars
 
     def resolve(self, route_id: str) -> DeliveryRouteAuthority | None:
         if route_id != self._route_id:
             return None
-        return DeliveryRouteAuthority(self._route_id, self._enabled, self._fingerprint)
+        return DeliveryRouteAuthority(
+            self._route_id, self._enabled, self._fingerprint, self._max_body_chars
+        )
 
 
 class MissingResolver:
@@ -838,11 +842,45 @@ class TestCompositeFireBinding:
                 execution_id=fire.run_id,
                 route_id="ops.primary",
                 route_fingerprint="b" * 64,
+                route_max_body_chars=16000,
                 created_at=T0,
             )
             with pytest.raises(EntityConflict):
                 uow.schedule_fire_delivery_plans.add_for_fire(dup, fire)
                 uow.commit()
+
+    def test_suppressed_plan_with_nonnull_route_max_body_chars_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        """A SUPPRESSED plan must have route_max_body_chars = NULL at the DB
+        level, matching the domain's ScheduleFireDeliveryPlan invariant."""
+        _, engine, factory = _migrated_factory(tmp_path)
+        binder = TestCompositeFireBinding()
+        fire_id, sched_id, run_id = binder._seed_schedule_and_run(factory)
+
+        with Session(engine) as session, pytest.raises(IntegrityError) as excinfo:
+            session.execute(
+                text(
+                    "INSERT INTO schedule_fire_delivery_plans "
+                    "(id, schedule_fire_id, schedule_id, execution_id, route_id, "
+                    " route_fingerprint, route_max_body_chars, content_source, status, "
+                    " reason_code, created_at) "
+                    "VALUES (:id, :fid, :sid, :eid, :rid, NULL, :rmax, :cs, 'suppressed', "
+                    " 'schedule_delivery_route_disabled', :ca)"
+                ),
+                {
+                    "id": str(ScheduleFireDeliveryPlanId.new()),
+                    "fid": fire_id,
+                    "sid": sched_id,
+                    "eid": run_id,
+                    "rid": "ops.primary",
+                    "rmax": 1000,
+                    "cs": "final_agent_summary_v1",
+                    "ca": T0,
+                },
+            )
+            session.flush()
+        assert "ck_schedule_fire_delivery_plans_shape" in str(excinfo.value)
 
 
 # ===========================================================================

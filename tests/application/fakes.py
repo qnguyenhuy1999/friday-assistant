@@ -363,8 +363,10 @@ class FakeScheduleDeliveryPolicyRepository:
 
 
 class FakeScheduleFireDeliveryPlanRepository:
-    def __init__(self) -> None:
+    def __init__(self, runs: FakeRunRepository, deliveries: FakeOutboundDeliveryRepository) -> None:
         self.items: dict[ScheduleFireId, ScheduleFireDeliveryPlan] = {}
+        self._runs = runs
+        self._deliveries = deliveries
 
     def add(self, plan: ScheduleFireDeliveryPlan) -> None:
         if plan.schedule_fire_id in self.items:
@@ -386,6 +388,33 @@ class FakeScheduleFireDeliveryPlanRepository:
 
     def get_by_fire(self, schedule_fire_id: ScheduleFireId) -> ScheduleFireDeliveryPlan | None:
         return self.items.get(schedule_fire_id)
+
+    def list_ready_without_delivery(self, limit: int) -> list[ScheduleFireId]:
+        ready = []
+        delivered = {
+            delivery.source_schedule_fire_id
+            for delivery in self._deliveries.items.values()
+            if delivery.source_schedule_fire_id is not None
+        }
+        for plan in self.items.values():
+            run = self._runs.get_latest_for_execution(plan.execution_id)
+            if (
+                plan.status.value == "ready"
+                and plan.schedule_fire_id not in delivered
+                and run is not None
+                and run.status.value == "succeeded"
+                and plan.content_rejected_run_id != run.id
+            ):
+                ready.append(plan)
+        ready.sort(key=lambda plan: (plan.created_at, str(plan.id)))
+        return [plan.schedule_fire_id for plan in ready[:limit]]
+
+    def mark_content_rejected(self, schedule_fire_id: ScheduleFireId, run_id: RunId) -> bool:
+        plan = self.items.get(schedule_fire_id)
+        if plan is None or plan.status.value != "ready":
+            return False
+        self.items[schedule_fire_id] = replace(plan, content_rejected_run_id=run_id)
+        return True
 
 
 class FakeRunEventStore:
@@ -577,6 +606,14 @@ class FakeOutboundDeliveryRepository:
     ) -> OutboundDelivery | None:
         for delivery in self.items.values():
             if delivery.source_tool_invocation_id == invocation_id:
+                return deepcopy(delivery)
+        return None
+
+    def get_by_source_schedule_fire_id(
+        self, schedule_fire_id: ScheduleFireId
+    ) -> OutboundDelivery | None:
+        for delivery in self.items.values():
+            if delivery.source_schedule_fire_id == schedule_fire_id:
                 return deepcopy(delivery)
         return None
 
@@ -1260,12 +1297,14 @@ class FakeUnitOfWork:
         self.schedule_fire_repo = FakeScheduleFireRepository()
         self.schedule_fire_repo._runs = self.run_repo
         self.schedule_delivery_policy_repo = FakeScheduleDeliveryPolicyRepository()
-        self.schedule_fire_delivery_plan_repo = FakeScheduleFireDeliveryPlanRepository()
         self.event_store = FakeRunEventStore()
         self.task_event_store = FakeTaskEventStore()
         self.step_repo = FakeRunStepRepository()
         self.tool_repo = FakeToolInvocationRepository()
         self.delivery_repo = FakeOutboundDeliveryRepository()
+        self.schedule_fire_delivery_plan_repo = FakeScheduleFireDeliveryPlanRepository(
+            self.run_repo, self.delivery_repo
+        )
         self.delivery_attempt_repo = FakeDeliveryAttemptRepository(self.delivery_repo)
         self.approval_repo = FakeApprovalRepository()
         self.artifact_repo = FakeArtifactRepository()

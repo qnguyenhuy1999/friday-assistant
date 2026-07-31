@@ -133,6 +133,7 @@ class MaterializeDueSchedules:
                             execution_id=result.run_id,
                             route_id=policy.route_id,
                             route_fingerprint=authority.fingerprint,
+                            route_max_body_chars=authority.max_body_chars,
                             created_at=now,
                         )
                     uow.schedule_fire_delivery_plans.add_for_fire(plan, fire)

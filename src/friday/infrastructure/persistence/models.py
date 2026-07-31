@@ -153,8 +153,13 @@ class ScheduleFireDeliveryPlanRow(Base):
             name="ck_schedule_fire_delivery_plans_fingerprint",
         ),
         CheckConstraint(
+            "route_max_body_chars IS NULL OR route_max_body_chars > 0",
+            name="ck_schedule_fire_delivery_plans_route_max_body_chars",
+        ),
+        CheckConstraint(
             "(status = 'ready' AND route_fingerprint IS NOT NULL AND reason_code IS NULL) OR "  # noqa: E501
-            "(status = 'suppressed' AND route_fingerprint IS NULL AND reason_code IN "
+            "(status = 'suppressed' AND route_fingerprint IS NULL AND route_max_body_chars IS NULL "
+            "AND reason_code IN "
             "('schedule_delivery_route_missing', 'schedule_delivery_route_disabled'))",
             name="ck_schedule_fire_delivery_plans_shape",
         ),
@@ -168,9 +173,11 @@ class ScheduleFireDeliveryPlanRow(Base):
     execution_id: Mapped[str]
     route_id: Mapped[str]
     route_fingerprint: Mapped[str | None]
+    route_max_body_chars: Mapped[int | None]
     content_source: Mapped[str]
     status: Mapped[str]
     reason_code: Mapped[str | None]
+    content_rejected_run_id: Mapped[str | None]
     created_at: Mapped[datetime]
 
 

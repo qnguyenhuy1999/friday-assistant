@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import unicodedata
 
 from friday.application.approval_workflow import ExpireApproval
 from friday.application.commands import ExpireApprovalCommand
@@ -37,7 +38,7 @@ class ScheduledAnswerContentGate:
             or len(normalized) > min(max_body_chars, MAX_BODY_LENGTH)
         ):
             return None
-        if any(ord(char) < 32 and char != "\n" for char in normalized):
+        if any(unicodedata.category(char) == "Cc" and char != "\n" for char in normalized):
             return None
         return normalized
 

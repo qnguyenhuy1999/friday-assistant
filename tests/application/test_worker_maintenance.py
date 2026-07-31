@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta
+
+import pytest
 
 from friday.application.approval_workflow import RequestApproval
 from friday.application.commands import RequestApprovalCommand
@@ -9,6 +12,7 @@ from friday.application.worker_maintenance import (
     ExpireDueApprovals,
     MaterializeScheduledAnswerDeliveries,
     RecoverExpiredLeases,
+    ScheduledAnswerContentGate,
 )
 from friday.domain.approval import ApprovalCategory, ApprovalStatus
 from friday.domain.event import RunEvent, RunEventType
@@ -258,6 +262,8 @@ def test_materialize_scheduled_answer_uses_canonical_root_summary_once() -> None
     assert delivery.route_id == "scheduled-route"
     assert delivery.route_fingerprint == "a" * 64
     assert delivery.body == "hello\nworld"
+    normalized_body = "hello\nworld"
+    assert delivery.body_sha256 == hashlib.sha256(normalized_body.encode("utf-8")).hexdigest()
     assert "never" not in delivery.body
 
 
@@ -363,3 +369,22 @@ def test_rejected_success_is_durable_and_frozen_route_bound_is_enforced() -> Non
     delivery = next(iter(uow.delivery_repo.items.values()))
     assert delivery.body == "valid"
     assert "SENTINEL" not in delivery.body
+
+
+class TestScheduledAnswerContentGate:
+    @pytest.mark.parametrize(
+        "control",
+        ["\x00", "\x1f", "\x7f", "\u0085"],
+        ids=["U+0000", "U+001F", "U+007F", "U+0085"],
+    )
+    def test_rejects_unicode_control_characters_except_lf(self, control: str) -> None:
+        assert ScheduledAnswerContentGate().validate(f"pre{control}post", 16000) is None
+
+    def test_preserves_lf_line_breaks(self) -> None:
+        assert ScheduledAnswerContentGate().validate("line one\nline two", 16000) == (
+            "line one\nline two"
+        )
+
+    def test_accepts_ordinary_unicode_user_facing_text(self) -> None:
+        summary = "Café — 東京 中文 مرحبا 🚀"
+        assert ScheduledAnswerContentGate().validate(summary, 16000) == summary

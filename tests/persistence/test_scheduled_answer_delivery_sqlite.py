@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import logging
 import threading
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -72,6 +75,7 @@ def _seed_case(
     route_fingerprint: str | None = "a" * 64,
     content_rejected_run_id: RunId | None = None,
     reject_self: bool = False,
+    plan_created_at: datetime = T0,
 ) -> tuple[ScheduleFireId, RunId]:
     task = Task.new(id=TaskId.new(), title="scheduled", description="", created_at=T0)
     with factory() as uow:
@@ -140,7 +144,7 @@ def _seed_case(
                 status=ScheduleFireDeliveryPlanStatus.READY,
                 reason_code=None,
                 content_rejected_run_id=effective.id if reject_self else content_rejected_run_id,
-                created_at=T0,
+                created_at=plan_created_at,
             )
         with factory() as uow:
             uow.schedule_fire_delivery_plans.add_for_fire(plan, fire)
@@ -156,6 +160,36 @@ def _seed_case(
 
 def _seed_ready_plan(factory: UnitOfWorkFactory, *, retry: bool) -> tuple[ScheduleFireId, RunId]:
     return _seed_case(factory, retry=retry)
+
+
+def _delivery_count(engine: Engine) -> int:
+    with engine.connect() as connection:
+        count = connection.scalar(select(func.count()).select_from(OutboundDeliveryRow))
+    assert count is not None
+    return count
+
+
+class _RecordingHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@contextlib.contextmanager
+def _capture_worker_logs() -> Iterator[_RecordingHandler]:
+    handler = _RecordingHandler()
+    logger = logging.getLogger("friday.application.worker_maintenance")
+    originally_disabled = logger.disabled
+    logger.disabled = False
+    logger.addHandler(handler)
+    try:
+        yield handler
+    finally:
+        logger.removeHandler(handler)
+        logger.disabled = originally_disabled
 
 
 def test_sqlite_materializes_exactly_one_root_answer_delivery(tmp_path: Path) -> None:
@@ -469,6 +503,166 @@ class TestFrozenAuthority:
             assert a.route_id == "ops.primary" and a.route_fingerprint == "a" * 64
             assert b is not None
             assert b.route_id == "ops.primary" and b.route_fingerprint == "b" * 64
+        finally:
+            engine.dispose()
+
+
+class TestNormalizedBodyDigest:
+    def test_persisted_body_matches_normalized_digest(self, tmp_path: Path) -> None:
+        engine, factory = _factory(tmp_path)
+        try:
+            fire_id, _ = _seed_case(factory, summary="  hello\r\nworld  ")
+            assert (
+                MaterializeScheduledAnswerDeliveries(factory, FixedClock(), batch_size=10).execute()
+                == 1
+            )
+            with engine.connect() as connection:
+                body, body_sha256 = connection.execute(
+                    select(OutboundDeliveryRow.body, OutboundDeliveryRow.body_sha256)
+                ).one()
+            assert body == "hello\nworld"
+            normalized_body = "hello\nworld"
+            expected = hashlib.sha256(normalized_body.encode("utf-8")).hexdigest()
+            assert body_sha256 == expected
+            assert body_sha256 == hashlib.sha256(body.encode("utf-8")).hexdigest()
+            with factory() as uow:
+                delivery = uow.deliveries.get_by_source_schedule_fire_id(fire_id)
+            assert delivery is not None and delivery.body_sha256 == expected
+        finally:
+            engine.dispose()
+
+
+class TestSqliteBatchSizeBound:
+    def test_batch_size_2_drains_three_ready_plans_across_ticks(self, tmp_path: Path) -> None:
+        engine, factory = _factory(tmp_path)
+        try:
+            fire_ids = [
+                _seed_case(factory, summary="answer a")[0],
+                _seed_case(factory, summary="answer b")[0],
+                _seed_case(factory, summary="answer c")[0],
+            ]
+            materializer = MaterializeScheduledAnswerDeliveries(factory, FixedClock(), batch_size=2)
+
+            assert materializer.execute() == 2
+            assert _delivery_count(engine) == 2
+            assert materializer.execute() == 1
+            assert _delivery_count(engine) == 3
+            assert materializer.execute() == 0
+            assert _delivery_count(engine) == 3
+
+            with factory() as uow:
+                for fire_id in fire_ids:
+                    delivery = uow.deliveries.get_by_source_schedule_fire_id(fire_id)
+                    assert delivery is not None
+        finally:
+            engine.dispose()
+
+
+class TestUnicodeControlRejection:
+    @pytest.mark.parametrize(
+        "control",
+        ["\x00", "\x1f", "\x7f", "\u0085"],
+        ids=["U+0000", "U+001F", "U+007F", "U+0085"],
+    )
+    def test_rejected_control_content_leaves_zero_delivery_and_durable_mark(
+        self, tmp_path: Path, control: str
+    ) -> None:
+        engine, factory = _factory(tmp_path)
+        try:
+            fire_id, run_id = _seed_case(factory, summary=f"pre{control}post")
+            assert (
+                MaterializeScheduledAnswerDeliveries(factory, FixedClock(), batch_size=10).execute()
+                == 0
+            )
+            assert _delivery_count(engine) == 0
+            with factory() as uow:
+                assert uow.deliveries.get_by_source_schedule_fire_id(fire_id) is None
+                plan = uow.schedule_fire_delivery_plans.get_by_fire(fire_id)
+            assert plan is not None
+            assert plan.content_rejected_run_id == run_id
+        finally:
+            engine.dispose()
+
+    @pytest.mark.parametrize(
+        "control",
+        ["\x00", "\x1f", "\x7f", "\u0085"],
+        ids=["U+0000", "U+001F", "U+007F", "U+0085"],
+    )
+    def test_rejected_control_content_never_logs_the_body(
+        self, tmp_path: Path, control: str
+    ) -> None:
+        engine, factory = _factory(tmp_path)
+        try:
+            _seed_case(factory, summary=f"pre{control}post")
+            with _capture_worker_logs() as handler:
+                MaterializeScheduledAnswerDeliveries(factory, FixedClock(), batch_size=10).execute()
+            assert handler.records == []
+        finally:
+            engine.dispose()
+
+    def test_ordinary_unicode_text_materializes_and_is_not_rejected(self, tmp_path: Path) -> None:
+        engine, factory = _factory(tmp_path)
+        try:
+            fire_id, run_id = _seed_case(factory, summary="Café — 東京 中文 مرحبا 🚀")
+            assert (
+                MaterializeScheduledAnswerDeliveries(factory, FixedClock(), batch_size=10).execute()
+                == 1
+            )
+            with factory() as uow:
+                delivery = uow.deliveries.get_by_source_schedule_fire_id(fire_id)
+                plan = uow.schedule_fire_delivery_plans.get_by_fire(fire_id)
+            assert delivery is not None and delivery.body == "Café — 東京 中文 مرحبا 🚀"
+            assert plan is not None and plan.content_rejected_run_id is None
+            assert _delivery_count(engine) == 1
+        finally:
+            engine.dispose()
+
+
+class TestPerCandidateFailureIsolation:
+    def test_unexpected_candidate_failure_does_not_abort_batch_and_logs_only_safe_fields(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine, factory = _factory(tmp_path)
+        try:
+            fire_a, _ = _seed_case(factory, summary="answer a", plan_created_at=T0)
+            fire_b, _ = _seed_case(
+                factory, summary="answer b", plan_created_at=T0 + timedelta(seconds=1)
+            )
+            materializer = MaterializeScheduledAnswerDeliveries(
+                factory, FixedClock(), batch_size=10
+            )
+            original = materializer._materialize_one
+            attempted: list[ScheduleFireId] = []
+            secret = "EXCEPTION-PAYLOAD-42"
+
+            def exploding(fire: ScheduleFireId) -> bool:
+                attempted.append(fire)
+                if fire == fire_a:
+                    raise RuntimeError(f"boom {secret}")
+                return original(fire)
+
+            monkeypatch.setattr(materializer, "_materialize_one", exploding)
+
+            with _capture_worker_logs() as handler:
+                assert materializer.execute() == 1
+
+            assert attempted == [fire_a, fire_b]
+            with factory() as uow:
+                assert uow.deliveries.get_by_source_schedule_fire_id(fire_a) is None
+                delivery_b = uow.deliveries.get_by_source_schedule_fire_id(fire_b)
+            assert delivery_b is not None and delivery_b.body == "answer b"
+            assert _delivery_count(engine) == 1
+
+            assert len(handler.records) == 1
+            record = handler.records[0]
+            assert record.getMessage() == "scheduler.answer_materialization_candidate_failed"
+            assert getattr(record, "schedule_fire_id", None) == str(fire_a)
+            assert getattr(record, "reason_code", None) == "unexpected_error"
+            assert record.exc_info is None
+            assert "boom" not in record.getMessage()
+            assert secret not in record.getMessage()
+            assert "answer a" not in record.getMessage()
+            assert "https://" not in record.getMessage()
         finally:
             engine.dispose()
 

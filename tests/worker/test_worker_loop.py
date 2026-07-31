@@ -23,7 +23,11 @@ from friday.application.worker_coordination import (
     RenewRunLease,
     RequeueClaimedRun,
 )
-from friday.application.worker_maintenance import ExpireDueApprovals, RecoverExpiredLeases
+from friday.application.worker_maintenance import (
+    ExpireDueApprovals,
+    MaterializeScheduledAnswerDeliveries,
+    RecoverExpiredLeases,
+)
 from friday.domain.approval import ApprovalCategory, ApprovalRequest
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.identifiers import ApprovalRequestId, RunId, TaskId
@@ -103,6 +107,9 @@ def _run_and_loop(
         apply_waiting=ApplyWaitingOutcome(factory, clock),
         recover_expired_leases=RecoverExpiredLeases(factory, clock, batch_size=10),
         expire_due_approvals=ExpireDueApprovals(factory, clock, batch_size=10),
+        materialize_scheduled_answers=MaterializeScheduledAnswerDeliveries(
+            factory, clock, batch_size=10
+        ),
         clock=clock,
         heartbeat_interval_seconds=0.001,
         maintenance_interval_seconds=60,
@@ -341,10 +348,17 @@ def test_run_maintenance_tick_recovers_expired_lease() -> None:
     assert item is not None and item.claimed_by is None
 
 
-@pytest.mark.parametrize("failing_job", ["recover", "expire"])
+@pytest.mark.parametrize("failing_job", ["answers", "recover", "expire"])
 def test_maintenance_jobs_are_isolated(failing_job: str, caplog: pytest.LogCaptureFixture) -> None:
     _, _, loop, _ = _run_and_loop(ProcessingOutcome.succeeded())
     calls: list[str] = []
+
+    class Answers:
+        def execute(self) -> int:
+            calls.append("answers")
+            if failing_job == "answers":
+                raise TransactionFailure("database unavailable")
+            return 0
 
     class Recover:
         def execute(self) -> int:
@@ -360,18 +374,19 @@ def test_maintenance_jobs_are_isolated(failing_job: str, caplog: pytest.LogCaptu
                 raise TransactionFailure("database unavailable")
             return [object()]
 
+    loop._materialize_scheduled_answers = Answers()  # type: ignore[assignment]
     loop._recover_expired_leases = Recover()  # type: ignore[assignment]
     loop._expire_due_approvals = Expire()  # type: ignore[assignment]
     caplog.set_level(logging.WARNING, logger="apps.worker.worker_loop")
 
     loop.run_maintenance_tick()
 
-    assert calls == ["recover", "expire"]
-    expected = (
-        "worker.lease_recovery_failed"
-        if failing_job == "recover"
-        else "worker.approval_expiry_failed"
-    )
+    assert calls == ["answers", "recover", "expire"]
+    expected = {
+        "answers": "scheduler.answer_materialization_failed",
+        "recover": "worker.lease_recovery_failed",
+        "expire": "worker.approval_expiry_failed",
+    }[failing_job]
     assert any(getattr(record, "event", None) == expected for record in caplog.records)
 
 

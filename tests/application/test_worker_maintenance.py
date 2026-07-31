@@ -201,7 +201,13 @@ def test_expire_due_approvals_respects_batch_size() -> None:
     )
 
 
-def _ready_plan(uow: FakeUnitOfWork, run: Run) -> ScheduleFireId:
+def _ready_plan(
+    uow: FakeUnitOfWork,
+    run: Run,
+    *,
+    route_max_body_chars: int = 16000,
+    created_at: datetime = T0,
+) -> ScheduleFireId:
     fire_id = ScheduleFireId.new()
     uow.schedule_fire_delivery_plan_repo.add(
         ScheduleFireDeliveryPlan.ready(
@@ -211,7 +217,8 @@ def _ready_plan(uow: FakeUnitOfWork, run: Run) -> ScheduleFireId:
             execution_id=run.execution_id,
             route_id="scheduled-route",
             route_fingerprint="a" * 64,
-            created_at=T0,
+            route_max_body_chars=route_max_body_chars,
+            created_at=created_at,
         )
     )
     return fire_id
@@ -297,5 +304,62 @@ def test_materialize_scheduled_answer_leaves_active_or_invalid_lineages_eligible
     retry.succeed(NOW + LEASE)
     _finished(uow, retry, {"summary": "\x00unsafe"})
     assert materializer.execute() == 0
-    _finished(uow, retry, {"summary": "safe", "details": {"claim_token": "nope"}}, sequence=2)
+    later_retry = Run.new(
+        id=RunId.new(), task_id=root.task_id, created_at=NOW + LEASE, execution_id=root.id
+    )
+    later_retry.start(NOW + LEASE)
+    later_retry.succeed(NOW + LEASE + timedelta(seconds=1))
+    uow.runs.add(later_retry)
+    _finished(uow, later_retry, {"summary": "safe", "details": {"claim_token": "nope"}})
     assert materializer.execute() == 1
+
+
+def test_active_or_failed_head_does_not_consume_successful_candidate_batch() -> None:
+    uow = FakeUnitOfWork()
+    active = Run.new(id=RunId.new(), task_id=TaskId.new(), created_at=T0)
+    failed = Run.new(id=RunId.new(), task_id=TaskId.new(), created_at=T0)
+    valid = Run.new(id=RunId.new(), task_id=TaskId.new(), created_at=T0)
+    active.start(T0)
+    failed.start(T0)
+    failed.fail(NOW, Failure("x", "failed", False, FailureCause.RUNTIME))
+    valid.start(T0)
+    valid.succeed(NOW)
+    for run in (active, failed, valid):
+        uow.runs.add(run)
+        _ready_plan(uow, run)
+    _finished(uow, valid, {"summary": "later valid"})
+
+    assert (
+        MaterializeScheduledAnswerDeliveries(
+            CountingUnitOfWorkFactory(uow), FakeClock(NOW), batch_size=1
+        ).execute()
+        == 1
+    )
+    delivery = next(iter(uow.delivery_repo.items.values()))
+    assert delivery.source_run_id == valid.id
+
+
+def test_rejected_success_is_durable_and_frozen_route_bound_is_enforced() -> None:
+    uow = FakeUnitOfWork()
+    rejected = Run.new(id=RunId.new(), task_id=TaskId.new(), created_at=T0)
+    valid = Run.new(id=RunId.new(), task_id=TaskId.new(), created_at=T0)
+    for run in (rejected, valid):
+        run.start(T0)
+        run.succeed(NOW)
+        uow.runs.add(run)
+    rejected_fire = _ready_plan(uow, rejected, route_max_body_chars=4)
+    _ready_plan(uow, valid, created_at=T0 + timedelta(seconds=1))
+    _finished(uow, rejected, {"summary": "five!", "details": {"token": "SENTINEL"}})
+    _finished(uow, valid, {"summary": "valid"})
+    materializer = MaterializeScheduledAnswerDeliveries(
+        CountingUnitOfWorkFactory(uow), FakeClock(NOW), batch_size=1
+    )
+
+    assert materializer.execute() == 0
+    rejected_plan = uow.schedule_fire_delivery_plan_repo.get_by_fire(rejected_fire)
+    assert rejected_plan is not None
+    assert rejected_plan.content_rejected_run_id == rejected.id
+    assert materializer.execute() == 1
+    delivery = next(iter(uow.delivery_repo.items.values()))
+    assert delivery.body == "valid"
+    assert "SENTINEL" not in delivery.body

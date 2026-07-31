@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 from friday.application.approval_workflow import ExpireApproval
 from friday.application.commands import ExpireApprovalCommand
 from friday.application.errors import EntityConflict
 from friday.application.list_events import canonical_final_agent_summary
-from friday.application.ports import Clock, UnitOfWorkFactory
+from friday.application.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from friday.application.results import ApprovalRequestResult
 from friday.domain.event import RunEventType
-from friday.domain.identifiers import DeliveryId, ScheduleFireId
+from friday.domain.identifiers import DeliveryId, RunId, ScheduleFireId
 from friday.domain.outbound_delivery import MAX_BODY_LENGTH, DeliverySourceKind, OutboundDelivery
 from friday.domain.run import TERMINAL_RUN_STATUSES, RunStatus
 from friday.domain.schedule_fire_delivery_plan import (
@@ -17,15 +19,23 @@ from friday.domain.schedule_fire_delivery_plan import (
     ScheduleFireDeliveryPlanStatus,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class ScheduledAnswerContentGate:
     """Deterministic, Friday-owned validation for canonical agent summaries."""
 
-    def validate(self, summary: str | None) -> str | None:
+    def validate(self, summary: str | None, max_body_chars: int | None) -> str | None:
         if not isinstance(summary, str):
             return None
         normalized = summary.replace("\r\n", "\n").replace("\r", "\n").strip()
-        if not normalized or len(normalized) > MAX_BODY_LENGTH:
+        if (
+            not normalized
+            or not isinstance(max_body_chars, int)
+            or isinstance(max_body_chars, bool)
+            or max_body_chars <= 0
+            or len(normalized) > min(max_body_chars, MAX_BODY_LENGTH)
+        ):
             return None
         if any(ord(char) < 32 and char != "\n" for char in normalized):
             return None
@@ -57,8 +67,11 @@ class MaterializeScheduledAnswerDeliveries:
                 # The unique source_schedule_fire_id constraint is the final
                 # race fence.  A loser has achieved the idempotent outcome.
                 continue
-            except Exception:
-                # A bad plan/result remains eligible; unrelated plans advance.
+            except Exception:  # noqa: BLE001 - candidate faults are isolated
+                logger.warning(
+                    "scheduler.answer_materialization_candidate_failed",
+                    extra={"schedule_fire_id": str(fire_id), "reason_code": "unexpected_error"},
+                )
                 continue
         return materialized
 
@@ -75,11 +88,13 @@ class MaterializeScheduledAnswerDeliveries:
             if run.status is not RunStatus.SUCCEEDED:
                 return False
             if plan.content_source is not ScheduleFireDeliveryContentSource.FINAL_AGENT_SUMMARY_V1:
-                return False
+                return self._reject_content(uow, plan.schedule_fire_id, run.id)
             event = uow.events.latest_of_type_for_run(run.id, RunEventType.AGENT_FINISHED)
-            body = self._gate.validate(canonical_final_agent_summary(event))
+            body = self._gate.validate(
+                canonical_final_agent_summary(event), plan.route_max_body_chars
+            )
             if body is None or plan.route_fingerprint is None:
-                return False
+                return self._reject_content(uow, plan.schedule_fire_id, run.id)
             now = self._clock.now()
             uow.deliveries.add(
                 OutboundDelivery.new(
@@ -98,6 +113,14 @@ class MaterializeScheduledAnswerDeliveries:
             )
             uow.commit()
             return True
+
+    @staticmethod
+    def _reject_content(uow: UnitOfWork, fire_id: ScheduleFireId, run_id: RunId) -> bool:
+        # A rejection belongs to this effective run only. A later retry in the
+        # same execution lineage has a new id and is eligible again.
+        if uow.schedule_fire_delivery_plans.mark_content_rejected(fire_id, run_id):
+            uow.commit()
+        return False
 
 
 class RecoverExpiredLeases:

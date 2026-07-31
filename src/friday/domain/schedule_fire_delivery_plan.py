@@ -31,9 +31,11 @@ class ScheduleFireDeliveryPlan:
     execution_id: RunId
     route_id: str
     route_fingerprint: str | None
+    route_max_body_chars: int | None
     content_source: ScheduleFireDeliveryContentSource
     status: ScheduleFireDeliveryPlanStatus
     reason_code: str | None
+    content_rejected_run_id: RunId | None
     created_at: datetime
 
     def __post_init__(self) -> None:
@@ -45,15 +47,29 @@ class ScheduleFireDeliveryPlan:
             raise DomainValidationError("ScheduleFireDeliveryPlan.content_source is invalid")
         if not isinstance(self.status, ScheduleFireDeliveryPlanStatus):
             raise DomainValidationError("ScheduleFireDeliveryPlan.status is invalid")
+        if self.content_rejected_run_id is not None and not isinstance(
+            self.content_rejected_run_id, RunId
+        ):
+            raise DomainValidationError("delivery plan rejected run is invalid")
         ready = self.status is ScheduleFireDeliveryPlanStatus.READY
         if ready and (
             not isinstance(self.route_fingerprint, str)
             or not re.fullmatch(r"[0-9a-f]{64}", self.route_fingerprint)
+            or (
+                self.route_max_body_chars is not None
+                and (
+                    not isinstance(self.route_max_body_chars, int)
+                    or isinstance(self.route_max_body_chars, bool)
+                    or self.route_max_body_chars <= 0
+                )
+            )
             or self.reason_code is not None
         ):
             raise DomainValidationError("ready delivery plan requires fingerprint and no reason")
         if self.status is ScheduleFireDeliveryPlanStatus.SUPPRESSED and (
-            self.route_fingerprint is not None or self.reason_code not in _REASONS
+            self.route_fingerprint is not None
+            or self.route_max_body_chars is not None
+            or self.reason_code not in _REASONS
         ):
             raise DomainValidationError(
                 "suppressed delivery plan requires a stable reason and no fingerprint"
@@ -69,8 +85,15 @@ class ScheduleFireDeliveryPlan:
         execution_id: RunId,
         route_id: str,
         route_fingerprint: str,
+        route_max_body_chars: int,
         created_at: datetime,
     ) -> ScheduleFireDeliveryPlan:
+        if (
+            not isinstance(route_max_body_chars, int)
+            or isinstance(route_max_body_chars, bool)
+            or route_max_body_chars <= 0
+        ):
+            raise DomainValidationError("ready delivery plan requires a route body bound")
         return cls(
             id,
             schedule_fire_id,
@@ -78,8 +101,10 @@ class ScheduleFireDeliveryPlan:
             execution_id,
             route_id,
             route_fingerprint,
+            route_max_body_chars,
             ScheduleFireDeliveryContentSource.FINAL_AGENT_SUMMARY_V1,
             ScheduleFireDeliveryPlanStatus.READY,
+            None,
             None,
             created_at,
         )
@@ -103,8 +128,10 @@ class ScheduleFireDeliveryPlan:
             execution_id,
             route_id,
             None,
+            None,
             ScheduleFireDeliveryContentSource.FINAL_AGENT_SUMMARY_V1,
             ScheduleFireDeliveryPlanStatus.SUPPRESSED,
             reason_code,
+            None,
             created_at,
         )

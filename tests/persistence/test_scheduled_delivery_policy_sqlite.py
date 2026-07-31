@@ -65,15 +65,19 @@ class Resolver:
         route_id: str = "ops.primary",
         enabled: bool = True,
         fingerprint: str = "a" * 64,
+        max_body_chars: int = 16_000,
     ) -> None:
         self._route_id = route_id
         self._enabled = enabled
         self._fingerprint = fingerprint
+        self._max_body_chars = max_body_chars
 
     def resolve(self, route_id: str) -> DeliveryRouteAuthority | None:
         if route_id != self._route_id:
             return None
-        return DeliveryRouteAuthority(self._route_id, self._enabled, self._fingerprint)
+        return DeliveryRouteAuthority(
+            self._route_id, self._enabled, self._fingerprint, self._max_body_chars
+        )
 
 
 class MissingResolver:
@@ -838,6 +842,7 @@ class TestCompositeFireBinding:
                 execution_id=fire.run_id,
                 route_id="ops.primary",
                 route_fingerprint="b" * 64,
+                route_max_body_chars=16000,
                 created_at=T0,
             )
             with pytest.raises(EntityConflict):

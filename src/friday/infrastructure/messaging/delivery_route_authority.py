@@ -16,4 +16,6 @@ class MessagingRouteAuthorityResolver:
         route = next((item for item in self.routes if item.route_id == route_id), None)
         if route is None:
             return None
-        return DeliveryRouteAuthority(route.route_id, route.enabled, route.fingerprint)
+        return DeliveryRouteAuthority(
+            route.route_id, route.enabled, route.fingerprint, route.max_body_chars
+        )

@@ -64,6 +64,7 @@ def test_plan_accepts_only_exact_ready_and_suppressed_shapes() -> None:
         execution_id=execution_id,
         route_id="ops",
         route_fingerprint="a" * 64,
+        route_max_body_chars=16000,
         created_at=NOW,
     )
     assert ready.status is ScheduleFireDeliveryPlanStatus.READY
@@ -85,9 +86,11 @@ def test_plan_accepts_only_exact_ready_and_suppressed_shapes() -> None:
             execution_id,
             "ops",
             route_fingerprint=None,
+            route_max_body_chars=None,
             content_source=ScheduleFireDeliveryContentSource.FINAL_AGENT_SUMMARY_V1,
             status="unknown",  # type: ignore[arg-type]
             reason_code="anything",
+            content_rejected_run_id=None,
             created_at=NOW,
         )
     with pytest.raises(DomainValidationError):
@@ -98,8 +101,10 @@ def test_plan_accepts_only_exact_ready_and_suppressed_shapes() -> None:
             execution_id,
             "ops",
             route_fingerprint=None,
+            route_max_body_chars=None,
             content_source="unknown",  # type: ignore[arg-type]
             status=ScheduleFireDeliveryPlanStatus.SUPPRESSED,
             reason_code="anything",
+            content_rejected_run_id=None,
             created_at=NOW,
         )

@@ -75,7 +75,7 @@ def test_enabled_policy_freezes_ready_plan_without_delivery_content() -> None:
     class Resolver:
         def resolve(self, route_id: str) -> DeliveryRouteAuthority | None:
             assert route_id == "personal.notifications"
-            return DeliveryRouteAuthority(route_id, True, "a" * 64)
+            return DeliveryRouteAuthority(route_id, True, "a" * 64, 16000)
 
     assert (
         MaterializeDueSchedules(
@@ -87,6 +87,7 @@ def test_enabled_policy_freezes_ready_plan_without_delivery_content() -> None:
     plan = uow.schedule_fire_delivery_plan_repo.get_by_fire(fire.id)
     assert plan is not None
     assert plan.route_fingerprint == "a" * 64
+    assert plan.route_max_body_chars == 16000
     assert plan.execution_id == fire.run_id
 
 
@@ -251,7 +252,7 @@ def test_disabled_policy_produces_no_delivery_plan() -> None:
     class Resolver:
         @staticmethod
         def resolve(route_id: str) -> DeliveryRouteAuthority | None:
-            return DeliveryRouteAuthority(route_id, True, "a" * 64)
+            return DeliveryRouteAuthority(route_id, True, "a" * 64, 16000)
 
     assert (
         MaterializeDueSchedules(
@@ -276,7 +277,7 @@ def test_disabled_route_suppresses_plan_with_disabled_reason() -> None:
     class DisabledResolver:
         @staticmethod
         def resolve(route_id: str) -> DeliveryRouteAuthority | None:
-            return DeliveryRouteAuthority(route_id, False, "a" * 64)
+            return DeliveryRouteAuthority(route_id, False, "a" * 64, 16000)
 
     assert (
         MaterializeDueSchedules(
@@ -302,7 +303,7 @@ def test_mismatched_resolver_alias_never_ready() -> None:
         @staticmethod
         def resolve(route_id: str) -> DeliveryRouteAuthority | None:
             assert route_id == "ops.primary"
-            return DeliveryRouteAuthority("ops.secondary", True, "a" * 64)
+            return DeliveryRouteAuthority("ops.secondary", True, "a" * 64, 16000)
 
     assert (
         MaterializeDueSchedules(

@@ -93,6 +93,7 @@ def _seed_ready_plan(factory: UnitOfWorkFactory, *, retry: bool) -> tuple[Schedu
                 execution_id=root.id,
                 route_id="ops.primary",
                 route_fingerprint="a" * 64,
+                route_max_body_chars=16000,
                 created_at=T0,
             ),
             fire,

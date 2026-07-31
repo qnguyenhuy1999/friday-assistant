@@ -551,8 +551,17 @@ class ScheduleFireDeliveryPlanRepository:
         return schedule_fire_delivery_plan_from_row(row) if row is not None else None
 
     def list_ready_without_delivery(self, limit: int) -> list[ScheduleFireId]:
+        latest_run_id = (
+            select(RunRow.id)
+            .where(RunRow.execution_id == ScheduleFireDeliveryPlanRow.execution_id)
+            .order_by(RunRow.created_at.desc(), RunRow.id.desc())
+            .limit(1)
+            .correlate(ScheduleFireDeliveryPlanRow)
+            .scalar_subquery()
+        )
         stmt = (
             select(ScheduleFireDeliveryPlanRow.schedule_fire_id)
+            .join(RunRow, RunRow.id == latest_run_id)
             .outerjoin(
                 OutboundDeliveryRow,
                 OutboundDeliveryRow.source_schedule_fire_id
@@ -561,11 +570,28 @@ class ScheduleFireDeliveryPlanRepository:
             .where(
                 ScheduleFireDeliveryPlanRow.status == "ready",
                 OutboundDeliveryRow.id.is_(None),
+                RunRow.status == "succeeded",
+                or_(
+                    ScheduleFireDeliveryPlanRow.content_rejected_run_id.is_(None),
+                    ScheduleFireDeliveryPlanRow.content_rejected_run_id != RunRow.id,
+                ),
             )
             .order_by(ScheduleFireDeliveryPlanRow.created_at, ScheduleFireDeliveryPlanRow.id)
             .limit(limit)
         )
         return [ScheduleFireId(value) for value in self._session.execute(stmt).scalars()]
+
+    def mark_content_rejected(self, schedule_fire_id: ScheduleFireId, run_id: RunId) -> bool:
+        stmt = (
+            update(ScheduleFireDeliveryPlanRow)
+            .where(
+                ScheduleFireDeliveryPlanRow.schedule_fire_id == str(schedule_fire_id),
+                ScheduleFireDeliveryPlanRow.status == "ready",
+            )
+            .values(content_rejected_run_id=str(run_id))
+        )
+        result = cast(CursorResult[Any], self._session.execute(stmt))
+        return result.rowcount == 1
 
 
 class RunStepRepository:

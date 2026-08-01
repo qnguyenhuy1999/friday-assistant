@@ -81,8 +81,10 @@ from friday.application.runtime_actions import (
 from friday.application.runtime_context import (
     MIN_CONTEXT_CHARS,
     RunSnapshot,
+    SkillContextTooLarge,
     build_runtime_context,
 )
+from friday.application.skill_registry import ResolveRunSkills
 from friday.application.tool_authorization import (
     RequestToolApproval,
     compute_authorization_fingerprint,
@@ -110,6 +112,7 @@ class RuntimeLimits:
     max_response_bytes: int
     max_yield_seconds: int
     max_processing_seconds: float = 600.0
+    max_skill_context_chars: int = 24_000
 
     def __post_init__(self) -> None:
         if self.max_turns_per_claim < 1:
@@ -124,6 +127,8 @@ class RuntimeLimits:
             raise ValueError("max_yield_seconds must be >= 0")
         if self.max_processing_seconds <= 0:
             raise ValueError("max_processing_seconds must be positive")
+        if not 0 < self.max_skill_context_chars < self.max_context_chars:
+            raise ValueError("max_skill_context_chars must be positive and below max_context_chars")
 
 
 class AgentRunProcessor:
@@ -157,6 +162,7 @@ class AgentRunProcessor:
         self._memory_query_builder = memory_query_builder or MemoryQueryBuilder()
         self._conversation_context = conversation_context
         self._monotonic = monotonic
+        self._resolve_run_skills = ResolveRunSkills(uow_factory, clock)
 
     # ------------------------------------------------------------------ API
 
@@ -175,6 +181,11 @@ class AgentRunProcessor:
                 return self._yield_now()
             if not self._claim_holds(context):
                 return self._yield_now()
+
+            try:
+                self._resolve_run_skills.execute(context.run_id)
+            except Exception as exc:
+                return self._failed("skill_resolution_failed", str(exc), retryable=False)
 
             snapshot = self._load_snapshot(context, tuple(turn_notes))
             if snapshot is None:
@@ -199,15 +210,23 @@ class AgentRunProcessor:
                 if memory is None:
                     return self._yield_now()
 
-            document = build_runtime_context(
-                snapshot,
-                tool_manifest=self._gateway.list_tools(),
-                attempt_number=context.attempt_number,
-                turn_number=turn,
-                max_chars=self._limits.max_context_chars,
-                memory_context=memory,
-                conversation_context=conversation,
-            )
+            try:
+                document = build_runtime_context(
+                    snapshot,
+                    tool_manifest=self._gateway.list_tools(),
+                    attempt_number=context.attempt_number,
+                    turn_number=turn,
+                    max_chars=self._limits.max_context_chars,
+                    max_skill_context_chars=self._limits.max_skill_context_chars,
+                    memory_context=memory,
+                    conversation_context=conversation,
+                )
+            except SkillContextTooLarge:
+                return self._failed(
+                    "skill_context_too_large",
+                    "frozen skill context exceeds budget",
+                    retryable=False,
+                )
             remaining = deadline - self._monotonic()
             if remaining <= 0:
                 return self._yield_now()
@@ -411,6 +430,13 @@ class AgentRunProcessor:
             if task is None or run is None or run.status is not RunStatus.RUNNING:
                 return None
             events = _bounded_read(uow.events, context.run_id, _MAX_RECENT_EVENTS)
+            skills = []
+            for binding in uow.run_skill_bindings.list_for_run(context.run_id):
+                skill = uow.skills.get(binding.skill_id)
+                revision = uow.skill_revisions.get(binding.revision_id)
+                if skill is None or revision is None or revision.skill_id != binding.skill_id:
+                    return None
+                skills.append((binding, skill, revision))
             return RunSnapshot(
                 task=task,
                 run=run,
@@ -422,6 +448,7 @@ class AgentRunProcessor:
                 artifacts=tuple(_bounded_read(uow.artifacts, context.run_id, _MAX_RECENT_EVENTS)),
                 events=tuple(events),
                 previous_turns=turn_notes,
+                skills=tuple(skills),
             )
 
     def _retrieve_memory(

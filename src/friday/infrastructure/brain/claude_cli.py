@@ -35,6 +35,8 @@ from friday.application.errors import (
     BrainUnavailable,
 )
 from friday.application.runtime_actions import parse_brain_action
+from friday.application.skill_evaluation import BrainOnlyEvaluationRequest
+from friday.application.skill_improvement import CandidateGenerationRequest
 from friday.infrastructure.brain.claude_cli_protocol import CliEnvelope, parse_cli_envelope
 
 ENVIRONMENT_ALLOWLIST = (
@@ -134,6 +136,70 @@ class ClaudeCliBrainRuntime:
             )
         return BrainResponse(action=action, model=envelope.model, usage=envelope.usage)
 
+    def generate_candidate(self, request: CandidateGenerationRequest) -> str:
+        """Brain-only candidate generation with the same process-level isolation.
+
+        This deliberately does not reuse the action envelope parser: the sole
+        allowed output is the improvement-candidate JSON contract.
+        """
+        prompt = json.dumps(
+            {
+                "contract": {
+                    "version": 1,
+                    "required_fields": [
+                        "version",
+                        "proposed_instructions",
+                        "rationale",
+                        "addressed_evidence_ids",
+                    ],
+                },
+                "base_instructions": request.base_instructions,
+                "evidence_snapshot_hash": request.evidence_snapshot_hash,
+                "evidence_ids": request.evidence_ids,
+                "feedback_summaries": request.feedback_summaries,
+                "evaluator_summaries": request.evaluator_summaries,
+                "instruction": "Return only one JSON candidate object; never propose tool use.",
+            },
+            separators=(",", ":"),
+        )
+        envelope = self._invoke_candidate(prompt, request.max_response_chars)
+        return envelope.result_text
+
+    def evaluate_skill_cases(self, request: BrainOnlyEvaluationRequest) -> dict[str, str]:
+        """Run an exact instruction/case batch through the same tool-free CLI.
+
+        Output is intentionally only a case-id-to-text map.  Friday's
+        deterministic evaluator, not Claude, decides pass/fail afterwards.
+        """
+        expected_ids = {case_id for case_id, _input in request.cases}
+        prompt = json.dumps(
+            {
+                "instructions": request.instructions,
+                "cases": [
+                    {"id": case_id, "input": input_text} for case_id, input_text in request.cases
+                ],
+                "contract": (
+                    "Return exactly one JSON object mapping every case id to its string "
+                    "output. No tools, prose, or markdown."
+                ),
+            },
+            separators=(",", ":"),
+        )
+        raw = self._invoke_candidate(prompt, request.max_response_chars).result_text
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise BrainResponseInvalid("evaluation output must be strict JSON") from exc
+        if (
+            not isinstance(value, dict)
+            or set(value) != expected_ids
+            or not all(
+                isinstance(key, str) and isinstance(output, str) for key, output in value.items()
+            )
+        ):
+            raise BrainResponseInvalid("evaluation output must map each frozen case to text")
+        return value
+
     def _effective_budget(self, request: BrainRequest) -> float:
         if request.timeout_seconds is None:
             return self._settings.timeout_seconds
@@ -211,6 +277,36 @@ class ClaudeCliBrainRuntime:
         envelope = parse_cli_envelope(stdout)
         if len(envelope.result_text.encode("utf-8")) > request.max_response_bytes:
             raise BrainProtocolError("model response exceeded the configured limit")
+        return envelope
+
+    def _invoke_candidate(self, prompt: str, max_response_chars: int) -> CliEnvelope:
+        try:
+            process = subprocess.Popen(
+                self._argv(),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=self._environment(),
+                text=True,
+                encoding="utf-8",
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise BrainUnavailable("Claude CLI could not be started") from exc
+        stdout, stderr_bytes = _communicate_bounded(
+            process,
+            prompt,
+            self._settings.timeout_seconds,
+            self._settings.max_output_bytes,
+            self._settings.max_stderr_bytes,
+        )
+        if process.returncode != 0:
+            raise BrainUnavailable(
+                f"Claude CLI exited with code {process.returncode} (stderr: {stderr_bytes} bytes)"
+            )
+        envelope = parse_cli_envelope(stdout)
+        if len(envelope.result_text) > max_response_chars:
+            raise BrainProtocolError("candidate response exceeded the configured limit")
         return envelope
 
 

@@ -24,6 +24,7 @@ from friday.application.errors import (
     BrainUnavailable,
 )
 from friday.application.runtime_actions import FinishAction, InvokeToolAction
+from friday.application.skill_evaluation import BrainOnlyEvaluationRequest
 from friday.application.tool_gateway import ToolDescriptor
 from friday.domain.identifiers import RunId, TaskId
 from friday.infrastructure.brain.claude_cli import (
@@ -153,6 +154,26 @@ def test_model_flag_omitted_when_not_configured(tmp_path: Path) -> None:
     ClaudeCliBrainRuntime(settings(executable, model=None)).next_action(request())
     argv = json.loads((record / "argv-0.json").read_text())
     assert "--model" not in argv
+
+
+def test_brain_only_evaluation_requires_exact_frozen_case_output_map(tmp_path: Path) -> None:
+    executable, record = make_fake(tmp_path, stdouts=[envelope('{"case-a":"answer"}')])
+    runtime = ClaudeCliBrainRuntime(settings(executable))
+    assert runtime.evaluate_skill_cases(
+        BrainOnlyEvaluationRequest(instructions="be precise", cases=(("case-a", "question"),))
+    ) == {"case-a": "answer"}
+    prompt = json.loads((record / "stdin-0.txt").read_text())
+    assert prompt["instructions"] == "be precise"
+    assert prompt["cases"] == [{"id": "case-a", "input": "question"}]
+
+
+def test_brain_only_evaluation_rejects_missing_or_extra_case_outputs(tmp_path: Path) -> None:
+    executable, _ = make_fake(tmp_path, stdouts=[envelope('{"wrong":"answer"}')])
+    runtime = ClaudeCliBrainRuntime(settings(executable))
+    with pytest.raises(BrainResponseInvalid, match="map each frozen case"):
+        runtime.evaluate_skill_cases(
+            BrainOnlyEvaluationRequest(instructions="be precise", cases=(("case-a", "question"),))
+        )
 
 
 def test_prompt_travels_via_stdin_not_argv(tmp_path: Path) -> None:

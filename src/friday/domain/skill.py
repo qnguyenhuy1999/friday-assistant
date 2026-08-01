@@ -9,7 +9,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from friday.domain.errors import DomainValidationError, InvalidStateTransition
-from friday.domain.identifiers import SkillId, SkillRevisionId
+from friday.domain.identifiers import RunId, RunSkillResolutionId, SkillId, SkillRevisionId, TaskId
 from friday.domain.time import ensure_utc
 
 MAX_SKILL_KEY_LENGTH = 96
@@ -26,6 +26,7 @@ class SkillStatus(StrEnum):
 class SkillRevisionSourceKind(StrEnum):
     OPERATOR = "operator"
     IMPORTED = "imported"
+    GENERATED = "generated"
 
 
 def validate_skill_key(value: str) -> str:
@@ -90,6 +91,44 @@ class SkillRevision:
             source_kind,
             ensure_utc(created_at),
         )
+
+
+MAX_SKILLS_PER_TASK = 16
+
+
+@dataclass(frozen=True, slots=True)
+class TaskSkillBinding:
+    task_id: TaskId
+    skill_id: SkillId
+    position: int
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.position <= MAX_SKILLS_PER_TASK:
+            raise DomainValidationError("TaskSkillBinding.position is out of range")
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
+
+
+@dataclass(frozen=True, slots=True)
+class RunSkillResolution:
+    id: RunSkillResolutionId
+    run_id: RunId
+    resolved_at: datetime
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "resolved_at", ensure_utc(self.resolved_at))
+
+
+@dataclass(frozen=True, slots=True)
+class RunSkillBinding:
+    run_id: RunId
+    skill_id: SkillId
+    revision_id: SkillRevisionId
+    position: int
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.position <= MAX_SKILLS_PER_TASK:
+            raise DomainValidationError("RunSkillBinding.position is out of range")
 
 
 @dataclass(slots=True)

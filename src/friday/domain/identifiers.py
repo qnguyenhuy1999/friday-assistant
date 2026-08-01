@@ -107,3 +107,47 @@ class SkillId(_Id):
 
 class SkillRevisionId(_Id):
     pass
+
+
+class RunSkillResolutionId(_Id):
+    pass
+
+
+class SkillUsageRecordId(_Id):
+    pass
+
+
+class SkillRunFeedbackId(_Id):
+    pass
+
+
+class SkillEvaluationSuiteId(_Id):
+    pass
+
+
+class SkillEvaluationCaseId(_Id):
+    pass
+
+
+class SkillEvaluationRunId(_Id):
+    pass
+
+
+class SkillImprovementProposalId(_Id):
+    pass
+
+
+class SkillCandidateEvaluationId(_Id):
+    pass
+
+
+class SkillPromotionRequestId(_Id):
+    pass
+
+
+class SkillRollbackRequestId(_Id):
+    pass
+
+
+class SkillEvidenceSnapshotId(_Id):
+    pass

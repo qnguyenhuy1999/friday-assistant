@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# ruff: noqa: E501
 import builtins
 from datetime import datetime
 from typing import Any, cast
@@ -32,6 +33,8 @@ from friday.domain import (
     RunEvent,
     RunEventType,
     RunId,
+    RunSkillBinding,
+    RunSkillResolution,
     RunStep,
     RunStepId,
     Schedule,
@@ -41,12 +44,30 @@ from friday.domain import (
     ScheduleFireId,
     ScheduleId,
     Skill,
+    SkillCandidateEvaluation,
+    SkillEvaluationCase,
+    SkillEvaluationCaseResult,
+    SkillEvaluationRun,
+    SkillEvaluationRunId,
+    SkillEvaluationSuite,
+    SkillEvidenceSnapshot,
+    SkillEvidenceSnapshotId,
     SkillId,
+    SkillImprovementPolicy,
+    SkillImprovementProposal,
+    SkillImprovementProposalId,
+    SkillPromotionRequest,
+    SkillPromotionRequestId,
     SkillRevision,
     SkillRevisionId,
+    SkillRollbackRequest,
+    SkillRollbackRequestId,
+    SkillRunFeedback,
+    SkillUsageRecord,
     Task,
     TaskEvent,
     TaskId,
+    TaskSkillBinding,
     ToolInvocation,
     ToolInvocationId,
 )
@@ -77,6 +98,10 @@ from friday.infrastructure.persistence.mappers import (
     run_event_from_row,
     run_event_to_row,
     run_from_row,
+    run_skill_binding_from_row,
+    run_skill_binding_to_row,
+    run_skill_resolution_from_row,
+    run_skill_resolution_to_row,
     run_step_from_row,
     run_step_to_row,
     run_to_row,
@@ -88,13 +113,39 @@ from friday.infrastructure.persistence.mappers import (
     schedule_fire_to_row,
     schedule_from_row,
     schedule_to_row,
+    skill_candidate_evaluation_from_row,
+    skill_candidate_evaluation_to_row,
+    skill_evaluation_case_from_row,
+    skill_evaluation_case_result_from_row,
+    skill_evaluation_case_result_to_row,
+    skill_evaluation_case_to_row,
+    skill_evaluation_run_from_row,
+    skill_evaluation_run_to_row,
+    skill_evaluation_suite_from_row,
+    skill_evaluation_suite_to_row,
+    skill_evidence_snapshot_from_row,
+    skill_evidence_snapshot_to_row,
     skill_from_row,
+    skill_improvement_policy_from_row,
+    skill_improvement_policy_to_row,
+    skill_improvement_proposal_from_row,
+    skill_improvement_proposal_to_row,
+    skill_promotion_request_from_row,
+    skill_promotion_request_to_row,
     skill_revision_from_row,
     skill_revision_to_row,
+    skill_rollback_request_from_row,
+    skill_rollback_request_to_row,
+    skill_run_feedback_from_row,
+    skill_run_feedback_to_row,
     skill_to_row,
+    skill_usage_record_from_row,
+    skill_usage_record_to_row,
     task_event_from_row,
     task_event_to_row,
     task_from_row,
+    task_skill_binding_from_row,
+    task_skill_binding_to_row,
     task_to_row,
     tool_invocation_from_row,
     tool_invocation_to_row,
@@ -112,16 +163,31 @@ from friday.infrastructure.persistence.models import (
     RunEventRow,
     RunEventSequenceCounterRow,
     RunRow,
+    RunSkillBindingRow,
+    RunSkillResolutionRow,
     RunStepRow,
     ScheduleDeliveryPolicyRow,
     ScheduleFireDeliveryPlanRow,
     ScheduleFireRow,
     ScheduleRow,
+    SkillCandidateEvaluationRow,
+    SkillEvaluationCaseResultRow,
+    SkillEvaluationCaseRow,
+    SkillEvaluationRunRow,
+    SkillEvaluationSuiteRow,
+    SkillEvidenceSnapshotRow,
+    SkillImprovementPolicyRow,
+    SkillImprovementProposalRow,
+    SkillPromotionRequestRow,
     SkillRevisionRow,
+    SkillRollbackRequestRow,
     SkillRow,
+    SkillRunFeedbackRow,
+    SkillUsageRecordRow,
     TaskEventRow,
     TaskEventSequenceCounterRow,
     TaskRow,
+    TaskSkillBindingRow,
     ToolInvocationRow,
 )
 
@@ -186,6 +252,286 @@ class SkillRevisionRepository:
             )
             + 1
         )
+
+
+class TaskSkillBindingRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def list_for_task(self, task_id: TaskId) -> list[TaskSkillBinding]:
+        return [
+            task_skill_binding_from_row(row)
+            for row in self._session.execute(
+                select(TaskSkillBindingRow)
+                .where(TaskSkillBindingRow.task_id == str(task_id))
+                .order_by(TaskSkillBindingRow.position)
+            ).scalars()
+        ]
+
+    def replace(self, task_id: TaskId, bindings: list[TaskSkillBinding]) -> None:
+        self._session.query(TaskSkillBindingRow).filter(
+            TaskSkillBindingRow.task_id == str(task_id)
+        ).delete()
+        self._session.add_all([task_skill_binding_to_row(binding) for binding in bindings])
+
+
+class RunSkillResolutionRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get(self, run_id: RunId) -> RunSkillResolution | None:
+        row = self._session.scalar(
+            select(RunSkillResolutionRow).where(RunSkillResolutionRow.run_id == str(run_id))
+        )
+        return run_skill_resolution_from_row(row) if row else None
+
+    def add(self, resolution: RunSkillResolution) -> None:
+        self._session.add(run_skill_resolution_to_row(resolution))
+
+
+class RunSkillBindingRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def list_for_run(self, run_id: RunId) -> list[RunSkillBinding]:
+        return [
+            run_skill_binding_from_row(row)
+            for row in self._session.execute(
+                select(RunSkillBindingRow)
+                .where(RunSkillBindingRow.run_id == str(run_id))
+                .order_by(RunSkillBindingRow.position)
+            ).scalars()
+        ]
+
+    def add_all(self, bindings: list[RunSkillBinding]) -> None:
+        self._session.add_all([run_skill_binding_to_row(binding) for binding in bindings])
+
+
+class SkillUsageRecordRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get_for_run_skill(self, run_id: RunId, skill_id: SkillId) -> SkillUsageRecord | None:
+        row = self._session.scalar(
+            select(SkillUsageRecordRow).where(
+                SkillUsageRecordRow.run_id == str(run_id),
+                SkillUsageRecordRow.skill_id == str(skill_id),
+            )
+        )
+        return skill_usage_record_from_row(row) if row else None
+
+    def add(self, record: SkillUsageRecord) -> None:
+        self._session.add(skill_usage_record_to_row(record))
+
+    def list_for_skill(self, skill_id: SkillId, limit: int) -> list[SkillUsageRecord]:
+        return [
+            skill_usage_record_from_row(row)
+            for row in self._session.execute(
+                select(SkillUsageRecordRow)
+                .where(SkillUsageRecordRow.skill_id == str(skill_id))
+                .order_by(SkillUsageRecordRow.completed_at.desc(), SkillUsageRecordRow.id.desc())
+                .limit(limit)
+            ).scalars()
+        ]
+
+
+class SkillRunFeedbackRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, feedback: SkillRunFeedback) -> None:
+        self._session.add(skill_run_feedback_to_row(feedback))
+
+    def list_for_run_skill(self, run_id: RunId, skill_id: SkillId) -> list[SkillRunFeedback]:
+        return [
+            skill_run_feedback_from_row(row)
+            for row in self._session.execute(
+                select(SkillRunFeedbackRow)
+                .where(
+                    SkillRunFeedbackRow.run_id == str(run_id),
+                    SkillRunFeedbackRow.skill_id == str(skill_id),
+                )
+                .order_by(SkillRunFeedbackRow.created_at, SkillRunFeedbackRow.id)
+            ).scalars()
+        ]
+
+
+class SkillEvaluationSuiteRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get(self, suite_id: object) -> SkillEvaluationSuite | None:
+        row = self._session.get(SkillEvaluationSuiteRow, str(suite_id))
+        return skill_evaluation_suite_from_row(row) if row else None
+
+    def add(self, suite: SkillEvaluationSuite) -> None:
+        self._session.add(skill_evaluation_suite_to_row(suite))
+
+    def list_for_skill(self, skill_id: SkillId) -> list[SkillEvaluationSuite]:
+        return [
+            skill_evaluation_suite_from_row(x)
+            for x in self._session.execute(
+                select(SkillEvaluationSuiteRow).where(
+                    SkillEvaluationSuiteRow.skill_id == str(skill_id)
+                )
+            ).scalars()
+        ]
+
+
+class SkillEvaluationCaseRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def list_for_suite(self, suite_id: object) -> list[SkillEvaluationCase]:
+        return [
+            skill_evaluation_case_from_row(x)
+            for x in self._session.execute(
+                select(SkillEvaluationCaseRow)
+                .where(SkillEvaluationCaseRow.suite_id == str(suite_id))
+                .order_by(SkillEvaluationCaseRow.position)
+            ).scalars()
+        ]
+
+    def add(self, case: SkillEvaluationCase) -> None:
+        self._session.add(skill_evaluation_case_to_row(case))
+
+
+class SkillEvaluationRunRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, run: SkillEvaluationRun) -> None:
+        self._session.add(skill_evaluation_run_to_row(run))
+
+    def get(self, run_id: object) -> SkillEvaluationRun | None:
+        row = self._session.get(SkillEvaluationRunRow, str(run_id))
+        return skill_evaluation_run_from_row(row) if row else None
+
+
+class SkillEvaluationCaseResultRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add_all(self, results: list[SkillEvaluationCaseResult]) -> None:
+        self._session.add_all([skill_evaluation_case_result_to_row(x) for x in results])
+
+    def list_for_run(self, run_id: SkillEvaluationRunId) -> list[SkillEvaluationCaseResult]:
+        return [
+            skill_evaluation_case_result_from_row(row)
+            for row in self._session.execute(
+                select(SkillEvaluationCaseResultRow)
+                .where(SkillEvaluationCaseResultRow.evaluation_run_id == str(run_id))
+                .order_by(SkillEvaluationCaseResultRow.case_id)
+            ).scalars()
+        ]
+
+
+class SkillCandidateEvaluationRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, evaluation: SkillCandidateEvaluation) -> None:
+        self._session.add(skill_candidate_evaluation_to_row(evaluation))
+
+    def get_for_proposal(
+        self, proposal_id: SkillImprovementProposalId
+    ) -> SkillCandidateEvaluation | None:
+        row = self._session.execute(
+            select(SkillCandidateEvaluationRow).where(
+                SkillCandidateEvaluationRow.proposal_id == str(proposal_id)
+            )
+        ).scalar_one_or_none()
+        return skill_candidate_evaluation_from_row(row) if row else None
+
+
+class SkillImprovementProposalRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, proposal: SkillImprovementProposal) -> None:
+        self._session.add(skill_improvement_proposal_to_row(proposal))
+
+    def get(self, proposal_id: SkillImprovementProposalId) -> SkillImprovementProposal | None:
+        row = self._session.get(SkillImprovementProposalRow, str(proposal_id))
+        return skill_improvement_proposal_from_row(row) if row else None
+
+    def save(self, proposal: SkillImprovementProposal) -> None:
+        self._session.merge(skill_improvement_proposal_to_row(proposal))
+
+    def list_for_skill(self, skill_id: SkillId) -> list[SkillImprovementProposal]:
+        return [
+            skill_improvement_proposal_from_row(row)
+            for row in self._session.execute(
+                select(SkillImprovementProposalRow)
+                .where(SkillImprovementProposalRow.skill_id == str(skill_id))
+                .order_by(SkillImprovementProposalRow.created_at, SkillImprovementProposalRow.id)
+            ).scalars()
+        ]
+
+
+class SkillEvidenceSnapshotRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, snapshot: SkillEvidenceSnapshot) -> None:
+        self._session.add(skill_evidence_snapshot_to_row(snapshot))
+
+    def get(self, snapshot_id: SkillEvidenceSnapshotId) -> SkillEvidenceSnapshot | None:
+        row = self._session.get(SkillEvidenceSnapshotRow, str(snapshot_id))
+        return skill_evidence_snapshot_from_row(row) if row else None
+
+
+class SkillImprovementPolicyRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get(self, skill_id: SkillId) -> SkillImprovementPolicy | None:
+        row = self._session.get(SkillImprovementPolicyRow, str(skill_id))
+        return skill_improvement_policy_from_row(row) if row else None
+
+    def list_enabled(self, limit: int) -> list[SkillImprovementPolicy]:
+        return [
+            skill_improvement_policy_from_row(row)
+            for row in self._session.execute(
+                select(SkillImprovementPolicyRow)
+                .where(SkillImprovementPolicyRow.enabled.is_(True))
+                .order_by(SkillImprovementPolicyRow.updated_at, SkillImprovementPolicyRow.skill_id)
+                .limit(limit)
+            ).scalars()
+        ]
+
+    def save(self, policy: SkillImprovementPolicy) -> None:
+        self._session.merge(skill_improvement_policy_to_row(policy))
+
+
+class SkillPromotionRequestRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, request: SkillPromotionRequest) -> None:
+        self._session.add(skill_promotion_request_to_row(request))
+
+    def get(self, request_id: SkillPromotionRequestId) -> SkillPromotionRequest | None:
+        row = self._session.get(SkillPromotionRequestRow, str(request_id))
+        return skill_promotion_request_from_row(row) if row else None
+
+    def save(self, request: SkillPromotionRequest) -> None:
+        self._session.merge(skill_promotion_request_to_row(request))
+
+
+class SkillRollbackRequestRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, request: SkillRollbackRequest) -> None:
+        self._session.add(skill_rollback_request_to_row(request))
+
+    def get(self, request_id: SkillRollbackRequestId) -> SkillRollbackRequest | None:
+        row = self._session.get(SkillRollbackRequestRow, str(request_id))
+        return skill_rollback_request_from_row(row) if row else None
+
+    def save(self, request: SkillRollbackRequest) -> None:
+        self._session.merge(skill_rollback_request_to_row(request))
 
 
 class TaskRepository:

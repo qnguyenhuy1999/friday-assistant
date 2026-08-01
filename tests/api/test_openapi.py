@@ -1,6 +1,8 @@
 """Phase 9 OpenAPI stability (spec section 16): generation succeeds,
 operation IDs are unique, expected surface paths exist, no ORM leaks in."""
 
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 from typing import Any
@@ -25,6 +27,115 @@ EXPECTED_OPERATIONS = {
     ("POST", "/v1/skills/{skill_id}/revisions/{revision_id}/activate", "activateSkillRevision"),
     ("POST", "/v1/skills/{skill_id}/disable", "disableSkill"),
     ("POST", "/v1/skills/{skill_id}/archive", "archiveSkill"),
+    ("GET", "/v1/tasks/{task_id}/skills", "list_task_skills_v1_tasks__task_id__skills_get"),
+    ("PUT", "/v1/tasks/{task_id}/skills", "replace_task_skills_v1_tasks__task_id__skills_put"),
+    ("GET", "/v1/runs/{run_id}/skills", "list_run_skills_v1_runs__run_id__skills_get"),
+    (
+        "POST",
+        "/v1/runs/{run_id}/skills/{skill_id}/feedback",
+        "add_skill_feedback_v1_runs__run_id__skills__skill_id__feedback_post",
+    ),
+    (
+        "GET",
+        "/v1/runs/{run_id}/skills/{skill_id}/feedback",
+        "list_skill_feedback_v1_runs__run_id__skills__skill_id__feedback_get",
+    ),
+    ("GET", "/v1/skills/{skill_id}/usage", "list_usage_v1_skills__skill_id__usage_get"),
+    (
+        "POST",
+        "/v1/skills/{skill_id}/evidence-snapshots",
+        "create_evidence_snapshot_v1_skills__skill_id__evidence_snapshots_post",
+    ),
+    (
+        "POST",
+        "/v1/skills/{skill_id}/improvement-proposals",
+        "create_improvement_proposal_v1_skills__skill_id__improvement_proposals_post",
+    ),
+    (
+        "GET",
+        "/v1/skills/{skill_id}/improvement-proposals",
+        "list_improvement_proposals_v1_skills__skill_id__improvement_proposals_get",
+    ),
+    (
+        "GET",
+        "/v1/skills/improvement-proposals/{proposal_id}",
+        "get_improvement_proposal_v1_skills_improvement_proposals__proposal_id__get",
+    ),
+    (
+        "POST",
+        "/v1/skills/improvement-proposals/{proposal_id}/cancel",
+        "cancel_improvement_proposal_v1_skills_improvement_proposals__proposal_id__cancel_post",
+    ),
+    (
+        "POST",
+        "/v1/skills/improvement-proposals/{proposal_id}/evaluate",
+        "evaluate_improvement_proposal_v1_skills_improvement_proposals__proposal_id__evaluate_post",
+    ),
+    (
+        "GET",
+        "/v1/skills/improvement-proposals/{proposal_id}/evaluation",
+        "get_improvement_evaluation_v1_skills_improvement_proposals__proposal_id__evaluation_get",
+    ),
+    (
+        "POST",
+        "/v1/skills/improvement-proposals/{proposal_id}/request-promotion",
+        "request_promotion_v1_skills_improvement_proposals__proposal_id__request_promotion_post",
+    ),
+    (
+        "POST",
+        "/v1/skills/promotions/{promotion_id}/approve",
+        "approve_promotion_v1_skills_promotions__promotion_id__approve_post",
+    ),
+    (
+        "POST",
+        "/v1/skills/promotions/{promotion_id}/reject",
+        "reject_promotion_v1_skills_promotions__promotion_id__reject_post",
+    ),
+    (
+        "POST",
+        "/v1/skills/{skill_id}/request-rollback",
+        "request_rollback_v1_skills__skill_id__request_rollback_post",
+    ),
+    (
+        "POST",
+        "/v1/skills/rollbacks/{rollback_id}/approve",
+        "approve_rollback_v1_skills_rollbacks__rollback_id__approve_post",
+    ),
+    (
+        "GET",
+        "/v1/skills/{skill_id}/improvement-policy",
+        "get_improvement_policy_v1_skills__skill_id__improvement_policy_get",
+    ),
+    (
+        "PUT",
+        "/v1/skills/{skill_id}/improvement-policy",
+        "put_improvement_policy_v1_skills__skill_id__improvement_policy_put",
+    ),
+    (
+        "POST",
+        "/v1/skills/{skill_id}/improvement-policy/run-now",
+        "run_improvement_policy_now_v1_skills__skill_id__improvement_policy_run_now_post",
+    ),
+    (
+        "POST",
+        "/v1/skills/{skill_id}/evaluation-suites",
+        "create_evaluation_suite_v1_skills__skill_id__evaluation_suites_post",
+    ),
+    (
+        "GET",
+        "/v1/skills/{skill_id}/evaluation-suites",
+        "list_evaluation_suites_v1_skills__skill_id__evaluation_suites_get",
+    ),
+    (
+        "POST",
+        "/v1/skills/evaluation-suites/{suite_id}/runs",
+        "run_evaluation_v1_skills_evaluation_suites__suite_id__runs_post",
+    ),
+    (
+        "GET",
+        "/v1/skills/evaluation-runs/{run_id}",
+        "get_evaluation_run_v1_skills_evaluation_runs__run_id__get",
+    ),
     ("GET", "/v1/tasks/{task_id}", "getTask"),
     ("POST", "/v1/tasks/{task_id}/runs", "startRun"),
     ("GET", "/v1/tasks/{task_id}/schedules", "listSchedules"),

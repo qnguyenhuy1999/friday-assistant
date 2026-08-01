@@ -15,6 +15,7 @@ from friday.application.errors import EntityConflict, RunNotFound, TaskNotFound
 from friday.application.lifecycle_events import LifecycleEvents, run_result
 from friday.application.ports import UnitOfWork
 from friday.application.results import RunResult
+from friday.application.skill_usage import materialize_skill_usage_in_uow
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure
 from friday.domain.identifiers import RunId, RunStepId, TaskId
@@ -91,6 +92,7 @@ class _RunCancellation(LifecycleEvents):
                 )
         specs.extend(self.cancel_tools(uow, uow.tool_invocations.list_for_run(run.id), now))
         self.append_run_events(uow, run, now, specs)
+        materialize_skill_usage_in_uow(uow, run.id, now)
 
 
 class GetRun(LifecycleEvents):
@@ -174,6 +176,7 @@ class CompleteRun(LifecycleEvents):
             specs = _succeed_run_event_specs(uow, run, now)
             uow.work_queue.remove(run.id)
             self.append_run_events(uow, run, now, specs)
+            materialize_skill_usage_in_uow(uow, run.id, now)
             uow.commit()
             return run_result(run)
 
@@ -197,6 +200,7 @@ class FailRun(LifecycleEvents):
             specs = _fail_run_event_specs(uow, run, now, command.failure)
             self.append_run_events(uow, run, now, specs)
             uow.work_queue.remove(run.id)
+            materialize_skill_usage_in_uow(uow, run.id, now)
             uow.commit()
             return run_result(run)
 

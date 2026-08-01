@@ -63,6 +63,7 @@ from friday.application.worker_coordination import (
     VerifyRunClaim,
 )
 from friday.application.worker_maintenance import (
+    EvaluateDueSkillImprovementPolicies,
     ExpireDueApprovals,
     MaterializeScheduledAnswerDeliveries,
     RecoverExpiredLeases,
@@ -449,6 +450,7 @@ def _compose_worker(
             max_turns_per_claim=runtime.max_turns_per_claim,
             max_tool_calls_per_claim=runtime.max_tool_calls_per_claim,
             max_context_chars=runtime.max_context_chars,
+            max_skill_context_chars=runtime.max_skill_context_chars,
             max_response_bytes=runtime.max_response_bytes,
             max_yield_seconds=runtime.max_yield_seconds,
             max_processing_seconds=runtime.max_processing_seconds,
@@ -488,6 +490,17 @@ def _compose_worker(
         ),
         materialize_scheduled_answers=MaterializeScheduledAnswerDeliveries(
             uow_factory, clock, batch_size=settings.maintenance_batch_size
+        ),
+        evaluate_due_skill_policies=EvaluateDueSkillImprovementPolicies(
+            uow_factory,
+            clock,
+            batch_size=settings.maintenance_batch_size,
+            candidate_generator=(
+                runtime_brain if isinstance(runtime_brain, ClaudeCliBrainRuntime) else None
+            ),
+            candidate_evaluator=(
+                runtime_brain if isinstance(runtime_brain, ClaudeCliBrainRuntime) else None
+            ),
         ),
         delivery_worker=DeliveryWorker(
             DeliveryDispatcher(

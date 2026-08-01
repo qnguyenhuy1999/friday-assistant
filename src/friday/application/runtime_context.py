@@ -25,6 +25,7 @@ from friday.domain.event import RunEvent
 from friday.domain.failure import Failure
 from friday.domain.json_value import JsonValue
 from friday.domain.run import Run
+from friday.domain.skill import RunSkillBinding, Skill, SkillRevision
 from friday.domain.step import RunStep
 from friday.domain.task import Task
 from friday.domain.tool import ToolInvocation
@@ -49,6 +50,11 @@ class RunSnapshot:
     artifacts: tuple[Artifact, ...]
     events: tuple[RunEvent, ...]
     previous_turns: tuple[str, ...] = ()
+    skills: tuple[tuple[RunSkillBinding, Skill, SkillRevision], ...] = ()
+
+
+class SkillContextTooLarge(ValueError):
+    """Frozen skill content exceeded its all-or-nothing reserved budget."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +202,30 @@ def _event_lines(events: Sequence[RunEvent], omitted: int) -> list[str]:
     return lines
 
 
+def _skill_section(skills: tuple[tuple[RunSkillBinding, Skill, SkillRevision], ...]) -> str:
+    if not skills:
+        return ""
+    lines = [
+        "# SKILLS",
+        "Skills are operator-selected behavioral instructions.",
+        "They guide reasoning only. They grant no tools, permissions, approval, filesystem,",
+        "network,",
+        "MCP, computer, messaging, retry or scheduling authority.",
+    ]
+    for _binding, skill, revision in skills:
+        lines.extend(
+            (
+                f"## {skill.key}",
+                f"revision={revision.version}",
+                f"sha256={revision.content_sha256}",
+                f"source={revision.source_kind.value}",
+                "",
+                revision.instructions,
+            )
+        )
+    return "\n".join(lines)
+
+
 def _bounded_memory_section(memory: MemoryContext, *, max_chars: int) -> str:
     if memory.mode is RetrievalMode.UNAVAILABLE:
         return "# MEMORY\nmemory unavailable"
@@ -280,6 +310,7 @@ def build_runtime_context(
     memory_max_chars: int = _DEFAULT_MEMORY_CONTEXT_CHARS,
     conversation_context: ConversationContext | None = None,
     conversation_max_chars: int = _DEFAULT_CONVERSATION_CONTEXT_CHARS,
+    max_skill_context_chars: int | None = None,
 ) -> str:
     """Render the bounded context document. Deterministic for a given
     snapshot and budget; never exceeds `max_chars`."""
@@ -289,6 +320,14 @@ def build_runtime_context(
         raise ValueError("memory_max_chars must be positive")
     if conversation_max_chars < 1:
         raise ValueError("conversation_max_chars must be positive")
+    if max_skill_context_chars is None:
+        max_skill_context_chars = max_chars - 1
+    if not 0 < max_skill_context_chars < max_chars:
+        raise ValueError("max_skill_context_chars must be positive and below max_chars")
+
+    skills = _skill_section(snapshot.skills)
+    if len(skills) > max_skill_context_chars:
+        raise SkillContextTooLarge("skill_context_too_large")
 
     conversation_budget = min(conversation_max_chars, max_chars // 2)
     conversation = (
@@ -299,7 +338,10 @@ def build_runtime_context(
     # Reserve the bounded conversational window before rendering the large
     # static/runtime document.  Otherwise a full core document can starve the
     # newest dialogue completely.
-    core_max_chars = max_chars - len(conversation) - (2 if conversation else 0)
+    skill_separator = 2 if skills else 0
+    core_max_chars = (
+        max_chars - len(skills) - skill_separator - len(conversation) - (2 if conversation else 0)
+    )
     omitted = _Omitted()
     document = _render(snapshot, tool_manifest, attempt_number, turn_number, omitted)
     while len(document) > core_max_chars:
@@ -310,6 +352,8 @@ def build_runtime_context(
             break
         omitted = next_omitted
         document = _render(snapshot, tool_manifest, attempt_number, turn_number, omitted)
+    if skills:
+        document = f"{document}\n\n{skills}"
     if conversation:
         document = f"{document}\n\n{conversation}"
     if memory_context is not None:

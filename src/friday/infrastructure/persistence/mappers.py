@@ -5,6 +5,8 @@ pair so field renames or type changes surface as a type error at the call
 site, not inside a shared reflection-based converter.
 """
 
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -27,6 +29,8 @@ from friday.domain import (
     Artifact,
     ArtifactId,
     ArtifactKind,
+    CandidateComparisonResult,
+    CandidateRecommendation,
     Conversation,
     ConversationId,
     ConversationInputMode,
@@ -46,6 +50,9 @@ from friday.domain import (
     RunEventId,
     RunEventType,
     RunId,
+    RunSkillBinding,
+    RunSkillResolution,
+    RunSkillResolutionId,
     RunStatus,
     RunStep,
     RunStepId,
@@ -59,13 +66,38 @@ from friday.domain import (
     ScheduleId,
     ScheduleKind,
     ScheduleStatus,
+    SkillCandidateEvaluation,
+    SkillCandidateEvaluationId,
+    SkillEvaluationCase,
+    SkillEvaluationCaseId,
+    SkillEvaluationCaseResult,
+    SkillEvaluationRun,
+    SkillEvaluationRunId,
+    SkillEvaluationSuite,
+    SkillEvaluationSuiteId,
+    SkillEvidenceSnapshot,
+    SkillEvidenceSnapshotId,
     SkillId,
+    SkillImprovementPolicy,
+    SkillImprovementProposal,
+    SkillImprovementProposalId,
+    SkillPromotionRequest,
+    SkillPromotionRequestId,
+    SkillProposalStatus,
     SkillRevisionId,
+    SkillRollbackRequest,
+    SkillRollbackRequestId,
+    SkillRunFeedback,
+    SkillRunFeedbackId,
+    SkillUsageOutcome,
+    SkillUsageRecord,
+    SkillUsageRecordId,
     Task,
     TaskEvent,
     TaskEventId,
     TaskEventType,
     TaskId,
+    TaskSkillBinding,
     TaskStatus,
     ToolInvocation,
     ToolInvocationId,
@@ -77,6 +109,7 @@ from friday.domain.schedule_fire_delivery_plan import (
     ScheduleFireDeliveryPlanStatus,
 )
 from friday.domain.skill import Skill, SkillRevision, SkillRevisionSourceKind, SkillStatus
+from friday.domain.skill_promotion import PromotionRequestStatus, RollbackRequestStatus
 from friday.domain.tool_provenance import ToolProvenance
 from friday.infrastructure.persistence.models import (
     ApprovalRequestRow,
@@ -90,16 +123,31 @@ from friday.infrastructure.persistence.models import (
     OutboundDeliveryRow,
     RunEventRow,
     RunRow,
+    RunSkillBindingRow,
+    RunSkillResolutionRow,
     RunStepRow,
     RunWorkItemRow,
     ScheduleDeliveryPolicyRow,
     ScheduleFireDeliveryPlanRow,
     ScheduleFireRow,
     ScheduleRow,
+    SkillCandidateEvaluationRow,
+    SkillEvaluationCaseResultRow,
+    SkillEvaluationCaseRow,
+    SkillEvaluationRunRow,
+    SkillEvaluationSuiteRow,
+    SkillEvidenceSnapshotRow,
+    SkillImprovementPolicyRow,
+    SkillImprovementProposalRow,
+    SkillPromotionRequestRow,
     SkillRevisionRow,
+    SkillRollbackRequestRow,
     SkillRow,
+    SkillRunFeedbackRow,
+    SkillUsageRecordRow,
     TaskEventRow,
     TaskRow,
+    TaskSkillBindingRow,
     ToolInvocationRow,
 )
 
@@ -153,6 +201,458 @@ def skill_revision_from_row(row: SkillRevisionRow) -> SkillRevision:
         row.content_sha256,
         SkillRevisionSourceKind(row.source_kind),
         read_back_utc(row.created_at),
+    )
+
+
+def task_skill_binding_to_row(value: TaskSkillBinding) -> TaskSkillBindingRow:
+    return TaskSkillBindingRow(
+        task_id=str(value.task_id),
+        skill_id=str(value.skill_id),
+        position=value.position,
+        created_at=value.created_at,
+    )
+
+
+def task_skill_binding_from_row(row: TaskSkillBindingRow) -> TaskSkillBinding:
+    return TaskSkillBinding(
+        TaskId.parse(row.task_id),
+        SkillId.parse(row.skill_id),
+        row.position,
+        read_back_utc(row.created_at),
+    )
+
+
+def run_skill_resolution_to_row(value: RunSkillResolution) -> RunSkillResolutionRow:
+    return RunSkillResolutionRow(
+        id=str(value.id), run_id=str(value.run_id), resolved_at=value.resolved_at
+    )
+
+
+def run_skill_resolution_from_row(row: RunSkillResolutionRow) -> RunSkillResolution:
+    return RunSkillResolution(
+        RunSkillResolutionId.parse(row.id), RunId.parse(row.run_id), read_back_utc(row.resolved_at)
+    )
+
+
+def run_skill_binding_to_row(value: RunSkillBinding) -> RunSkillBindingRow:
+    return RunSkillBindingRow(
+        run_id=str(value.run_id),
+        skill_id=str(value.skill_id),
+        revision_id=str(value.revision_id),
+        position=value.position,
+    )
+
+
+def run_skill_binding_from_row(row: RunSkillBindingRow) -> RunSkillBinding:
+    return RunSkillBinding(
+        RunId.parse(row.run_id),
+        SkillId.parse(row.skill_id),
+        SkillRevisionId.parse(row.revision_id),
+        row.position,
+    )
+
+
+def skill_usage_record_to_row(value: SkillUsageRecord) -> SkillUsageRecordRow:
+    return SkillUsageRecordRow(
+        id=str(value.id),
+        run_id=str(value.run_id),
+        task_id=str(value.task_id),
+        skill_id=str(value.skill_id),
+        revision_id=str(value.revision_id),
+        position=value.position,
+        resolution_id=value.resolution_id,
+        execution_id=str(value.execution_id),
+        attempt_number=value.attempt_number,
+        started_at=value.started_at,
+        completed_at=value.completed_at,
+        outcome=value.outcome.value,
+        failure_code=value.failure_code,
+        tool_call_count=value.tool_call_count,
+        approval_count=value.approval_count,
+        duration_ms=value.duration_ms,
+        created_at=value.created_at,
+    )
+
+
+def skill_usage_record_from_row(row: SkillUsageRecordRow) -> SkillUsageRecord:
+    return SkillUsageRecord(
+        id=SkillUsageRecordId.parse(row.id),
+        run_id=RunId.parse(row.run_id),
+        task_id=TaskId.parse(row.task_id),
+        skill_id=SkillId.parse(row.skill_id),
+        revision_id=SkillRevisionId.parse(row.revision_id),
+        position=row.position,
+        resolution_id=row.resolution_id,
+        execution_id=RunId.parse(row.execution_id),
+        attempt_number=row.attempt_number,
+        started_at=read_back_utc(row.started_at) if row.started_at else None,
+        completed_at=read_back_utc(row.completed_at),
+        outcome=SkillUsageOutcome(row.outcome),
+        failure_code=row.failure_code,
+        tool_call_count=row.tool_call_count,
+        approval_count=row.approval_count,
+        duration_ms=row.duration_ms,
+        created_at=read_back_utc(row.created_at),
+    )
+
+
+def skill_run_feedback_to_row(value: SkillRunFeedback) -> SkillRunFeedbackRow:
+    return SkillRunFeedbackRow(
+        id=str(value.id),
+        run_id=str(value.run_id),
+        skill_id=str(value.skill_id),
+        revision_id=str(value.revision_id),
+        rating=value.rating.value,
+        note=value.note,
+        created_by=value.created_by,
+        created_at=value.created_at,
+    )
+
+
+def skill_run_feedback_from_row(row: SkillRunFeedbackRow) -> SkillRunFeedback:
+    from friday.domain import SkillFeedbackRating
+
+    return SkillRunFeedback(
+        id=SkillRunFeedbackId.parse(row.id),
+        run_id=RunId.parse(row.run_id),
+        skill_id=SkillId.parse(row.skill_id),
+        revision_id=SkillRevisionId.parse(row.revision_id),
+        rating=SkillFeedbackRating(row.rating),
+        note=row.note,
+        created_by=row.created_by,
+        created_at=read_back_utc(row.created_at),
+    )
+
+
+def skill_evaluation_suite_to_row(value: SkillEvaluationSuite) -> SkillEvaluationSuiteRow:
+    return SkillEvaluationSuiteRow(
+        id=str(value.id),
+        skill_id=str(value.skill_id),
+        name=value.name,
+        description=value.description,
+        status=value.status.value,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+    )
+
+
+def skill_evaluation_suite_from_row(row: SkillEvaluationSuiteRow) -> SkillEvaluationSuite:
+    from friday.domain import EvaluationSuiteStatus
+
+    return SkillEvaluationSuite(
+        id=SkillEvaluationSuiteId.parse(row.id),
+        skill_id=SkillId.parse(row.skill_id),
+        name=row.name,
+        description=row.description,
+        status=EvaluationSuiteStatus(row.status),
+        created_at=read_back_utc(row.created_at),
+        updated_at=read_back_utc(row.updated_at),
+    )
+
+
+def skill_evaluation_case_to_row(value: SkillEvaluationCase) -> SkillEvaluationCaseRow:
+    return SkillEvaluationCaseRow(
+        id=str(value.id),
+        suite_id=str(value.suite_id),
+        position=value.position,
+        input=value.input,
+        expected_properties=value.expected_properties,
+        grading_kind=value.grading_kind,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+    )
+
+
+def skill_evaluation_case_from_row(row: SkillEvaluationCaseRow) -> SkillEvaluationCase:
+    return SkillEvaluationCase(
+        id=SkillEvaluationCaseId.parse(row.id),
+        suite_id=SkillEvaluationSuiteId.parse(row.suite_id),
+        position=row.position,
+        input=row.input,
+        expected_properties=cast(JsonValue, row.expected_properties),
+        grading_kind=row.grading_kind,
+        created_at=read_back_utc(row.created_at),
+        updated_at=read_back_utc(row.updated_at),
+    )
+
+
+def skill_evaluation_run_to_row(value: SkillEvaluationRun) -> SkillEvaluationRunRow:
+    return SkillEvaluationRunRow(
+        id=str(value.id),
+        suite_id=str(value.suite_id),
+        skill_id=str(value.skill_id),
+        revision_id=str(value.revision_id) if value.revision_id else None,
+        proposal_id=str(value.proposal_id) if value.proposal_id else None,
+        status=value.status.value,
+        evaluator_version=value.evaluator_version,
+        started_at=value.started_at,
+        completed_at=value.completed_at,
+        aggregate_result=value.aggregate_result,
+        suite_snapshot=value.suite_snapshot,
+        runtime_fingerprint=value.runtime_fingerprint,
+    )
+
+
+def skill_evaluation_run_from_row(row: SkillEvaluationRunRow) -> SkillEvaluationRun:
+    from friday.domain import EvaluationRunStatus
+
+    return SkillEvaluationRun(
+        id=SkillEvaluationRunId.parse(row.id),
+        suite_id=SkillEvaluationSuiteId.parse(row.suite_id),
+        skill_id=SkillId.parse(row.skill_id),
+        revision_id=SkillRevisionId.parse(row.revision_id) if row.revision_id else None,
+        proposal_id=SkillImprovementProposalId.parse(row.proposal_id) if row.proposal_id else None,
+        status=EvaluationRunStatus(row.status),
+        evaluator_version=row.evaluator_version,
+        started_at=read_back_utc(row.started_at),
+        completed_at=read_back_utc(row.completed_at),
+        aggregate_result=cast(JsonValue, row.aggregate_result),
+        suite_snapshot=cast(JsonValue, row.suite_snapshot),
+        runtime_fingerprint=row.runtime_fingerprint,
+    )
+
+
+def skill_evaluation_case_result_to_row(
+    value: SkillEvaluationCaseResult,
+) -> SkillEvaluationCaseResultRow:
+    return SkillEvaluationCaseResultRow(
+        evaluation_run_id=str(value.evaluation_run_id),
+        case_id=str(value.case_id),
+        status=value.status.value,
+        score=value.score,
+        reason_code=value.reason_code,
+        bounded_details=value.bounded_details,
+        output_sha256=value.output_sha256,
+    )
+
+
+def skill_evaluation_case_result_from_row(
+    row: SkillEvaluationCaseResultRow,
+) -> SkillEvaluationCaseResult:
+    from friday.domain import EvaluationRunStatus
+
+    return SkillEvaluationCaseResult(
+        evaluation_run_id=SkillEvaluationRunId.parse(row.evaluation_run_id),
+        case_id=SkillEvaluationCaseId.parse(row.case_id),
+        status=EvaluationRunStatus(row.status),
+        score=row.score,
+        reason_code=row.reason_code,
+        bounded_details=row.bounded_details,
+        output_sha256=row.output_sha256,
+    )
+
+
+def skill_improvement_proposal_to_row(
+    value: SkillImprovementProposal,
+) -> SkillImprovementProposalRow:
+    return SkillImprovementProposalRow(
+        id=str(value.id),
+        skill_id=str(value.skill_id),
+        base_revision_id=str(value.base_revision_id),
+        status=value.status.value,
+        trigger_kind=value.trigger_kind,
+        evidence_snapshot_id=str(value.evidence_snapshot_id),
+        evidence_snapshot_hash=value.evidence_snapshot_hash,
+        proposed_instructions=value.proposed_instructions,
+        proposed_content_sha256=value.proposed_content_sha256,
+        rationale=value.rationale,
+        generator_version=value.generator_version,
+        created_at=value.created_at,
+    )
+
+
+def skill_improvement_proposal_from_row(
+    row: SkillImprovementProposalRow,
+) -> SkillImprovementProposal:
+    if row.evidence_snapshot_id is None:
+        raise ValueError("legacy proposal is missing its evidence snapshot link")
+    return SkillImprovementProposal(
+        id=SkillImprovementProposalId.parse(row.id),
+        skill_id=SkillId.parse(row.skill_id),
+        base_revision_id=SkillRevisionId.parse(row.base_revision_id),
+        status=SkillProposalStatus(row.status),
+        trigger_kind=row.trigger_kind,
+        evidence_snapshot_id=SkillEvidenceSnapshotId.parse(row.evidence_snapshot_id),
+        evidence_snapshot_hash=row.evidence_snapshot_hash,
+        proposed_instructions=row.proposed_instructions,
+        proposed_content_sha256=row.proposed_content_sha256,
+        rationale=row.rationale,
+        generator_version=row.generator_version,
+        created_at=read_back_utc(row.created_at),
+    )
+
+
+def skill_candidate_evaluation_to_row(
+    value: SkillCandidateEvaluation,
+) -> SkillCandidateEvaluationRow:
+    return SkillCandidateEvaluationRow(
+        id=str(value.id),
+        proposal_id=str(value.proposal_id),
+        baseline_evaluation_run_id=str(value.baseline_evaluation_run_id),
+        candidate_evaluation_run_id=str(value.candidate_evaluation_run_id),
+        comparison_policy_version=value.comparison_policy_version,
+        result=value.result.value,
+        recommendation=value.recommendation.value,
+        score_delta=value.score_delta,
+        regression_count=value.regression_count,
+        improvement_count=value.improvement_count,
+        inconclusive_count=value.inconclusive_count,
+        report_sha256=value.report_sha256,
+        created_at=value.created_at,
+    )
+
+
+def skill_candidate_evaluation_from_row(
+    row: SkillCandidateEvaluationRow,
+) -> SkillCandidateEvaluation:
+    return SkillCandidateEvaluation(
+        id=SkillCandidateEvaluationId.parse(row.id),
+        proposal_id=SkillImprovementProposalId.parse(row.proposal_id),
+        baseline_evaluation_run_id=SkillEvaluationRunId.parse(row.baseline_evaluation_run_id),
+        candidate_evaluation_run_id=SkillEvaluationRunId.parse(row.candidate_evaluation_run_id),
+        comparison_policy_version=row.comparison_policy_version,
+        result=CandidateComparisonResult(row.result),
+        recommendation=CandidateRecommendation(row.recommendation),
+        score_delta=row.score_delta,
+        regression_count=row.regression_count,
+        improvement_count=row.improvement_count,
+        inconclusive_count=row.inconclusive_count,
+        report_sha256=row.report_sha256,
+        created_at=read_back_utc(row.created_at),
+    )
+
+
+def skill_promotion_request_to_row(value: SkillPromotionRequest) -> SkillPromotionRequestRow:
+    return SkillPromotionRequestRow(
+        id=str(value.id),
+        proposal_id=str(value.proposal_id),
+        skill_id=str(value.skill_id),
+        base_revision_id=str(value.base_revision_id),
+        expected_active_revision_id=str(value.expected_active_revision_id),
+        candidate_sha256=value.candidate_sha256,
+        candidate_evaluation_id=str(value.candidate_evaluation_id),
+        comparison_report_sha256=value.comparison_report_sha256,
+        target_version=value.target_version,
+        authorization_fingerprint=value.authorization_fingerprint,
+        status=value.status.value,
+        created_at=value.created_at,
+        resolved_at=value.resolved_at,
+        resolver=value.resolver,
+        promoted_revision_id=str(value.promoted_revision_id)
+        if value.promoted_revision_id
+        else None,
+    )
+
+
+def skill_promotion_request_from_row(row: SkillPromotionRequestRow) -> SkillPromotionRequest:
+    return SkillPromotionRequest(
+        id=SkillPromotionRequestId.parse(row.id),
+        proposal_id=SkillImprovementProposalId.parse(row.proposal_id),
+        skill_id=SkillId.parse(row.skill_id),
+        base_revision_id=SkillRevisionId.parse(row.base_revision_id),
+        expected_active_revision_id=SkillRevisionId.parse(row.expected_active_revision_id),
+        candidate_sha256=row.candidate_sha256,
+        candidate_evaluation_id=SkillCandidateEvaluationId.parse(row.candidate_evaluation_id),
+        comparison_report_sha256=row.comparison_report_sha256,
+        target_version=row.target_version,
+        authorization_fingerprint=row.authorization_fingerprint,
+        status=PromotionRequestStatus(row.status),
+        created_at=read_back_utc(row.created_at),
+        resolved_at=read_back_utc(row.resolved_at) if row.resolved_at else None,
+        resolver=row.resolver,
+        promoted_revision_id=SkillRevisionId.parse(row.promoted_revision_id)
+        if row.promoted_revision_id
+        else None,
+    )
+
+
+def skill_rollback_request_to_row(value: SkillRollbackRequest) -> SkillRollbackRequestRow:
+    return SkillRollbackRequestRow(
+        id=str(value.id),
+        skill_id=str(value.skill_id),
+        expected_current_revision_id=str(value.expected_current_revision_id),
+        target_revision_id=str(value.target_revision_id),
+        reason=value.reason,
+        authorization_fingerprint=value.authorization_fingerprint,
+        status=value.status.value,
+        created_at=value.created_at,
+        resolved_at=value.resolved_at,
+        resolver=value.resolver,
+    )
+
+
+def skill_rollback_request_from_row(row: SkillRollbackRequestRow) -> SkillRollbackRequest:
+    return SkillRollbackRequest(
+        id=SkillRollbackRequestId.parse(row.id),
+        skill_id=SkillId.parse(row.skill_id),
+        expected_current_revision_id=SkillRevisionId.parse(row.expected_current_revision_id),
+        target_revision_id=SkillRevisionId.parse(row.target_revision_id),
+        reason=row.reason,
+        authorization_fingerprint=row.authorization_fingerprint,
+        status=RollbackRequestStatus(row.status),
+        created_at=read_back_utc(row.created_at),
+        resolved_at=read_back_utc(row.resolved_at) if row.resolved_at else None,
+        resolver=row.resolver,
+    )
+
+
+def skill_improvement_policy_to_row(value: SkillImprovementPolicy) -> SkillImprovementPolicyRow:
+    return SkillImprovementPolicyRow(
+        skill_id=str(value.skill_id),
+        enabled=value.enabled,
+        minimum_usage_records=value.minimum_usage_records,
+        minimum_failures=value.minimum_failures,
+        minimum_harmful_feedback=value.minimum_harmful_feedback,
+        evaluation_suite_id=str(value.evaluation_suite_id),
+        cooldown_seconds=value.cooldown_seconds,
+        max_open_proposals=value.max_open_proposals,
+        evidence_window_size=value.evidence_window_size,
+        generator_version=value.generator_version,
+        comparison_policy_version=value.comparison_policy_version,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+        last_triggered_at=value.last_triggered_at,
+    )
+
+
+def skill_improvement_policy_from_row(row: SkillImprovementPolicyRow) -> SkillImprovementPolicy:
+    return SkillImprovementPolicy(
+        skill_id=SkillId.parse(row.skill_id),
+        enabled=row.enabled,
+        minimum_usage_records=row.minimum_usage_records,
+        minimum_failures=row.minimum_failures,
+        minimum_harmful_feedback=row.minimum_harmful_feedback,
+        evaluation_suite_id=SkillEvaluationSuiteId.parse(row.evaluation_suite_id),
+        cooldown_seconds=row.cooldown_seconds,
+        max_open_proposals=row.max_open_proposals,
+        evidence_window_size=row.evidence_window_size,
+        generator_version=row.generator_version,
+        comparison_policy_version=row.comparison_policy_version,
+        created_at=read_back_utc(row.created_at),
+        updated_at=read_back_utc(row.updated_at),
+        last_triggered_at=read_back_utc(row.last_triggered_at) if row.last_triggered_at else None,
+    )
+
+
+def skill_evidence_snapshot_to_row(value: SkillEvidenceSnapshot) -> SkillEvidenceSnapshotRow:
+    return SkillEvidenceSnapshotRow(
+        id=str(value.id),
+        skill_id=str(value.skill_id),
+        base_revision_id=str(value.base_revision_id),
+        evidence=value.evidence,
+        content_sha256=value.content_sha256,
+        created_at=value.created_at,
+    )
+
+
+def skill_evidence_snapshot_from_row(row: SkillEvidenceSnapshotRow) -> SkillEvidenceSnapshot:
+    return SkillEvidenceSnapshot(
+        id=SkillEvidenceSnapshotId.parse(row.id),
+        skill_id=SkillId.parse(row.skill_id),
+        base_revision_id=SkillRevisionId.parse(row.base_revision_id),
+        evidence=cast(JsonValue, row.evidence),
+        content_sha256=row.content_sha256,
+        created_at=read_back_utc(row.created_at),
     )
 
 

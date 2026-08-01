@@ -14,6 +14,11 @@ from apps.api.pagination import (
     page_from_query,
 )
 from apps.api.schemas.runs import RunPageResponse, RunResponse, RunResultResponse
+from apps.api.schemas.skills import (
+    AddSkillFeedbackBody,
+    RunSkillBindingResponse,
+    SkillFeedbackResponse,
+)
 from apps.api.schemas.tasks import FailureBody
 from friday.application.commands import (
     CancelRunCommand,
@@ -36,12 +41,77 @@ from friday.application.run_lifecycle import (
     RetryFailedRun,
     StartQueuedRun,
 )
+from friday.application.skill_usage import AddSkillRunFeedback
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import RunId, TaskId
+from friday.domain.identifiers import RunId, SkillId, TaskId
+from friday.domain.skill_usage import SkillFeedbackRating
 
 router = APIRouter(prefix="/v1", tags=["runs"])
 UowDependency = Annotated[UnitOfWorkFactory, Depends(get_uow_factory)]
 ClockDependency = Annotated[Clock, Depends(get_clock)]
+
+
+@router.get("/runs/{run_id}/skills", response_model=list[RunSkillBindingResponse])
+def list_run_skills(run_id: UUID, uow_factory: UowDependency) -> list[RunSkillBindingResponse]:
+    with uow_factory() as uow:
+        return [
+            RunSkillBindingResponse(
+                run_id=str(x.run_id),
+                skill_id=str(x.skill_id),
+                revision_id=str(x.revision_id),
+                position=x.position,
+            )
+            for x in uow.run_skill_bindings.list_for_run(RunId.parse(str(run_id)))
+        ]
+
+
+@router.post("/runs/{run_id}/skills/{skill_id}/feedback", response_model=SkillFeedbackResponse)
+def add_skill_feedback(
+    run_id: UUID,
+    skill_id: UUID,
+    body: AddSkillFeedbackBody,
+    uow_factory: UowDependency,
+    clock: ClockDependency,
+) -> SkillFeedbackResponse:
+    feedback = AddSkillRunFeedback(uow_factory, clock).execute(
+        run_id=RunId.parse(str(run_id)),
+        skill_id=SkillId.parse(str(skill_id)),
+        rating=SkillFeedbackRating(body.rating),
+        note=body.note,
+        created_by=body.created_by,
+    )
+    return SkillFeedbackResponse(
+        id=str(feedback.id),
+        run_id=str(feedback.run_id),
+        skill_id=str(feedback.skill_id),
+        revision_id=str(feedback.revision_id),
+        rating=feedback.rating.value,
+        note=feedback.note,
+        created_by=feedback.created_by,
+        created_at=feedback.created_at,
+    )
+
+
+@router.get("/runs/{run_id}/skills/{skill_id}/feedback", response_model=list[SkillFeedbackResponse])
+def list_skill_feedback(
+    run_id: UUID, skill_id: UUID, uow_factory: UowDependency
+) -> list[SkillFeedbackResponse]:
+    with uow_factory() as uow:
+        return [
+            SkillFeedbackResponse(
+                id=str(x.id),
+                run_id=str(x.run_id),
+                skill_id=str(x.skill_id),
+                revision_id=str(x.revision_id),
+                rating=x.rating.value,
+                note=x.note,
+                created_by=x.created_by,
+                created_at=x.created_at,
+            )
+            for x in uow.skill_run_feedback.list_for_run_skill(
+                RunId.parse(str(run_id)), SkillId.parse(str(skill_id))
+            )
+        ]
 
 
 def _run_response(result: RunResult) -> RunResponse:

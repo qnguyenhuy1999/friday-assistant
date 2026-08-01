@@ -21,6 +21,7 @@ from friday.application.worker_coordination import (
     RequeueClaimedRun,
 )
 from friday.application.worker_maintenance import (
+    EvaluateDueSkillImprovementPolicies,
     ExpireDueApprovals,
     MaterializeScheduledAnswerDeliveries,
     RecoverExpiredLeases,
@@ -58,6 +59,7 @@ class WorkerLoop:
         memory_index_maintenance_interval_seconds: float | None = None,
         materialize_due_schedules: MaterializeDueSchedules | None = None,
         materialize_scheduled_answers: MaterializeScheduledAnswerDeliveries | None = None,
+        evaluate_due_skill_policies: EvaluateDueSkillImprovementPolicies | None = None,
         delivery_worker: OutboundDeliveryWorker | None = None,
     ) -> None:
         self._claim_next_run = claim_next_run
@@ -70,6 +72,7 @@ class WorkerLoop:
         self._expire_due_approvals = expire_due_approvals
         self._materialize_due_schedules = materialize_due_schedules
         self._materialize_scheduled_answers = materialize_scheduled_answers
+        self._evaluate_due_skill_policies = evaluate_due_skill_policies
         self._delivery_worker = delivery_worker
         self._clock = clock
         self._refresh_memory_index = refresh_memory_index
@@ -272,6 +275,21 @@ class WorkerLoop:
         except Exception:  # noqa: BLE001 - maintenance jobs are isolated from one another
             approvals = []
             lifecycle_log(logger, logging.WARNING, "worker.approval_expiry_failed")
+        try:
+            skill_policies_due = (
+                self._evaluate_due_skill_policies.execute()
+                if self._evaluate_due_skill_policies
+                else 0
+            )
+        except Exception:  # noqa: BLE001 - policy maintenance is isolated
+            lifecycle_log(logger, logging.WARNING, "skill_improvement.policy_maintenance_failed")
+        else:
+            lifecycle_log(
+                logger,
+                logging.INFO,
+                "skill_improvement.policies_due",
+                policy_count=skill_policies_due,
+            )
         lifecycle_log(
             logger, logging.INFO, "worker.expired_leases_recovered", recovered_count=recovered
         )

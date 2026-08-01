@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import unicodedata
+from typing import cast
 
 from friday.application.approval_workflow import ExpireApproval
 from friday.application.commands import ExpireApprovalCommand
@@ -11,14 +12,38 @@ from friday.application.errors import EntityConflict
 from friday.application.list_events import canonical_final_agent_summary
 from friday.application.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from friday.application.results import ApprovalRequestResult
+from friday.application.skill_evaluation import (
+    BrainOnlySkillEvaluator,
+    CompareSkillImprovementProposal,
+    DeterministicEvaluatorRegistry,
+    RunBrainOnlySkillEvaluation,
+)
+from friday.application.skill_improvement import (
+    BrainOnlyCandidateGenerator,
+    CreateSkillEvidenceSnapshot,
+    CreateSkillImprovementProposal,
+    GenerateSkillImprovementProposal,
+)
+from friday.application.skill_improvement_policy import (
+    MarkSkillImprovementPolicyTriggered,
+    RunSkillImprovementPolicyNow,
+)
 from friday.domain.event import RunEventType
-from friday.domain.identifiers import DeliveryId, RunId, ScheduleFireId
+from friday.domain.identifiers import (
+    DeliveryId,
+    RunId,
+    ScheduleFireId,
+    SkillId,
+    SkillImprovementProposalId,
+)
+from friday.domain.json_value import JsonValue
 from friday.domain.outbound_delivery import MAX_BODY_LENGTH, DeliverySourceKind, OutboundDelivery
 from friday.domain.run import TERMINAL_RUN_STATUSES, RunStatus
 from friday.domain.schedule_fire_delivery_plan import (
     ScheduleFireDeliveryContentSource,
     ScheduleFireDeliveryPlanStatus,
 )
+from friday.domain.skill_improvement import SkillImprovementProposal
 
 logger = logging.getLogger(__name__)
 
@@ -173,3 +198,134 @@ class ExpireDueApprovals:
             except EntityConflict:
                 continue
         return results
+
+
+class EvaluateDueSkillImprovementPolicies:
+    """Create inert candidates from frozen, policy-selected evidence only."""
+
+    def __init__(
+        self,
+        uow_factory: UnitOfWorkFactory,
+        clock: Clock,
+        *,
+        batch_size: int,
+        candidate_generator: BrainOnlyCandidateGenerator | None = None,
+        candidate_evaluator: BrainOnlySkillEvaluator | None = None,
+    ) -> None:
+        self._uow_factory, self._clock, self._batch_size = uow_factory, clock, batch_size
+        self._candidate_generator = candidate_generator
+        self._candidate_evaluator = candidate_evaluator
+
+    def execute(self) -> int:
+        with self._uow_factory() as uow:
+            policies = uow.skill_improvement_policies.list_enabled(self._batch_size)
+            skill_ids = [policy.skill_id for policy in policies]
+        due = RunSkillImprovementPolicyNow(self._uow_factory, self._clock)
+        completed = 0
+        for skill_id in skill_ids:
+            try:
+                if not due.execute(skill_id, record_trigger=self._candidate_generator is None):
+                    continue
+                if self._candidate_generator is None:
+                    completed += 1
+                    continue
+                proposal = self._generate_one(skill_id)
+                if self._candidate_evaluator is not None:
+                    self._evaluate_one(skill_id, proposal.id)
+                MarkSkillImprovementPolicyTriggered(self._uow_factory, self._clock).execute(
+                    skill_id
+                )
+                completed += 1
+            except Exception:  # noqa: BLE001 - one skill cannot block maintenance
+                logger.warning(
+                    "skill_improvement.policy_candidate_failed",
+                    extra={"skill_id": str(skill_id)},
+                )
+        return completed
+
+    def _generate_one(self, skill_id: SkillId) -> SkillImprovementProposal:
+        with self._uow_factory() as uow:
+            policy = uow.skill_improvement_policies.get(skill_id)
+            skill = uow.skills.get(skill_id)
+            if policy is None or skill is None or skill.active_revision_id is None:
+                raise EntityConflict("due policy requires an active skill revision")
+            base = uow.skill_revisions.get(skill.active_revision_id)
+            if base is None:
+                raise EntityConflict("active skill revision was not found")
+            usage = [
+                item
+                for item in uow.skill_usage_records.list_for_skill(
+                    skill_id, policy.evidence_window_size
+                )
+                if item.revision_id == base.id
+            ]
+            feedback = [
+                item
+                for usage_item in usage
+                for item in uow.skill_run_feedback.list_for_run_skill(usage_item.run_id, skill_id)
+                if item.revision_id == base.id
+            ]
+            evidence_ids = {f"usage:{item.id}" for item in usage}
+            evidence_ids.update(f"feedback:{item.id}" for item in feedback)
+            evidence = {
+                "usage": [
+                    {
+                        "id": f"usage:{item.id}",
+                        "outcome": item.outcome.value,
+                        "failure_code": item.failure_code,
+                        "tool_call_count": item.tool_call_count,
+                        "approval_count": item.approval_count,
+                        "duration_ms": item.duration_ms,
+                    }
+                    for item in usage
+                ],
+                "feedback": [
+                    {"id": f"feedback:{item.id}", "rating": item.rating.value, "note": item.note}
+                    for item in feedback
+                ],
+            }
+            feedback_summaries = tuple(
+                f"{item.rating.value}:{item.note}"[:4096] for item in feedback
+            )
+            base_id, base_instructions = base.id, base.instructions
+            generator_version = policy.generator_version
+        snapshot = CreateSkillEvidenceSnapshot(self._uow_factory, self._clock).execute(
+            skill_id=skill_id, base_revision_id=base_id, evidence=cast(JsonValue, evidence)
+        )
+        assert self._candidate_generator is not None
+        return GenerateSkillImprovementProposal(
+            self._candidate_generator,
+            CreateSkillImprovementProposal(self._uow_factory, self._clock),
+        ).execute(
+            skill_id=skill_id,
+            base_revision_id=base_id,
+            trigger_kind="policy",
+            evidence_snapshot_id=snapshot.id,
+            evidence_snapshot_hash=snapshot.content_sha256,
+            evidence_ids=evidence_ids,
+            feedback_summaries=feedback_summaries,
+            evaluator_summaries=(),
+            generator_version=generator_version,
+            base_instructions=base_instructions,
+        )
+
+    def _evaluate_one(self, skill_id: SkillId, proposal_id: SkillImprovementProposalId) -> None:
+        with self._uow_factory() as uow:
+            policy = uow.skill_improvement_policies.get(skill_id)
+            proposal = uow.skill_improvement_proposals.get(proposal_id)
+            if policy is None or proposal is None:
+                raise EntityConflict("proposal evaluation inputs disappeared")
+            suite_id, base_revision_id = policy.evaluation_suite_id, proposal.base_revision_id
+        assert self._candidate_evaluator is not None
+        registry = DeterministicEvaluatorRegistry()
+        runner = RunBrainOnlySkillEvaluation(
+            self._uow_factory, self._clock, registry, self._candidate_evaluator
+        )
+        baseline = runner.execute(suite_id=suite_id, revision_id=base_revision_id)
+        candidate = runner.execute(suite_id=suite_id, proposal_id=proposal_id)
+        CompareSkillImprovementProposal(self._uow_factory, self._clock, registry).execute(
+            proposal_id=proposal_id,
+            baseline_evaluation_run_id=baseline.id,
+            candidate_evaluation_run_id=candidate.id,
+            comparison_policy_version=policy.comparison_policy_version,
+        )

@@ -104,7 +104,7 @@ reverse.
 
 ## Status
 
-Implemented through **Phase 20 Step 1 — Versioned Skill Registry**:
+Implemented through **Phase 20 — Skills & Self-Improvement Loop**:
 
 - **Phase 4–5** — framework-independent domain model, application ports, JSON
   Schema contracts, and the SQLite persistence adapter (see
@@ -132,10 +132,11 @@ Implemented through **Phase 20 Step 1 — Versioned Skill Registry**:
 - **Phase 19** — durable outbound messaging and scheduled delivery with
   per-fire authority snapshots (see
   [messaging-and-scheduled-delivery.md](messaging-and-scheduled-delivery.md)).
-- **Phase 20 Step 1** — versioned skill registry with immutable, hash-checked
-  revisions and a database-enforced active-revision ownership fence (see
+- **Phase 20** — immutable versioned Skills, task binding and run freezing,
+  bounded runtime injection, factual usage evidence, deterministic isolated
+  evaluation, brain-only candidate proposals, exact-intent promotion and
+  rollback, and policy-driven proposal generation (see
   [phase-20-skills.md](phase-20-skills.md)).
 
-Remaining core work adds Phase 20 skill resolution/self-improvement and Phase 21
-multi-agent delegation. None of those are implemented yet.
+Remaining core work is Phase 21 multi-agent delegation.
 The adapter and migration behavior are covered by `tests/persistence`.

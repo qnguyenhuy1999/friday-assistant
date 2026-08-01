@@ -59,7 +59,7 @@ def test_exact_approved_promotion_creates_and_activates_one_generated_revision()
     uow.skill_evaluation_suites.add(suite)
     uow.skill_evaluation_cases.add(case)
     baseline = RunSkillEvaluation(factory, clock, DeterministicEvaluatorRegistry()).execute(
-        suite_id=suite.id, revision_id=base.id, outputs={str(case.id): "ok"}
+        suite_id=suite.id, revision_id=base.id, outputs={str(case.id): "bad"}
     )
     snapshot = CreateSkillEvidenceSnapshot(factory, clock).execute(
         skill_id=skill.id,
@@ -73,7 +73,7 @@ def test_exact_approved_promotion_creates_and_activates_one_generated_revision()
         evidence_snapshot_id=snapshot.id,
         evidence_snapshot_hash=snapshot.content_sha256,
         evidence_ids={"e"},
-        generator_version="v1",
+        generator_version="brain-candidate-generator-v2",
         raw_candidate=(
             '{"version":1,"proposed_instructions":"better","rationale":"r",'
             '"addressed_evidence_ids":["e"]}'

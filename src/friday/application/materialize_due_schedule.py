@@ -75,6 +75,7 @@ class MaterializeDueSchedules:
                     return False
                 occurrence = schedule.next_fire_at
                 result = StartRun.execute_in_uow(uow, task, now)
+                assert result.run_id is not None
                 root_run = uow.runs.get(result.run_id)
                 if root_run is None or root_run.id != root_run.execution_id:
                     raise EntityConflict("scheduled fire requires a root execution run")

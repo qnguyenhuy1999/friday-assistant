@@ -6,7 +6,12 @@ Re-exports the public domain surface; internal helpers are not re-exported.
 
 from __future__ import annotations
 
-from friday.domain.approval import ApprovalCategory, ApprovalRequest, ApprovalStatus
+from friday.domain.approval import (
+    ApprovalCategory,
+    ApprovalRequest,
+    ApprovalStatus,
+    ApprovalSubjectKind,
+)
 from friday.domain.artifact import Artifact, ArtifactKind
 from friday.domain.conversation import Conversation, ConversationInputMode
 from friday.domain.conversation_turn import ConversationTurn
@@ -35,6 +40,7 @@ from friday.domain.identifiers import (
     SkillEvidenceSnapshotId,
     SkillId,
     SkillImprovementProposalId,
+    SkillImprovementWorkId,
     SkillPromotionRequestId,
     SkillRevisionId,
     SkillRollbackRequestId,
@@ -84,6 +90,11 @@ from friday.domain.skill_evaluation import (
 from friday.domain.skill_evidence_snapshot import SkillEvidenceSnapshot
 from friday.domain.skill_improvement import SkillImprovementProposal, SkillProposalStatus
 from friday.domain.skill_improvement_policy import SkillImprovementPolicy
+from friday.domain.skill_improvement_work import (
+    ACTIVE_IMPROVEMENT_WORK_STATES,
+    SkillImprovementWork,
+    SkillImprovementWorkState,
+)
 from friday.domain.skill_promotion import (
     PromotionRequestStatus,
     RollbackRequestStatus,
@@ -107,6 +118,7 @@ __all__ = [
     "ApprovalRequest",
     "ApprovalRequestId",
     "ApprovalStatus",
+    "ApprovalSubjectKind",
     "Artifact",
     "ArtifactId",
     "ArtifactKind",
@@ -168,6 +180,10 @@ __all__ = [
     "SkillRunFeedbackId",
     "SkillUsageOutcome",
     "SkillUsageRecord",
+    "SkillImprovementWork",
+    "SkillImprovementWorkId",
+    "SkillImprovementWorkState",
+    "ACTIVE_IMPROVEMENT_WORK_STATES",
     "SkillUsageRecordId",
     "EvaluationRunStatus",
     "EvaluationSuiteStatus",

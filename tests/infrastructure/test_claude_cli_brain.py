@@ -7,6 +7,7 @@ and the single bounded repair attempt."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -25,10 +26,16 @@ from friday.application.errors import (
 )
 from friday.application.runtime_actions import FinishAction, InvokeToolAction
 from friday.application.skill_evaluation import BrainOnlyEvaluationRequest
+from friday.application.skill_improvement import CandidateGenerationRequest
 from friday.application.tool_gateway import ToolDescriptor
-from friday.domain.identifiers import RunId, TaskId
+from friday.domain.identifiers import RunId, SkillEvidenceSnapshotId, SkillRevisionId, TaskId
+from friday.domain.json_value import JsonValue
+from friday.domain.skill_evidence_snapshot import evidence_payload_hash
 from friday.infrastructure.brain.claude_cli import (
+    _SYSTEM_PROMPT,
+    CANDIDATE_SYSTEM_PROMPT,
     ENVIRONMENT_ALLOWLIST,
+    EVALUATION_SYSTEM_PROMPT,
     ClaudeCliBrainRuntime,
     ClaudeCliSettings,
 )
@@ -165,6 +172,56 @@ def test_brain_only_evaluation_requires_exact_frozen_case_output_map(tmp_path: P
     prompt = json.loads((record / "stdin-0.txt").read_text())
     assert prompt["instructions"] == "be precise"
     assert prompt["cases"] == [{"id": "case-a", "input": "question"}]
+    argv = json.loads((record / "argv-0.json").read_text())
+    assert argv[argv.index("--system-prompt") + 1] == EVALUATION_SYSTEM_PROMPT
+
+
+def test_brain_only_candidate_uses_its_dedicated_protocol_and_provenance_prompt(
+    tmp_path: Path,
+) -> None:
+    snapshot: JsonValue = {
+        "version": 1,
+        "entries": [{"id": "manual:one", "kind": "manual", "payload": {"note": "x"}}],
+    }
+    base_instructions = "base instructions"
+    executable, record = make_fake(
+        tmp_path,
+        stdouts=[
+            envelope(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "proposed_instructions": "better instructions",
+                        "rationale": "r",
+                        "addressed_evidence_ids": ["manual:one"],
+                    }
+                )
+            )
+        ],
+    )
+    request = CandidateGenerationRequest(
+        base_instructions=base_instructions,
+        evidence_snapshot_hash=evidence_payload_hash(snapshot),
+        evidence_ids=("manual:one",),
+        feedback_summaries=(),
+        evaluator_summaries=(),
+        snapshot_id=SkillEvidenceSnapshotId.new(),
+        snapshot_payload=snapshot,
+        base_revision_id=SkillRevisionId.new(),
+        base_content_sha256=hashlib.sha256(base_instructions.encode("utf-8")).hexdigest(),
+    )
+    runtime = ClaudeCliBrainRuntime(settings(executable))
+    raw = runtime.generate_candidate(request)
+    assert json.loads(raw)["proposed_instructions"] == "better instructions"
+    argv = json.loads((record / "argv-0.json").read_text())
+    system_prompt = argv[argv.index("--system-prompt") + 1]
+    assert system_prompt == CANDIDATE_SYSTEM_PROMPT
+    assert system_prompt != EVALUATION_SYSTEM_PROMPT
+    assert system_prompt != _SYSTEM_PROMPT
+    prompt = json.loads((record / "stdin-0.txt").read_text())
+    assert prompt["evidence_snapshot"] == snapshot
+    assert prompt["evidence_snapshot_hash"] == request.evidence_snapshot_hash
+    assert prompt["base_instructions"] == base_instructions
 
 
 def test_brain_only_evaluation_rejects_missing_or_extra_case_outputs(tmp_path: Path) -> None:
@@ -272,7 +329,7 @@ def test_stdin_write_never_blocks_past_the_deadline_on_a_stalled_child(
     runtime = ClaudeCliBrainRuntime(settings(str(script), timeout_seconds=0.3))
     big_context = "x" * (2 * 1024 * 1024)
     start = time.monotonic()
-    with pytest.raises(BrainTimeout):
+    with pytest.raises(BrainProtocolError, match="prompt input exceeded"):
         runtime.next_action(request(context=big_context))
     assert time.monotonic() - start < 2.0
 

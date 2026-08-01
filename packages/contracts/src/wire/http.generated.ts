@@ -60,13 +60,14 @@ export interface RunStep {
 
 export interface ApprovalRequest {
   approval_id: string;
-  run_id: string;
+  run_id: string | null;
   step_id: string | null;
   category:
     | "tool_execution"
     | "filesystem_write"
     | "network_access"
     | "computer_use"
+    | "external_communication"
     | "other";
   summary: string;
   reason: string;
@@ -80,6 +81,8 @@ export interface ApprovalRequest {
   resolver: string | null;
   authorization_fingerprint: string | null;
   consumed_at: string | null;
+  subject_kind: "run" | "skill_promotion" | "skill_rollback";
+  subject_id: string;
 }
 
 export interface ToolInvocation {
@@ -232,6 +235,211 @@ export interface SkillRevision {
   content_sha256: string;
   source_kind: "operator" | "imported";
   created_at: string;
+}
+
+export interface TaskSkillBinding {
+  task_id: string;
+  skill_id: string;
+  position: number;
+  created_at: string;
+}
+
+export interface RunSkillAuditItem {
+  skill_id: string;
+  skill_key: string;
+  revision_id: string;
+  version: number;
+  instructions: string;
+  content_sha256: string;
+  source_kind: "operator" | "imported" | "generated";
+  position: number;
+}
+
+export interface RunSkillBinding {
+  run_id: string;
+  resolved: boolean;
+  resolved_at: string | null;
+  items: Array<RunSkillAuditItem>;
+}
+
+export interface SkillUsageRecord {
+  id: string;
+  run_id: string;
+  task_id: string;
+  skill_id: string;
+  revision_id: string;
+  position: number;
+  resolution_id: string;
+  execution_id: string;
+  attempt_number: number;
+  started_at: string | null;
+  outcome: "succeeded" | "failed" | "cancelled" | "resolution_failed";
+  failure_code: string | null;
+  tool_call_count: number;
+  approval_count: number;
+  duration_ms: number | null;
+  completed_at: string;
+  created_at: string;
+}
+
+export interface SkillFeedback {
+  id: string;
+  run_id: string;
+  skill_id: string;
+  revision_id: string;
+  rating: "helpful" | "neutral" | "harmful";
+  note: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface SkillEvidenceSnapshot {
+  id: string;
+  skill_id: string;
+  base_revision_id: string;
+  content_sha256: string;
+  evidence: Record<string, never>;
+  created_at: string;
+}
+
+export interface ImprovementProposal {
+  id: string;
+  skill_id: string;
+  base_revision_id: string;
+  status:
+    | "draft"
+    | "ready_for_evaluation"
+    | "evaluating"
+    | "ready_for_review"
+    | "approved"
+    | "rejected"
+    | "superseded"
+    | "cancelled"
+    | "expired"
+    | "promoted";
+  evidence_snapshot_id: string;
+  evidence_snapshot_hash: string;
+  proposed_instructions: string;
+  proposed_content_sha256: string;
+  rationale: string;
+  generator_version: string;
+  created_at: string;
+}
+
+export interface EvaluationCase {
+  id: string;
+  suite_id: string;
+  position: number;
+  input: string;
+  expected_properties: Record<string, never>;
+  grading_kind:
+    | "exact_match"
+    | "contains_all"
+    | "contains_none"
+    | "json_schema"
+    | "required_keys"
+    | "tool_proposal_shape";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvaluationSuite {
+  id: string;
+  skill_id: string;
+  name: string;
+  description: string;
+  status: "active" | "disabled";
+  created_at: string;
+  updated_at: string;
+  cases: Array<EvaluationCase>;
+}
+
+export interface EvaluationCaseResult {
+  evaluation_run_id: string;
+  case_id: string;
+  status: "succeeded" | "failed";
+  score: number;
+  reason_code: string | null;
+  bounded_details: string;
+  output_sha256: string;
+}
+
+export interface EvaluationRun {
+  id: string;
+  suite_id: string;
+  skill_id: string;
+  revision_id: string | null;
+  proposal_id: string | null;
+  status: "succeeded" | "failed";
+  aggregate_result: Record<string, never>;
+  runtime_fingerprint: string;
+  target_content_sha256: string;
+  runtime_metadata: Record<string, never>;
+  suite_snapshot: Record<string, never>;
+  case_results: Array<EvaluationCaseResult>;
+}
+
+export interface CandidateEvaluation {
+  id: string;
+  proposal_id: string;
+  baseline_evaluation_run_id: string;
+  candidate_evaluation_run_id: string;
+  comparison_policy_version: string;
+  result: "better" | "worse" | "equivalent" | "mixed" | "inconclusive";
+  recommendation: "eligible" | "not_eligible" | "requires_manual_override";
+  score_delta: number;
+  regression_count: number;
+  improvement_count: number;
+  inconclusive_count: number;
+  report_sha256: string;
+  comparison_report: Record<string, never>;
+}
+
+export interface SkillPromotion {
+  id: string;
+  proposal_id: string;
+  skill_id: string;
+  status:
+    "pending" | "approved" | "rejected" | "stale" | "cancelled" | "promoted";
+  authorization_fingerprint: string;
+  target_version: number;
+  promoted_revision_id: string | null;
+  approval_request_id: string | null;
+  candidate_instructions: string;
+  candidate_sha256: string;
+  evidence_snapshot_id: string;
+  evidence_snapshot_hash: string;
+  comparison_report: Record<string, never>;
+  recommendation: string;
+}
+
+export interface SkillRollback {
+  id: string;
+  skill_id: string;
+  expected_current_revision_id: string;
+  target_revision_id: string;
+  reason: string;
+  status:
+    "pending" | "approved" | "rejected" | "stale" | "cancelled" | "completed";
+  authorization_fingerprint: string;
+  approval_request_id: string | null;
+  resolved_at: string | null;
+  resolver: string | null;
+}
+
+export interface SkillImprovementPolicy {
+  skill_id: string;
+  enabled: boolean;
+  minimum_usage_records: number;
+  minimum_failures: number;
+  minimum_harmful_feedback: number;
+  evaluation_suite_id: string;
+  cooldown_seconds: number;
+  max_open_proposals: JsonValue;
+  evidence_window_size: number;
+  generator_version: string;
+  comparison_policy_version: string;
+  last_triggered_at: string | null;
 }
 
 export type TaskStatus = Task["status"];
@@ -448,13 +656,15 @@ const schema = {
         "resolver",
         "authorization_fingerprint",
         "consumed_at",
+        "subject_kind",
+        "subject_id",
       ],
       properties: {
         approval_id: {
           type: "string",
         },
         run_id: {
-          type: "string",
+          type: ["string", "null"],
         },
         step_id: {
           type: ["string", "null"],
@@ -465,6 +675,7 @@ const schema = {
             "filesystem_write",
             "network_access",
             "computer_use",
+            "external_communication",
             "other",
           ],
         },
@@ -501,6 +712,12 @@ const schema = {
         },
         consumed_at: {
           type: ["string", "null"],
+        },
+        subject_kind: {
+          enum: ["run", "skill_promotion", "skill_rollback"],
+        },
+        subject_id: {
+          type: "string",
         },
       },
     },
@@ -952,6 +1169,762 @@ const schema = {
         },
       },
     },
+    TaskSkillBinding: {
+      type: "object",
+      additionalProperties: false,
+      required: ["task_id", "skill_id", "position", "created_at"],
+      properties: {
+        task_id: {
+          type: "string",
+        },
+        skill_id: {
+          type: "string",
+        },
+        position: {
+          type: "integer",
+          minimum: 1,
+          maximum: 16,
+        },
+        created_at: {
+          type: "string",
+        },
+      },
+    },
+    RunSkillAuditItem: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "skill_id",
+        "skill_key",
+        "revision_id",
+        "version",
+        "instructions",
+        "content_sha256",
+        "source_kind",
+        "position",
+      ],
+      properties: {
+        skill_id: {
+          type: "string",
+        },
+        skill_key: {
+          type: "string",
+        },
+        revision_id: {
+          type: "string",
+        },
+        version: {
+          type: "integer",
+          minimum: 1,
+        },
+        instructions: {
+          type: "string",
+        },
+        content_sha256: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        source_kind: {
+          enum: ["operator", "imported", "generated"],
+        },
+        position: {
+          type: "integer",
+          minimum: 1,
+          maximum: 16,
+        },
+      },
+    },
+    RunSkillBinding: {
+      type: "object",
+      additionalProperties: false,
+      required: ["run_id", "resolved", "resolved_at", "items"],
+      properties: {
+        run_id: {
+          type: "string",
+        },
+        resolved: {
+          type: "boolean",
+        },
+        resolved_at: {
+          type: ["string", "null"],
+        },
+        items: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/RunSkillAuditItem",
+          },
+        },
+      },
+    },
+    SkillUsageRecord: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "run_id",
+        "task_id",
+        "skill_id",
+        "revision_id",
+        "position",
+        "resolution_id",
+        "execution_id",
+        "attempt_number",
+        "started_at",
+        "outcome",
+        "failure_code",
+        "tool_call_count",
+        "approval_count",
+        "duration_ms",
+        "completed_at",
+        "created_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        run_id: {
+          type: "string",
+        },
+        task_id: {
+          type: "string",
+        },
+        skill_id: {
+          type: "string",
+        },
+        revision_id: {
+          type: "string",
+        },
+        position: {
+          type: "integer",
+          minimum: 1,
+          maximum: 16,
+        },
+        resolution_id: {
+          type: "string",
+        },
+        execution_id: {
+          type: "string",
+        },
+        attempt_number: {
+          type: "integer",
+          minimum: 1,
+        },
+        started_at: {
+          type: ["string", "null"],
+        },
+        outcome: {
+          enum: ["succeeded", "failed", "cancelled", "resolution_failed"],
+        },
+        failure_code: {
+          type: ["string", "null"],
+        },
+        tool_call_count: {
+          type: "integer",
+          minimum: 0,
+        },
+        approval_count: {
+          type: "integer",
+          minimum: 0,
+        },
+        duration_ms: {
+          type: ["integer", "null"],
+          minimum: 0,
+        },
+        completed_at: {
+          type: "string",
+        },
+        created_at: {
+          type: "string",
+        },
+      },
+    },
+    SkillFeedback: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "run_id",
+        "skill_id",
+        "revision_id",
+        "rating",
+        "note",
+        "created_by",
+        "created_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        run_id: {
+          type: "string",
+        },
+        skill_id: {
+          type: "string",
+        },
+        revision_id: {
+          type: "string",
+        },
+        rating: {
+          enum: ["helpful", "neutral", "harmful"],
+        },
+        note: {
+          type: "string",
+        },
+        created_by: {
+          type: "string",
+        },
+        created_at: {
+          type: "string",
+        },
+      },
+    },
+    SkillEvidenceSnapshot: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "skill_id",
+        "base_revision_id",
+        "content_sha256",
+        "evidence",
+        "created_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        skill_id: {
+          type: "string",
+        },
+        base_revision_id: {
+          type: "string",
+        },
+        content_sha256: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        evidence: {
+          type: "object",
+        },
+        created_at: {
+          type: "string",
+        },
+      },
+    },
+    ImprovementProposal: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "skill_id",
+        "base_revision_id",
+        "status",
+        "evidence_snapshot_id",
+        "evidence_snapshot_hash",
+        "proposed_instructions",
+        "proposed_content_sha256",
+        "rationale",
+        "generator_version",
+        "created_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        skill_id: {
+          type: "string",
+        },
+        base_revision_id: {
+          type: "string",
+        },
+        status: {
+          enum: [
+            "draft",
+            "ready_for_evaluation",
+            "evaluating",
+            "ready_for_review",
+            "approved",
+            "rejected",
+            "superseded",
+            "cancelled",
+            "expired",
+            "promoted",
+          ],
+        },
+        evidence_snapshot_id: {
+          type: "string",
+        },
+        evidence_snapshot_hash: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        proposed_instructions: {
+          type: "string",
+        },
+        proposed_content_sha256: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        rationale: {
+          type: "string",
+        },
+        generator_version: {
+          type: "string",
+        },
+        created_at: {
+          type: "string",
+        },
+      },
+    },
+    EvaluationCase: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "suite_id",
+        "position",
+        "input",
+        "expected_properties",
+        "grading_kind",
+        "created_at",
+        "updated_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        suite_id: {
+          type: "string",
+        },
+        position: {
+          type: "integer",
+          minimum: 1,
+        },
+        input: {
+          type: "string",
+        },
+        expected_properties: {
+          type: "object",
+        },
+        grading_kind: {
+          enum: [
+            "exact_match",
+            "contains_all",
+            "contains_none",
+            "json_schema",
+            "required_keys",
+            "tool_proposal_shape",
+          ],
+        },
+        created_at: {
+          type: "string",
+        },
+        updated_at: {
+          type: "string",
+        },
+      },
+    },
+    EvaluationSuite: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "skill_id",
+        "name",
+        "description",
+        "status",
+        "created_at",
+        "updated_at",
+        "cases",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        skill_id: {
+          type: "string",
+        },
+        name: {
+          type: "string",
+        },
+        description: {
+          type: "string",
+        },
+        status: {
+          enum: ["active", "disabled"],
+        },
+        created_at: {
+          type: "string",
+        },
+        updated_at: {
+          type: "string",
+        },
+        cases: {
+          type: "array",
+          minItems: 1,
+          items: {
+            $ref: "#/definitions/EvaluationCase",
+          },
+        },
+      },
+    },
+    EvaluationCaseResult: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "evaluation_run_id",
+        "case_id",
+        "status",
+        "score",
+        "reason_code",
+        "bounded_details",
+        "output_sha256",
+      ],
+      properties: {
+        evaluation_run_id: {
+          type: "string",
+        },
+        case_id: {
+          type: "string",
+        },
+        status: {
+          enum: ["succeeded", "failed"],
+        },
+        score: {
+          type: "number",
+          minimum: 0,
+          maximum: 1,
+        },
+        reason_code: {
+          type: ["string", "null"],
+        },
+        bounded_details: {
+          type: "string",
+        },
+        output_sha256: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+      },
+    },
+    EvaluationRun: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "suite_id",
+        "skill_id",
+        "revision_id",
+        "proposal_id",
+        "status",
+        "aggregate_result",
+        "runtime_fingerprint",
+        "target_content_sha256",
+        "runtime_metadata",
+        "suite_snapshot",
+        "case_results",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        suite_id: {
+          type: "string",
+        },
+        skill_id: {
+          type: "string",
+        },
+        revision_id: {
+          type: ["string", "null"],
+        },
+        proposal_id: {
+          type: ["string", "null"],
+        },
+        status: {
+          enum: ["succeeded", "failed"],
+        },
+        aggregate_result: {
+          type: "object",
+        },
+        runtime_fingerprint: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        target_content_sha256: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        runtime_metadata: {
+          type: "object",
+        },
+        suite_snapshot: {
+          type: "object",
+        },
+        case_results: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/EvaluationCaseResult",
+          },
+        },
+      },
+    },
+    CandidateEvaluation: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "proposal_id",
+        "baseline_evaluation_run_id",
+        "candidate_evaluation_run_id",
+        "comparison_policy_version",
+        "result",
+        "recommendation",
+        "score_delta",
+        "regression_count",
+        "improvement_count",
+        "inconclusive_count",
+        "report_sha256",
+        "comparison_report",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        proposal_id: {
+          type: "string",
+        },
+        baseline_evaluation_run_id: {
+          type: "string",
+        },
+        candidate_evaluation_run_id: {
+          type: "string",
+        },
+        comparison_policy_version: {
+          type: "string",
+        },
+        result: {
+          enum: ["better", "worse", "equivalent", "mixed", "inconclusive"],
+        },
+        recommendation: {
+          enum: ["eligible", "not_eligible", "requires_manual_override"],
+        },
+        score_delta: {
+          type: "number",
+        },
+        regression_count: {
+          type: "integer",
+          minimum: 0,
+        },
+        improvement_count: {
+          type: "integer",
+          minimum: 0,
+        },
+        inconclusive_count: {
+          type: "integer",
+          minimum: 0,
+        },
+        report_sha256: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        comparison_report: {
+          type: "object",
+        },
+      },
+    },
+    SkillPromotion: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "proposal_id",
+        "skill_id",
+        "status",
+        "authorization_fingerprint",
+        "target_version",
+        "promoted_revision_id",
+        "approval_request_id",
+        "candidate_instructions",
+        "candidate_sha256",
+        "evidence_snapshot_id",
+        "evidence_snapshot_hash",
+        "comparison_report",
+        "recommendation",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        proposal_id: {
+          type: "string",
+        },
+        skill_id: {
+          type: "string",
+        },
+        status: {
+          enum: [
+            "pending",
+            "approved",
+            "rejected",
+            "stale",
+            "cancelled",
+            "promoted",
+          ],
+        },
+        authorization_fingerprint: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        target_version: {
+          type: "integer",
+          minimum: 1,
+        },
+        promoted_revision_id: {
+          type: ["string", "null"],
+        },
+        approval_request_id: {
+          type: ["string", "null"],
+        },
+        candidate_instructions: {
+          type: "string",
+        },
+        candidate_sha256: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        evidence_snapshot_id: {
+          type: "string",
+        },
+        evidence_snapshot_hash: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        comparison_report: {
+          type: "object",
+        },
+        recommendation: {
+          type: "string",
+        },
+      },
+    },
+    SkillRollback: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "skill_id",
+        "expected_current_revision_id",
+        "target_revision_id",
+        "reason",
+        "status",
+        "authorization_fingerprint",
+        "approval_request_id",
+        "resolved_at",
+        "resolver",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        skill_id: {
+          type: "string",
+        },
+        expected_current_revision_id: {
+          type: "string",
+        },
+        target_revision_id: {
+          type: "string",
+        },
+        reason: {
+          type: "string",
+        },
+        status: {
+          enum: [
+            "pending",
+            "approved",
+            "rejected",
+            "stale",
+            "cancelled",
+            "completed",
+          ],
+        },
+        authorization_fingerprint: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        approval_request_id: {
+          type: ["string", "null"],
+        },
+        resolved_at: {
+          type: ["string", "null"],
+        },
+        resolver: {
+          type: ["string", "null"],
+        },
+      },
+    },
+    SkillImprovementPolicy: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "skill_id",
+        "enabled",
+        "minimum_usage_records",
+        "minimum_failures",
+        "minimum_harmful_feedback",
+        "evaluation_suite_id",
+        "cooldown_seconds",
+        "max_open_proposals",
+        "evidence_window_size",
+        "generator_version",
+        "comparison_policy_version",
+        "last_triggered_at",
+      ],
+      properties: {
+        skill_id: {
+          type: "string",
+        },
+        enabled: {
+          type: "boolean",
+        },
+        minimum_usage_records: {
+          type: "integer",
+          minimum: 0,
+        },
+        minimum_failures: {
+          type: "integer",
+          minimum: 0,
+        },
+        minimum_harmful_feedback: {
+          type: "integer",
+          minimum: 0,
+        },
+        evaluation_suite_id: {
+          type: "string",
+        },
+        cooldown_seconds: {
+          type: "integer",
+          minimum: 0,
+        },
+        max_open_proposals: {
+          const: 1,
+        },
+        evidence_window_size: {
+          type: "integer",
+          minimum: 1,
+          maximum: 200,
+        },
+        generator_version: {
+          type: "string",
+        },
+        comparison_policy_version: {
+          type: "string",
+        },
+        last_triggered_at: {
+          type: ["string", "null"],
+        },
+      },
+    },
   },
   responses: {
     task: {
@@ -1006,6 +1979,76 @@ const schema = {
       type: "array",
       items: {
         $ref: "#/definitions/SkillRevision",
+      },
+    },
+    taskSkillBindings: {
+      type: "array",
+      items: {
+        $ref: "#/definitions/TaskSkillBinding",
+      },
+    },
+    runSkillBinding: {
+      $ref: "#/definitions/RunSkillBinding",
+    },
+    skillUsage: {
+      type: "array",
+      items: {
+        $ref: "#/definitions/SkillUsageRecord",
+      },
+    },
+    skillFeedback: {
+      type: "array",
+      items: {
+        $ref: "#/definitions/SkillFeedback",
+      },
+    },
+    skillFeedbackItem: {
+      $ref: "#/definitions/SkillFeedback",
+    },
+    skillEvidenceSnapshot: {
+      $ref: "#/definitions/SkillEvidenceSnapshot",
+    },
+    skillImprovementProposal: {
+      $ref: "#/definitions/ImprovementProposal",
+    },
+    skillImprovementProposals: {
+      type: "array",
+      items: {
+        $ref: "#/definitions/ImprovementProposal",
+      },
+    },
+    skillEvaluationSuite: {
+      $ref: "#/definitions/EvaluationSuite",
+    },
+    skillEvaluationSuites: {
+      type: "array",
+      items: {
+        $ref: "#/definitions/EvaluationSuite",
+      },
+    },
+    skillEvaluationRun: {
+      $ref: "#/definitions/EvaluationRun",
+    },
+    skillCandidateEvaluation: {
+      $ref: "#/definitions/CandidateEvaluation",
+    },
+    skillPromotion: {
+      $ref: "#/definitions/SkillPromotion",
+    },
+    skillRollback: {
+      $ref: "#/definitions/SkillRollback",
+    },
+    skillImprovementPolicy: {
+      $ref: "#/definitions/SkillImprovementPolicy",
+    },
+    skillImprovementPolicyRun: {
+      type: "object",
+      additionalProperties: false,
+      required: ["due"],
+      properties: {
+        due: {
+          type: "boolean",
+        },
       },
     },
     skillPage: {
@@ -1253,6 +2296,38 @@ export const validateSkillRevision: WireValidator = (value, path) =>
   assertWire("skillRevision", value, path);
 export const validateSkillRevisions: WireValidator = (value, path) =>
   assertWire("skillRevisions", value, path);
+export const validateTaskSkillBindings: WireValidator = (value, path) =>
+  assertWire("taskSkillBindings", value, path);
+export const validateRunSkillBinding: WireValidator = (value, path) =>
+  assertWire("runSkillBinding", value, path);
+export const validateSkillUsage: WireValidator = (value, path) =>
+  assertWire("skillUsage", value, path);
+export const validateSkillFeedback: WireValidator = (value, path) =>
+  assertWire("skillFeedback", value, path);
+export const validateSkillFeedbackItem: WireValidator = (value, path) =>
+  assertWire("skillFeedbackItem", value, path);
+export const validateSkillEvidenceSnapshot: WireValidator = (value, path) =>
+  assertWire("skillEvidenceSnapshot", value, path);
+export const validateSkillImprovementProposal: WireValidator = (value, path) =>
+  assertWire("skillImprovementProposal", value, path);
+export const validateSkillImprovementProposals: WireValidator = (value, path) =>
+  assertWire("skillImprovementProposals", value, path);
+export const validateSkillEvaluationSuite: WireValidator = (value, path) =>
+  assertWire("skillEvaluationSuite", value, path);
+export const validateSkillEvaluationSuites: WireValidator = (value, path) =>
+  assertWire("skillEvaluationSuites", value, path);
+export const validateSkillEvaluationRun: WireValidator = (value, path) =>
+  assertWire("skillEvaluationRun", value, path);
+export const validateSkillCandidateEvaluation: WireValidator = (value, path) =>
+  assertWire("skillCandidateEvaluation", value, path);
+export const validateSkillPromotion: WireValidator = (value, path) =>
+  assertWire("skillPromotion", value, path);
+export const validateSkillRollback: WireValidator = (value, path) =>
+  assertWire("skillRollback", value, path);
+export const validateSkillImprovementPolicy: WireValidator = (value, path) =>
+  assertWire("skillImprovementPolicy", value, path);
+export const validateSkillImprovementPolicyRun: WireValidator = (value, path) =>
+  assertWire("skillImprovementPolicyRun", value, path);
 export const validateSkillPage: WireValidator = (value, path) =>
   assertWire("skillPage", value, path);
 export const validateTaskPage: WireValidator = (value, path) =>

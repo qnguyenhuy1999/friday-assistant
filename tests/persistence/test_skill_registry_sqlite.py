@@ -12,7 +12,9 @@ immutability of a persisted v1 across later revisions and activation.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -21,14 +23,27 @@ from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
 
-from friday.application.errors import EntityConflict
+from friday.application.commands import CreateTaskCommand
+from friday.application.create_task import CreateTask
+from friday.application.errors import ClaimLost, EntityConflict, SkillIntegrityFailed
+from friday.application.ports import UnitOfWork
+from friday.application.results import RunClaimResult
+from friday.application.skill_evaluation import (
+    CreateSkillEvaluationSuite,
+    DeterministicEvaluatorRegistry,
+    RunBrainOnlySkillEvaluation,
+)
 from friday.application.skill_registry import (
     ActivateSkillRevision,
     CreateSkill,
     CreateSkillRevision,
+    ReplaceTaskSkills,
+    ResolveRunSkills,
 )
-from friday.domain.identifiers import SkillRevisionId
-from friday.domain.skill import SkillRevision, SkillRevisionSourceKind, SkillStatus
+from friday.application.worker_coordination import ClaimNextRun
+from friday.domain.identifiers import RunId, SkillRevisionId
+from friday.domain.run import Run
+from friday.domain.skill import RunSkillBinding, SkillRevision, SkillRevisionSourceKind, SkillStatus
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.repositories import (
     SkillRevisionRepository,
@@ -231,5 +246,143 @@ def test_persisted_v1_is_immutable_across_v2_and_activation(tmp_path: Path) -> N
             assert reloaded_v1.version == 1
             assert reloaded_skill.active_revision_id == v2.id
             assert reloaded_skill.status is SkillStatus.ACTIVE
+    finally:
+        engine.dispose()
+
+
+def _claimed_run(
+    engine: Engine, clock: Clock, *, with_skill: bool
+) -> tuple[Callable[[], UnitOfWork], RunId, RunClaimResult]:
+    """Seed an Alembic-created database and return one exact active claim."""
+    factory = create_unit_of_work_factory(create_session_factory(engine))
+    task_id = CreateTask(factory, clock).execute(CreateTaskCommand("Resolve", "")).task_id
+    if with_skill:
+        skill = CreateSkill(factory, clock).execute(
+            key="fence.runtime", display_name="Runtime", description=""
+        )
+        revision = CreateSkillRevision(factory, clock).execute(
+            skill_id=skill.id,
+            instructions="Use the frozen instruction.",
+            source_kind=SkillRevisionSourceKind.OPERATOR,
+        )
+        ActivateSkillRevision(factory, clock).execute(skill_id=skill.id, revision_id=revision.id)
+        ReplaceTaskSkills(factory, clock).execute(task_id=task_id, skill_ids=[skill.id])
+    run = Run.new(id=RunId.new(), task_id=task_id, created_at=clock.now())
+    with factory() as uow:
+        uow.runs.add(run)
+        uow.work_queue.enqueue(run.id, available_at=clock.now(), enqueued_at=clock.now())
+        uow.commit()
+    claim = ClaimNextRun(
+        factory,
+        clock,
+        worker_id="resolver-a",
+        lease_duration=timedelta(minutes=5),
+        candidate_limit=4,
+    ).execute()
+    assert claim is not None
+    return factory, run.id, claim
+
+
+def test_real_sqlite_concurrent_resolution_converges_to_one_freeze(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory, run_id, claim = _claimed_run(engine, clock, with_skill=True)
+
+        def resolve() -> list[RunSkillBinding]:
+            return ResolveRunSkills(factory, clock).execute(
+                run_id, claim.worker_id, claim.claim_token, claim.claim_generation
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _index: resolve(), range(2)))
+        assert [[binding.position for binding in result] for result in results] == [[1], [1]]
+        with factory() as uow:
+            assert uow.run_skill_resolutions.get(run_id) is not None
+            bindings = uow.run_skill_bindings.list_for_run(run_id)
+            assert len(bindings) == 1
+            assert bindings[0].position == 1
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_stale_claim_cannot_freeze_skill_resolution(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory, run_id, claim = _claimed_run(engine, clock, with_skill=True)
+        with pytest.raises(ClaimLost, match="stale or expired"):
+            ResolveRunSkills(factory, clock).execute(
+                run_id, claim.worker_id, "wrong-token", claim.claim_generation
+            )
+        with factory() as uow:
+            assert uow.run_skill_resolutions.get(run_id) is None
+            assert uow.run_skill_bindings.list_for_run(run_id) == []
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_zero_skill_resolution_survives_restart(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory, run_id, claim = _claimed_run(engine, clock, with_skill=False)
+        assert (
+            ResolveRunSkills(factory, clock).execute(
+                run_id, claim.worker_id, claim.claim_token, claim.claim_generation
+            )
+            == []
+        )
+    finally:
+        engine.dispose()
+
+    restarted = create_engine(f"sqlite:///{tmp_path / 'skill-registry.db'}")
+    try:
+        factory = create_unit_of_work_factory(create_session_factory(restarted))
+        with factory() as uow:
+            assert uow.run_skill_resolutions.get(run_id) is not None
+            assert uow.run_skill_bindings.list_for_run(run_id) == []
+    finally:
+        restarted.dispose()
+
+
+def test_raw_sql_instruction_corruption_fails_before_any_brain_evaluation(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory = create_unit_of_work_factory(create_session_factory(engine))
+        skill = CreateSkill(factory, clock).execute(
+            key="fence.integrity", display_name="Integrity", description=""
+        )
+        revision = CreateSkillRevision(factory, clock).execute(
+            skill_id=skill.id,
+            instructions="trusted instructions",
+            source_kind=SkillRevisionSourceKind.OPERATOR,
+        )
+        suite = CreateSkillEvaluationSuite(factory, clock).execute(
+            skill_id=skill.id,
+            name="integrity",
+            description="",
+            cases=[("say ok", {"value": "ok"}, "exact_match")],
+        )
+        with engine.begin() as connection:
+            connection.execute(
+                text("UPDATE skill_revisions SET instructions = 'tampered' WHERE id = :id"),
+                {"id": str(revision.id)},
+            )
+
+        class CountingEvaluator:
+            calls = 0
+
+            def evaluate_skill_cases(self, request: object) -> dict[str, str]:
+                self.calls += 1
+                return {}
+
+        evaluator = CountingEvaluator()
+        with pytest.raises(SkillIntegrityFailed, match="skill_integrity_failed"):
+            RunBrainOnlySkillEvaluation(
+                factory, clock, DeterministicEvaluatorRegistry(), evaluator
+            ).execute(suite_id=suite.id, revision_id=revision.id)
+        assert evaluator.calls == 0
     finally:
         engine.dispose()

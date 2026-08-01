@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import logging
 import unicodedata
+import uuid
+from dataclasses import replace
+from datetime import timedelta
 from typing import cast
 
 from friday.application.approval_workflow import ExpireApproval
 from friday.application.commands import ExpireApprovalCommand
-from friday.application.errors import EntityConflict
+from friday.application.errors import ApplicationError, EntityConflict
 from friday.application.list_events import canonical_final_agent_summary
 from friday.application.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from friday.application.results import ApprovalRequestResult
@@ -44,6 +47,7 @@ from friday.domain.schedule_fire_delivery_plan import (
     ScheduleFireDeliveryPlanStatus,
 )
 from friday.domain.skill_improvement import SkillImprovementProposal
+from friday.domain.skill_improvement_work import SkillImprovementWork, SkillImprovementWorkState
 
 logger = logging.getLogger(__name__)
 
@@ -215,33 +219,170 @@ class EvaluateDueSkillImprovementPolicies:
         self._uow_factory, self._clock, self._batch_size = uow_factory, clock, batch_size
         self._candidate_generator = candidate_generator
         self._candidate_evaluator = candidate_evaluator
+        self._worker_id = f"skill-improvement:{uuid.uuid4().hex}"
+        self._lease_duration = timedelta(minutes=5)
 
     def execute(self) -> int:
         with self._uow_factory() as uow:
-            policies = uow.skill_improvement_policies.list_enabled(self._batch_size)
+            list_due = getattr(uow.skill_improvement_policies, "list_due_enabled", None)
+            if callable(list_due):
+                policies = list_due(self._clock.now(), max(self._batch_size * 10, 100))
+            else:
+                policies = uow.skill_improvement_policies.list_enabled(
+                    max(self._batch_size * 10, 100)
+                )
             skill_ids = [policy.skill_id for policy in policies]
+        # A due check without both brain-only halves cannot produce durable
+        # improvement work and therefore must not consume cooldown.
+        if self._candidate_generator is None or self._candidate_evaluator is None:
+            return 0
         due = RunSkillImprovementPolicyNow(self._uow_factory, self._clock)
         completed = 0
         for skill_id in skill_ids:
+            if completed >= self._batch_size:
+                break
             try:
-                if not due.execute(skill_id, record_trigger=self._candidate_generator is None):
+                if not due.execute(skill_id, record_trigger=False):
                     continue
-                if self._candidate_generator is None:
-                    completed += 1
+                work = self._claim_work(skill_id)
+                with self._uow_factory() as state_uow:
+                    durable_work = state_uow.skill_improvement_work is not None
+                    state_uow.commit()
+                if durable_work and work is None:
                     continue
-                proposal = self._generate_one(skill_id)
-                if self._candidate_evaluator is not None:
-                    self._evaluate_one(skill_id, proposal.id)
-                MarkSkillImprovementPolicyTriggered(self._uow_factory, self._clock).execute(
-                    skill_id
-                )
+                resumable = self._resumable_proposal(skill_id)
+                if resumable is None:
+                    self._advance_work(work, SkillImprovementWorkState.CANDIDATE_GENERATION)
+                    proposal = self._generate_one(skill_id)
+                else:
+                    proposal = resumable
+                    self._advance_work(
+                        work, SkillImprovementWorkState.CANDIDATE_GENERATION, proposal.id
+                    )
+                self._evaluate_one(skill_id, proposal.id, work)
+                if work is None:
+                    MarkSkillImprovementPolicyTriggered(self._uow_factory, self._clock).execute(
+                        skill_id
+                    )
+                else:
+                    self._complete_work_and_trigger(work, skill_id, proposal.id)
                 completed += 1
-            except Exception:  # noqa: BLE001 - one skill cannot block maintenance
+            except (ApplicationError, ValueError):
+                self._fail_work(skill_id)
                 logger.warning(
                     "skill_improvement.policy_candidate_failed",
-                    extra={"skill_id": str(skill_id)},
+                    extra={"skill_id": str(skill_id), "reason_code": "work_failed"},
                 )
         return completed
+
+    def _claim_work(self, skill_id: SkillId) -> SkillImprovementWork | None:
+        with self._uow_factory() as uow:
+            now = self._clock.now()
+            work = uow.skill_improvement_work.claim_for_skill(
+                skill_id,
+                self._worker_id,
+                uuid.uuid4().hex,
+                now,
+                now + self._lease_duration,
+            )
+            uow.commit()
+            return work
+
+    def _resumable_proposal(self, skill_id: SkillId) -> SkillImprovementProposal | None:
+        with self._uow_factory() as uow:
+            proposals = uow.skill_improvement_proposals.list_for_skill(skill_id)
+            return next(
+                (
+                    proposal
+                    for proposal in proposals
+                    if proposal.status.name == "READY_FOR_EVALUATION"
+                ),
+                None,
+            )
+
+    def _advance_work(
+        self,
+        work: SkillImprovementWork | None,
+        state: SkillImprovementWorkState,
+        proposal_id: SkillImprovementProposalId | None = None,
+    ) -> None:
+        if work is None:
+            return
+        with self._uow_factory() as uow:
+            repository = uow.skill_improvement_work
+            current = repository.get(work.id)
+            if current is None:
+                return
+            claimed = replace(
+                current,
+                state=state,
+                proposal_id=proposal_id or current.proposal_id,
+                attempt_count=current.attempt_count + 1,
+                claimed_by=None
+                if state
+                in {
+                    SkillImprovementWorkState.READY_FOR_REVIEW,
+                    SkillImprovementWorkState.FAILED,
+                }
+                else current.claimed_by,
+                claim_token=None
+                if state
+                in {
+                    SkillImprovementWorkState.READY_FOR_REVIEW,
+                    SkillImprovementWorkState.FAILED,
+                }
+                else current.claim_token,
+                lease_expires_at=None
+                if state
+                in {
+                    SkillImprovementWorkState.READY_FOR_REVIEW,
+                    SkillImprovementWorkState.FAILED,
+                }
+                else current.lease_expires_at,
+                updated_at=self._clock.now(),
+            )
+            assert work.claim_token is not None
+            if not repository.save_if_claimed(
+                claimed,
+                self._worker_id,
+                work.claim_token,
+                work.claim_generation,
+                self._clock.now(),
+            ):
+                raise EntityConflict("improvement work claim was lost")
+            uow.commit()
+
+    def _fail_work(self, skill_id: SkillId) -> None:
+        with self._uow_factory() as uow:
+            repository = uow.skill_improvement_work
+            work = repository.get_active_for_skill(skill_id)
+            if work is None:
+                return
+            current = replace(
+                work,
+                state=SkillImprovementWorkState.FAILED,
+                attempt_count=work.attempt_count + 1,
+                next_attempt_at=self._clock.now()
+                + timedelta(seconds=min(3600, 2 ** min(work.attempt_count, 10))),
+                claimed_by=None,
+                claim_token=None,
+                lease_expires_at=None,
+                failure_code="work_failed",
+                failure_detail="improvement work did not complete",
+                updated_at=self._clock.now(),
+            )
+            save_if_claimed = getattr(repository, "save_if_claimed", None)
+            if callable(save_if_claimed) and work.claimed_by is not None:
+                save_if_claimed(
+                    current,
+                    self._worker_id,
+                    work.claim_token or "",
+                    work.claim_generation,
+                    self._clock.now(),
+                )
+            else:
+                repository.save(current)
+            uow.commit()
 
     def _generate_one(self, skill_id: SkillId) -> SkillImprovementProposal:
         with self._uow_factory() as uow:
@@ -271,6 +412,9 @@ class EvaluateDueSkillImprovementPolicies:
                 "usage": [
                     {
                         "id": f"usage:{item.id}",
+                        "skill_id": str(item.skill_id),
+                        "revision_id": str(item.revision_id),
+                        "run_id": str(item.run_id),
                         "outcome": item.outcome.value,
                         "failure_code": item.failure_code,
                         "tool_call_count": item.tool_call_count,
@@ -280,7 +424,14 @@ class EvaluateDueSkillImprovementPolicies:
                     for item in usage
                 ],
                 "feedback": [
-                    {"id": f"feedback:{item.id}", "rating": item.rating.value, "note": item.note}
+                    {
+                        "id": f"feedback:{item.id}",
+                        "skill_id": str(item.skill_id),
+                        "revision_id": str(item.revision_id),
+                        "run_id": str(item.run_id),
+                        "rating": item.rating.value,
+                        "note": item.note,
+                    }
                     for item in feedback
                 ],
             }
@@ -309,7 +460,45 @@ class EvaluateDueSkillImprovementPolicies:
             base_instructions=base_instructions,
         )
 
-    def _evaluate_one(self, skill_id: SkillId, proposal_id: SkillImprovementProposalId) -> None:
+    def _complete_work_and_trigger(
+        self, work: SkillImprovementWork, skill_id: SkillId, proposal_id: SkillImprovementProposalId
+    ) -> None:
+        with self._uow_factory() as uow:
+            repository = uow.skill_improvement_work
+            policy = uow.skill_improvement_policies.get(skill_id)
+            current = repository.get(work.id)
+            if policy is None or current is None:
+                raise EntityConflict("improvement work completion inputs disappeared")
+            ready = replace(
+                current,
+                state=SkillImprovementWorkState.READY_FOR_REVIEW,
+                proposal_id=proposal_id,
+                attempt_count=current.attempt_count + 1,
+                claimed_by=None,
+                claim_token=None,
+                lease_expires_at=None,
+                updated_at=self._clock.now(),
+            )
+            assert work.claim_token is not None
+            if not repository.save_if_claimed(
+                ready,
+                self._worker_id,
+                work.claim_token,
+                work.claim_generation,
+                self._clock.now(),
+            ):
+                raise EntityConflict("improvement work claim was lost")
+            uow.skill_improvement_policies.save(
+                replace(policy, last_triggered_at=self._clock.now(), updated_at=self._clock.now())
+            )
+            uow.commit()
+
+    def _evaluate_one(
+        self,
+        skill_id: SkillId,
+        proposal_id: SkillImprovementProposalId,
+        work: SkillImprovementWork | None,
+    ) -> None:
         with self._uow_factory() as uow:
             policy = uow.skill_improvement_policies.get(skill_id)
             proposal = uow.skill_improvement_proposals.get(proposal_id)
@@ -321,8 +510,11 @@ class EvaluateDueSkillImprovementPolicies:
         runner = RunBrainOnlySkillEvaluation(
             self._uow_factory, self._clock, registry, self._candidate_evaluator
         )
+        self._advance_work(work, SkillImprovementWorkState.BASELINE_EVALUATION, proposal_id)
         baseline = runner.execute(suite_id=suite_id, revision_id=base_revision_id)
+        self._advance_work(work, SkillImprovementWorkState.CANDIDATE_EVALUATION, proposal_id)
         candidate = runner.execute(suite_id=suite_id, proposal_id=proposal_id)
+        self._advance_work(work, SkillImprovementWorkState.COMPARISON, proposal_id)
         CompareSkillImprovementProposal(self._uow_factory, self._clock, registry).execute(
             proposal_id=proposal_id,
             baseline_evaluation_run_id=baseline.id,

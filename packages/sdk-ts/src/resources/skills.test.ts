@@ -3,6 +3,7 @@ import {
   validateSkillPage,
   validateSkillRevision,
   validateSkillRevisions,
+  validateSkillPromotion,
 } from "@friday/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { FridayHttpClient } from "../http";
@@ -92,5 +93,26 @@ describe("SkillsResource", () => {
     );
 
     await expect(skills.get("s-1")).rejects.toThrow(/wire contract/);
+  });
+
+  it("rejects malformed Phase 20 promotion responses", async () => {
+    const skills = new SkillsResource(
+      new FridayHttpClient({
+        baseUrl: "http://api.test",
+        fetchImpl: vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              id: "promotion-1",
+              status: "pending",
+            }),
+          ),
+        ),
+      }),
+    );
+
+    await expect(skills.getPromotion("promotion-1")).rejects.toThrow(
+      /wire contract/,
+    );
+    expect(validateSkillPromotion).toBeTypeOf("function");
   });
 });

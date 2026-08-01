@@ -25,6 +25,8 @@ const approval: ApprovalRequest = {
   resolver: null,
   authorization_fingerprint: null,
   consumed_at: null,
+  subject_kind: "run",
+  subject_id: "r-1",
 };
 
 describe("ApprovalDetail", () => {

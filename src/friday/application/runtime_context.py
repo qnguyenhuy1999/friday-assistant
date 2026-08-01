@@ -11,11 +11,13 @@ No hidden summarization — token-aware semantic compression is Phase 12."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
 from friday.application.conversation_context import ConversationContext, build_conversation_section
+from friday.application.errors import SkillIntegrityFailed
 from friday.application.memory.context import build_memory_section
 from friday.application.memory.models import MemoryContext, RetrievalMode
 from friday.application.tool_gateway import ToolDescriptor
@@ -212,7 +214,13 @@ def _skill_section(skills: tuple[tuple[RunSkillBinding, Skill, SkillRevision], .
         "network,",
         "MCP, computer, messaging, retry or scheduling authority.",
     ]
-    for _binding, skill, revision in skills:
+    for _binding, skill, revision in sorted(
+        skills, key=lambda item: (item[0].position, str(item[0].skill_id), str(item[0].revision_id))
+    ):
+        if hashlib.sha256(revision.instructions.encode("utf-8")).hexdigest() != (
+            revision.content_sha256
+        ):
+            raise SkillIntegrityFailed()
         lines.extend(
             (
                 f"## {skill.key}",
@@ -320,27 +328,40 @@ def build_runtime_context(
         raise ValueError("memory_max_chars must be positive")
     if conversation_max_chars < 1:
         raise ValueError("conversation_max_chars must be positive")
-    if max_skill_context_chars is None:
-        max_skill_context_chars = max_chars - 1
-    if not 0 < max_skill_context_chars < max_chars:
+    if max_skill_context_chars is not None and not 0 < max_skill_context_chars < max_chars:
         raise ValueError("max_skill_context_chars must be positive and below max_chars")
 
     skills = _skill_section(snapshot.skills)
-    if len(skills) > max_skill_context_chars:
+    skill_budget = max_skill_context_chars if max_skill_context_chars is not None else max_chars
+    if len(skills) > skill_budget:
         raise SkillContextTooLarge("skill_context_too_large")
 
-    conversation_budget = min(conversation_max_chars, max_chars // 2)
+    # Skills are immutable instructions and therefore all-or-nothing.  Reserve
+    # the minimum core context before allocating dialogue or memory so the
+    # total budget cannot be exceeded by a late section.
+    skill_separator = 2 if skills else 0
+    if len(skills) + skill_separator + MIN_CONTEXT_CHARS > max_chars:
+        raise SkillContextTooLarge("skill_context_too_large")
+    remaining_after_skills = max_chars - len(skills) - skill_separator
+    conversation_budget = min(
+        conversation_max_chars,
+        max(0, remaining_after_skills - MIN_CONTEXT_CHARS),
+    )
     conversation = (
         build_conversation_section(conversation_context, max_chars=conversation_budget)
-        if conversation_context is not None
+        if conversation_context is not None and conversation_budget > 0
         else ""
     )
-    # Reserve the bounded conversational window before rendering the large
-    # static/runtime document.  Otherwise a full core document can starve the
-    # newest dialogue completely.
-    skill_separator = 2 if skills else 0
-    core_max_chars = (
-        max_chars - len(skills) - skill_separator - len(conversation) - (2 if conversation else 0)
+    conversation_separator = 2 if conversation else 0
+    core_max_chars = max(
+        MIN_CONTEXT_CHARS,
+        max_chars - len(skills) - skill_separator - len(conversation) - conversation_separator,
+    )
+    # The previous max() is safe because the conversation allocation left the
+    # minimum core reservation.  Keep the arithmetic explicit for auditability.
+    core_max_chars = min(
+        core_max_chars,
+        max_chars - len(skills) - skill_separator - len(conversation) - conversation_separator,
     )
     omitted = _Omitted()
     document = _render(snapshot, tool_manifest, attempt_number, turn_number, omitted)
@@ -364,4 +385,11 @@ def build_runtime_context(
             )
             if memory:
                 document = f"{document}\n\n{memory}"
+    if len(document) > max_chars and memory_context is not None and "\n\n# MEMORY" in document:
+        # Memory is optional context.  If a provider ignored its requested
+        # bound, omit it atomically rather than cutting immutable core/Skill
+        # text or returning an over-budget prompt.
+        document = document.split("\n\n# MEMORY", 1)[0]
+    if len(document) > max_chars:
+        raise ValueError("runtime context exceeded max_chars")
     return document

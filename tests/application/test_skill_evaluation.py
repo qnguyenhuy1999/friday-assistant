@@ -36,9 +36,12 @@ from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUn
         (EvaluationKind.EXACT_MATCH, "x", {"value": "x"}),
         (EvaluationKind.CONTAINS_ALL, "a b", {"values": ["a", "b"]}),
         (EvaluationKind.CONTAINS_NONE, "safe", {"values": ["unsafe"]}),
-        (EvaluationKind.JSON_SCHEMA, '{"a": 1}', {"required_keys": ["a"]}),
+        (
+            EvaluationKind.JSON_SCHEMA,
+            '{"a": 1}',
+            {"schema": {"type": "object", "required": ["a"]}},
+        ),
         (EvaluationKind.TOOL_PROPOSAL_SHAPE, '{"tool":"x","tool_input":{}}', {}),
-        (EvaluationKind.APPROVAL_EXPECTED, '{"approval_required":true}', {"value": True}),
     ],
 )
 def test_builtin_evaluators_are_deterministic(
@@ -147,7 +150,7 @@ def test_candidate_comparison_requires_identical_frozen_evaluation_configuration
         evidence_snapshot_id=snapshot.id,
         evidence_snapshot_hash=snapshot.content_sha256,
         evidence_ids={"u1"},
-        generator_version="v1",
+        generator_version="brain-candidate-generator-v2",
         raw_candidate=(
             '{"version":1,"proposed_instructions":"candidate","rationale":"r",'
             '"addressed_evidence_ids":["u1"]}'

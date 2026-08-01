@@ -66,7 +66,7 @@ class CancelApprovalBody(BaseModel):
 
 class ApprovalResponse(BaseModel):
     approval_id: str
-    run_id: str
+    run_id: str | None
     step_id: str | None
     category: ApprovalCategory
     summary: str
@@ -81,12 +81,14 @@ class ApprovalResponse(BaseModel):
     resolver: str | None
     authorization_fingerprint: str | None
     consumed_at: datetime | None
+    subject_kind: str
+    subject_id: str
 
     @classmethod
     def from_result(cls, result: ApprovalRequestResult) -> ApprovalResponse:
         return cls(
             approval_id=str(result.approval_id),
-            run_id=str(result.run_id),
+            run_id=str(result.run_id) if result.run_id is not None else None,
             step_id=str(result.step_id) if result.step_id is not None else None,
             category=result.category,
             summary=result.summary,
@@ -101,6 +103,8 @@ class ApprovalResponse(BaseModel):
             resolver=result.resolver,
             authorization_fingerprint=result.authorization_fingerprint,
             consumed_at=result.consumed_at,
+            subject_kind=result.subject_kind.value,
+            subject_id=result.subject_id,
         )
 
 

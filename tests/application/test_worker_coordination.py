@@ -429,7 +429,10 @@ def test_apply_failed_outcome_does_not_retry_after_attempt_budget() -> None:
     uow, run = _prepared_run(RunStatus.RUNNING)
     for _ in range(2):
         prior = Run.new(
-            id=RunId.new(), task_id=run.task_id, created_at=T0, execution_id=run.execution_id
+            id=RunId.new(),
+            task_id=run.task_id,
+            created_at=T0 - timedelta(seconds=2 - _),
+            execution_id=run.execution_id,
         )
         prior.start(T0)
         prior.fail(T0, FAILURE)

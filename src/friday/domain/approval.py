@@ -46,10 +46,16 @@ class ApprovalCategory(StrEnum):
     OTHER = "other"
 
 
+class ApprovalSubjectKind(StrEnum):
+    RUN = "run"
+    SKILL_PROMOTION = "skill_promotion"
+    SKILL_ROLLBACK = "skill_rollback"
+
+
 @dataclass(slots=True)
 class ApprovalRequest:
     _id: ApprovalRequestId
-    _run_id: RunId
+    _run_id: RunId | None
     _category: ApprovalCategory
     _summary: str
     _reason: str
@@ -64,13 +70,15 @@ class ApprovalRequest:
     _resolver: str | None = field(default=None)
     _authorization_fingerprint: str | None = field(default=None)
     _consumed_at: datetime | None = field(default=None)
+    _subject_kind: ApprovalSubjectKind = field(default=ApprovalSubjectKind.RUN)
+    _subject_id: str | None = field(default=None)
 
     @classmethod
     def new(
         cls,
         *,
         id: ApprovalRequestId,
-        run_id: RunId,
+        run_id: RunId | None,
         category: ApprovalCategory,
         summary: str,
         reason: str,
@@ -80,6 +88,8 @@ class ApprovalRequest:
         step_id: RunStepId | None = None,
         expires_at: datetime | None = None,
         authorization_fingerprint: str | None = None,
+        subject_kind: ApprovalSubjectKind = ApprovalSubjectKind.RUN,
+        subject_id: str | None = None,
     ) -> ApprovalRequest:
         normalized_summary = summary.strip()
         normalized_action = requested_action.strip()
@@ -93,6 +103,10 @@ class ApprovalRequest:
             raise DomainValidationError(
                 "ApprovalRequest.authorization_fingerprint must be 64 lowercase hex characters"
             )
+        if run_id is None and (subject_kind is ApprovalSubjectKind.RUN or not subject_id):
+            raise DomainValidationError("non-run ApprovalRequest requires a typed subject identity")
+        if run_id is not None and subject_kind is not ApprovalSubjectKind.RUN:
+            raise DomainValidationError("run ApprovalRequest must use the run subject kind")
         normalized_expiry = ensure_utc(expires_at) if expires_at is not None else None
         if normalized_expiry is not None and normalized_expiry <= ensure_utc(requested_at):
             raise DomainValidationError("ApprovalRequest.expires_at must be after its requested_at")
@@ -111,6 +125,8 @@ class ApprovalRequest:
             _step_id=step_id,
             _expires_at=normalized_expiry,
             _authorization_fingerprint=authorization_fingerprint,
+            _subject_kind=subject_kind,
+            _subject_id=subject_id,
         )
 
     @property
@@ -118,8 +134,16 @@ class ApprovalRequest:
         return self._id
 
     @property
-    def run_id(self) -> RunId:
+    def run_id(self) -> RunId | None:
         return self._run_id
+
+    @property
+    def subject_kind(self) -> ApprovalSubjectKind:
+        return self._subject_kind
+
+    @property
+    def subject_id(self) -> str:
+        return self._subject_id or str(self._run_id)
 
     @property
     def step_id(self) -> RunStepId | None:

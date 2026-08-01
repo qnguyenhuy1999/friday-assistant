@@ -1,7 +1,7 @@
 # Architecture Overview
 
-This document describes the implemented source organization through Phase 20
-Step 1: domain and application logic, SQLite persistence, API and worker
+This document describes the implemented source organization through Phase 19,
+with Phase 20 closure work in progress: domain and application logic, SQLite persistence, API and worker
 delivery, Claude runtime, memory, computer use, contracts, SDK, web control
 plane, durable scheduled automations, and the versioned skill registry.
 
@@ -104,7 +104,9 @@ reverse.
 
 ## Status
 
-Implemented through **Phase 20 — Skills & Self-Improvement Loop**:
+Implemented through **Phase 19 — Durable Messaging & Scheduled Delivery**.
+Phase 20 remains under its closure-review gate and is deliberately not marked
+complete here until the exact-head closure suite has passed and merged:
 
 - **Phase 4–5** — framework-independent domain model, application ports, JSON
   Schema contracts, and the SQLite persistence adapter (see
@@ -132,11 +134,11 @@ Implemented through **Phase 20 — Skills & Self-Improvement Loop**:
 - **Phase 19** — durable outbound messaging and scheduled delivery with
   per-fire authority snapshots (see
   [messaging-and-scheduled-delivery.md](messaging-and-scheduled-delivery.md)).
-- **Phase 20** — immutable versioned Skills, task binding and run freezing,
-  bounded runtime injection, factual usage evidence, deterministic isolated
-  evaluation, brain-only candidate proposals, exact-intent promotion and
-  rollback, and policy-driven proposal generation (see
-  [phase-20-skills.md](phase-20-skills.md)).
+- **Phase 20 (closure in progress)** — immutable versioned Skills, task
+  binding and run freezing, bounded runtime injection, factual usage evidence,
+  deterministic isolated evaluation, brain-only candidate proposals,
+  exact-intent promotion and rollback, and policy-driven proposal generation
+  (see [phase-20-skills.md](phase-20-skills.md)).
 
 Remaining core work is Phase 21 multi-agent delegation.
 The adapter and migration behavior are covered by `tests/persistence`.

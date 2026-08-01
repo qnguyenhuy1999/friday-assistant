@@ -151,3 +151,7 @@ class SkillRollbackRequestId(_Id):
 
 class SkillEvidenceSnapshotId(_Id):
     pass
+
+
+class SkillImprovementWorkId(_Id):
+    pass

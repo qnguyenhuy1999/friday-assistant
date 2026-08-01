@@ -5,7 +5,12 @@ import {
   type Page,
   type Run,
   type RunResult,
+  type RunSkillBinding,
+  type SkillFeedback,
   validateRunResult,
+  validateRunSkillBinding,
+  validateSkillFeedback,
+  validateSkillFeedbackItem,
 } from "@friday/contracts";
 import type { FridayHttpClient } from "../http";
 export interface ListRunsParams {
@@ -40,6 +45,36 @@ export class RunsResource {
       method: "GET",
       path: `/v1/runs/${id}/result`,
       validate: validateRunResult,
+    });
+  }
+  getSkills(runId: string) {
+    return this.http.requestJson<RunSkillBinding>({
+      method: "GET",
+      path: `/v1/runs/${runId}/skills`,
+      validate: validateRunSkillBinding,
+    });
+  }
+  addSkillFeedback(
+    runId: string,
+    skillId: string,
+    body: {
+      rating: "helpful" | "neutral" | "harmful";
+      note?: string;
+      created_by: string;
+    },
+  ) {
+    return this.http.requestJson<SkillFeedback>({
+      method: "POST",
+      path: `/v1/runs/${runId}/skills/${skillId}/feedback`,
+      body,
+      validate: validateSkillFeedbackItem,
+    });
+  }
+  listSkillFeedback(runId: string, skillId: string) {
+    return this.http.requestJson<SkillFeedback[]>({
+      method: "GET",
+      path: `/v1/runs/${runId}/skills/${skillId}/feedback`,
+      validate: validateSkillFeedback,
     });
   }
   listForTask(id: string, p: ListRunsParams = {}) {

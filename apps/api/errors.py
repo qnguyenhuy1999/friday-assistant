@@ -26,8 +26,14 @@ from friday.application.errors import (
     RunNotFound,
     RunStepNotFound,
     ScheduleNotFound,
+    SkillEvaluationRunNotFound,
+    SkillEvaluationSuiteNotFound,
+    SkillEvidenceSnapshotNotFound,
+    SkillImprovementProposalNotFound,
     SkillNotFound,
+    SkillPromotionRequestNotFound,
     SkillRevisionNotFound,
+    SkillRollbackRequestNotFound,
     TaskNotFound,
     ToolInvocationNotFound,
     TransactionFailure,
@@ -65,6 +71,12 @@ _NOT_FOUND_TYPES: dict[type[ApplicationError], str] = {
     ArtifactNotFound: "artifact_not_found",
     SkillNotFound: "skill_not_found",
     SkillRevisionNotFound: "skill_revision_not_found",
+    SkillEvidenceSnapshotNotFound: "skill_evidence_snapshot_not_found",
+    SkillEvaluationSuiteNotFound: "skill_evaluation_suite_not_found",
+    SkillEvaluationRunNotFound: "skill_evaluation_run_not_found",
+    SkillImprovementProposalNotFound: "skill_improvement_proposal_not_found",
+    SkillPromotionRequestNotFound: "skill_promotion_request_not_found",
+    SkillRollbackRequestNotFound: "skill_rollback_request_not_found",
 }
 
 _CONFLICT_TYPES: dict[type[ApplicationError], str] = {

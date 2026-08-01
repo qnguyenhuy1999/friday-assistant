@@ -89,7 +89,7 @@ class ClaimNextRun:
                     worker_id=self._worker_id,
                     claim_token=claim_token,
                     claim_generation=item.claim_generation,
-                    attempt_number=uow.runs.count_for_execution(run.execution_id),
+                    attempt_number=uow.runs.ordinal_for_execution(run.id),
                     acquired_at=now,
                     lease_expires_at=lease_expires_at,
                 )
@@ -231,7 +231,7 @@ class ApplyFailedOutcome:
             LifecycleEvents.append_run_events(uow, run, now, specs)
             materialize_skill_usage_in_uow(uow, run.id, now)
 
-            attempt_number = uow.runs.count_for_execution(run.execution_id)
+            attempt_number = uow.runs.ordinal_for_execution(run.id)
             if self._retry_policy.is_retry_allowed(attempt_number, failure):
                 retry = Run.new(
                     id=RunId.new(),

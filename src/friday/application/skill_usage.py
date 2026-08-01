@@ -35,9 +35,15 @@ class MaterializeSkillUsage:
 
     def execute(self, run_id: RunId) -> list[SkillUsageRecord]:
         with self._uow_factory() as uow:
-            existing = materialize_skill_usage_in_uow(uow, run_id, self._clock.now())
+            materialized = materialize_skill_usage_in_uow(uow, run_id, self._clock.now())
             uow.commit()
-            return existing
+            # A concurrent terminalizer may have won the idempotent insert.
+            # Reload after commit so every caller converges on the durable
+            # record rather than returning a locally constructed losing row.
+            return [
+                uow.skill_usage_records.get_for_run_skill(run_id, record.skill_id) or record
+                for record in materialized
+            ]
 
 
 def materialize_skill_usage_in_uow(
@@ -55,7 +61,9 @@ def materialize_skill_usage_in_uow(
     records: list[SkillUsageRecord] = []
     tool_count = len(uow.tool_invocations.list_for_run(run.id))
     approval_count = len(uow.approvals.list_for_run(run.id))
-    attempt = uow.runs.count_for_execution(run.execution_id)
+    attempt = uow.runs.ordinal_for_execution(run.id)
+    if attempt < 1:
+        raise EntityConflict("terminal Run is missing its execution ordinal")
     for binding in uow.run_skill_bindings.list_for_run(run.id):
         prior = uow.skill_usage_records.get_for_run_skill(run.id, binding.skill_id)
         if prior is not None:

@@ -32,6 +32,7 @@ Failure policy (stable codes, bounded messages):
 
 from __future__ import annotations
 
+import hashlib
 import time
 import uuid
 from collections.abc import Callable
@@ -44,11 +45,13 @@ from friday.application.claim_aware_tool_execution import ExecuteToolAction
 from friday.application.commands import RequestApprovalCommand
 from friday.application.conversation_context import ConversationContextAssembler
 from friday.application.errors import (
+    ApplicationError,
     BrainProtocolError,
     BrainResponseInvalid,
     BrainTimeout,
     BrainUnavailable,
     ClaimLost,
+    SkillIntegrityFailed,
     ToolExecutionAmbiguous,
     ToolInputInvalid,
     ToolNotFound,
@@ -183,11 +186,37 @@ class AgentRunProcessor:
                 return self._yield_now()
 
             try:
-                self._resolve_run_skills.execute(context.run_id)
-            except Exception as exc:
-                return self._failed("skill_resolution_failed", str(exc), retryable=False)
+                self._resolve_run_skills.execute(
+                    context.run_id,
+                    context.worker_id,
+                    context.claim_token,
+                    context.claim_generation,
+                )
+            except ClaimLost:
+                # A stale worker must yield its claim; it is not a Run-level
+                # Skill failure and must never terminalize the Run.
+                return self._yield_now()
+            except SkillIntegrityFailed:
+                return self._failed(
+                    "skill_integrity_failed",
+                    "skill integrity verification failed",
+                    retryable=False,
+                )
+            except ApplicationError:
+                return self._failed(
+                    "skill_resolution_failed",
+                    "skill resolution failed",
+                    retryable=False,
+                )
 
-            snapshot = self._load_snapshot(context, tuple(turn_notes))
+            try:
+                snapshot = self._load_snapshot(context, tuple(turn_notes))
+            except SkillIntegrityFailed:
+                return self._failed(
+                    "skill_integrity_failed",
+                    "skill integrity verification failed",
+                    retryable=False,
+                )
             if snapshot is None:
                 return self._yield_now()
             conversation = (
@@ -436,6 +465,10 @@ class AgentRunProcessor:
                 revision = uow.skill_revisions.get(binding.revision_id)
                 if skill is None or revision is None or revision.skill_id != binding.skill_id:
                     return None
+                if hashlib.sha256(revision.instructions.encode("utf-8")).hexdigest() != (
+                    revision.content_sha256
+                ):
+                    raise SkillIntegrityFailed()
                 skills.append((binding, skill, revision))
             return RunSnapshot(
                 task=task,

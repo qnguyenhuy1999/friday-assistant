@@ -59,6 +59,8 @@ def approval_result(approval: ApprovalRequest) -> ApprovalRequestResult:
         approval.resolver,
         approval.authorization_fingerprint,
         approval.consumed_at,
+        approval.subject_kind,
+        approval.subject_id,
     )
 
 
@@ -194,11 +196,13 @@ class _ApprovalResolution(LifecycleEvents):
             return approval_result(approval)
         if approval.status is not ApprovalStatus.PENDING:
             raise EntityConflict("approval request is terminal")
-        run = uow.runs.get(approval.run_id)
-        if run is None:
+        run = uow.runs.get(approval.run_id) if approval.run_id is not None else None
+        if approval.run_id is not None and run is None:
             raise RunNotFound(approval.run_id)
         step: RunStep | None = None
         if approval.step_id is not None:
+            if run is None:
+                raise EntityConflict("non-run approval cannot reference a step")
             step = uow.steps.get(approval.step_id)
             if step is None:
                 raise RunStepNotFound(approval.step_id)
@@ -206,6 +210,11 @@ class _ApprovalResolution(LifecycleEvents):
                 raise EntityConflict("step does not belong to run")
         transition()
         uow.approvals.save(approval)
+        if run is None:
+            # Skill promotion/rollback approvals are canonical ApprovalRequest
+            # subjects but do not fabricate a Task, Run, or RunEvent stream.
+            uow.commit()
+            return approval_result(approval)
         specs: list[tuple[RunEventType, JsonValue, RunStepId | None]] = [
             (
                 RunEventType.APPROVAL_RESOLVED,
@@ -217,13 +226,18 @@ class _ApprovalResolution(LifecycleEvents):
             )
         ]
         if (
-            step is not None
+            run is not None
+            and step is not None
             and step.status is RunStepStatus.WAITING_FOR_APPROVAL
             and step.approval_request_id == approval.id
         ):
             step.resume(now)
             uow.steps.save(step)
-        if run.status is RunStatus.WAITING_FOR_APPROVAL and run.approval_request_id == approval.id:
+        if (
+            run is not None
+            and run.status is RunStatus.WAITING_FOR_APPROVAL
+            and run.approval_request_id == approval.id
+        ):
             run.resume(now)
             uow.runs.save(run)
             uow.work_queue.enqueue(run.id, available_at=now, enqueued_at=now)

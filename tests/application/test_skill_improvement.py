@@ -59,7 +59,7 @@ def test_proposal_is_inert_and_bound_to_a_frozen_base_and_evidence_snapshot() ->
         evidence_snapshot_id=snapshot.id,
         evidence_snapshot_hash=snapshot.content_sha256,
         evidence_ids={"usage-1"},
-        generator_version="brain-only-v1",
+        generator_version="brain-candidate-generator-v2",
         raw_candidate=_candidate("improved instructions"),
     )
     assert proposal.status is SkillProposalStatus.READY_FOR_EVALUATION
@@ -93,6 +93,6 @@ def test_proposal_rejects_candidate_identical_to_base_revision() -> None:
             evidence_snapshot_id=snapshot.id,
             evidence_snapshot_hash=snapshot.content_sha256,
             evidence_ids={"usage-1"},
-            generator_version="brain-only-v1",
+            generator_version="brain-candidate-generator-v2",
             raw_candidate=_candidate("base instructions"),
         )

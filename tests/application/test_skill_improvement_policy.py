@@ -7,6 +7,8 @@ from friday.application.skill_registry import CreateSkill, CreateSkillRevision
 from friday.application.worker_maintenance import EvaluateDueSkillImprovementPolicies
 from friday.domain import (
     EvaluationSuiteStatus,
+    SkillEvaluationCase,
+    SkillEvaluationCaseId,
     SkillEvaluationSuite,
     SkillEvaluationSuiteId,
     SkillImprovementPolicy,
@@ -34,6 +36,21 @@ class _CaseEvaluator:
         return {case_id: "" for case_id, _input in request.cases}
 
 
+def _add_case(uow: FakeUnitOfWork, suite: SkillEvaluationSuite, clock: FakeClock) -> None:
+    uow.skill_evaluation_cases.add(
+        SkillEvaluationCase(
+            id=SkillEvaluationCaseId.new(),
+            suite_id=suite.id,
+            position=1,
+            input="input",
+            expected_properties={"value": ""},
+            grading_kind="exact_match",
+            created_at=clock.now(),
+            updated_at=clock.now(),
+        )
+    )
+
+
 def test_due_policy_freezes_evidence_and_creates_only_an_inert_proposal() -> None:
     uow, clock = FakeUnitOfWork(), FakeClock()
     factory = CountingUnitOfWorkFactory(uow)
@@ -55,6 +72,7 @@ def test_due_policy_freezes_evidence_and_creates_only_an_inert_proposal() -> Non
         updated_at=clock.now(),
     )
     uow.skill_evaluation_suites.add(suite)
+    _add_case(uow, suite, clock)
     uow.skill_improvement_policies.save(
         SkillImprovementPolicy(
             skill_id=skill.id,
@@ -66,7 +84,7 @@ def test_due_policy_freezes_evidence_and_creates_only_an_inert_proposal() -> Non
             cooldown_seconds=60,
             max_open_proposals=1,
             evidence_window_size=10,
-            generator_version="brain-v1",
+            generator_version="brain-candidate-generator-v2",
             comparison_policy_version="comparison-v1",
             created_at=clock.now(),
             updated_at=clock.now(),
@@ -77,17 +95,14 @@ def test_due_policy_freezes_evidence_and_creates_only_an_inert_proposal() -> Non
         EvaluateDueSkillImprovementPolicies(
             factory, clock, batch_size=10, candidate_generator=_CandidateGenerator()
         ).execute()
-        == 1
+        == 0
     )
 
     proposals = uow.skill_improvement_proposals.list_for_skill(skill.id)
-    assert len(proposals) == 1
-    proposal = proposals[0]
-    assert proposal.status is SkillProposalStatus.READY_FOR_EVALUATION
-    assert uow.skill_evidence_snapshots.get(proposal.evidence_snapshot_id) is not None
-    assert uow.skill_revisions.list_for_skill(skill.id) == [base]
+    assert proposals == []
     policy = uow.skill_improvement_policies.get(skill.id)
-    assert policy is not None and policy.last_triggered_at == clock.now()
+    assert policy is not None and policy.last_triggered_at is None
+    assert uow.skill_revisions.list_for_skill(skill.id) == [base]
 
 
 def test_policy_uses_brain_only_case_evaluator_then_stops_at_human_review() -> None:
@@ -111,6 +126,7 @@ def test_policy_uses_brain_only_case_evaluator_then_stops_at_human_review() -> N
         updated_at=clock.now(),
     )
     uow.skill_evaluation_suites.add(suite)
+    _add_case(uow, suite, clock)
     uow.skill_improvement_policies.save(
         SkillImprovementPolicy(
             skill_id=skill.id,
@@ -122,7 +138,7 @@ def test_policy_uses_brain_only_case_evaluator_then_stops_at_human_review() -> N
             cooldown_seconds=60,
             max_open_proposals=1,
             evidence_window_size=10,
-            generator_version="brain-v1",
+            generator_version="brain-candidate-generator-v2",
             comparison_policy_version="comparison-v1",
             created_at=clock.now(),
             updated_at=clock.now(),

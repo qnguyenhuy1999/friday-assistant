@@ -92,6 +92,56 @@ class SkillRevisionNotFound(ApplicationError):
         super().__init__(f"Skill revision not found: {revision_id}")
 
 
+class SkillEvidenceSnapshotNotFound(ApplicationError):
+    def __init__(self, snapshot_id: object) -> None:
+        self.snapshot_id = snapshot_id
+        super().__init__(f"Skill evidence snapshot not found: {snapshot_id}")
+
+
+class SkillEvaluationSuiteNotFound(ApplicationError):
+    def __init__(self, suite_id: object) -> None:
+        self.suite_id = suite_id
+        super().__init__(f"Skill evaluation suite not found: {suite_id}")
+
+
+class SkillEvaluationRunNotFound(ApplicationError):
+    def __init__(self, run_id: object) -> None:
+        self.run_id = run_id
+        super().__init__(f"Skill evaluation run not found: {run_id}")
+
+
+class SkillImprovementProposalNotFound(ApplicationError):
+    def __init__(self, proposal_id: object) -> None:
+        self.proposal_id = proposal_id
+        super().__init__(f"Skill improvement proposal not found: {proposal_id}")
+
+
+class SkillPromotionRequestNotFound(ApplicationError):
+    def __init__(self, request_id: object) -> None:
+        self.request_id = request_id
+        super().__init__(f"Skill promotion request not found: {request_id}")
+
+
+class SkillRollbackRequestNotFound(ApplicationError):
+    def __init__(self, request_id: object) -> None:
+        self.request_id = request_id
+        super().__init__(f"Skill rollback request not found: {request_id}")
+
+
+class SkillIntegrityFailed(ApplicationError):
+    """Persisted Skill instructions no longer match their durable digest."""
+
+    def __init__(self) -> None:
+        super().__init__("skill_integrity_failed")
+
+
+class SkillResolutionFailed(ApplicationError):
+    """A frozen Skill set could not be resolved under a valid Run claim."""
+
+    def __init__(self) -> None:
+        super().__init__("skill_resolution_failed")
+
+
 class EntityConflict(ApplicationError):
     """A write violated an expected uniqueness or state constraint."""
 

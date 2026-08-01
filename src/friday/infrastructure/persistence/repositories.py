@@ -56,6 +56,8 @@ from friday.domain import (
     SkillImprovementPolicy,
     SkillImprovementProposal,
     SkillImprovementProposalId,
+    SkillImprovementWork,
+    SkillImprovementWorkId,
     SkillPromotionRequest,
     SkillPromotionRequestId,
     SkillRevision,
@@ -130,6 +132,8 @@ from friday.infrastructure.persistence.mappers import (
     skill_improvement_policy_to_row,
     skill_improvement_proposal_from_row,
     skill_improvement_proposal_to_row,
+    skill_improvement_work_from_row,
+    skill_improvement_work_to_row,
     skill_promotion_request_from_row,
     skill_promotion_request_to_row,
     skill_revision_from_row,
@@ -178,6 +182,7 @@ from friday.infrastructure.persistence.models import (
     SkillEvidenceSnapshotRow,
     SkillImprovementPolicyRow,
     SkillImprovementProposalRow,
+    SkillImprovementWorkRow,
     SkillPromotionRequestRow,
     SkillRevisionRow,
     SkillRollbackRequestRow,
@@ -288,6 +293,44 @@ class RunSkillResolutionRepository:
     def add(self, resolution: RunSkillResolution) -> None:
         self._session.add(run_skill_resolution_to_row(resolution))
 
+    def add_if_claimed(
+        self,
+        resolution: RunSkillResolution,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        """Insert the freeze marker only while the exact lease is current.
+
+        The conditional INSERT is the authority boundary: a worker that lost
+        its claim cannot publish a resolution even if it read the claim just
+        before expiry.
+        """
+        from friday.infrastructure.persistence.models import RunWorkItemRow
+
+        statement = (
+            insert(RunSkillResolutionRow)
+            .from_select(
+                ["id", "run_id", "resolved_at"],
+                select(
+                    literal(str(resolution.id)),
+                    literal(str(resolution.run_id)),
+                    literal(resolution.resolved_at),
+                ).where(
+                    RunWorkItemRow.run_id == str(resolution.run_id),
+                    RunWorkItemRow.claimed_by == worker_id,
+                    RunWorkItemRow.claim_token == claim_token,
+                    RunWorkItemRow.claim_generation == claim_generation,
+                    RunWorkItemRow.lease_expires_at.is_not(None),
+                    RunWorkItemRow.lease_expires_at > now,
+                ),
+            )
+            .on_conflict_do_nothing(index_elements=["run_id"])
+        )
+        result = cast(CursorResult[Any], self._session.execute(statement))
+        return bool(result.rowcount)
+
 
 class RunSkillBindingRepository:
     def __init__(self, session: Session) -> None:
@@ -321,7 +364,30 @@ class SkillUsageRecordRepository:
         return skill_usage_record_from_row(row) if row else None
 
     def add(self, record: SkillUsageRecord) -> None:
-        self._session.add(skill_usage_record_to_row(record))
+        row = skill_usage_record_to_row(record)
+        self._session.execute(
+            insert(SkillUsageRecordRow)
+            .values(
+                id=row.id,
+                run_id=row.run_id,
+                task_id=row.task_id,
+                skill_id=row.skill_id,
+                revision_id=row.revision_id,
+                position=row.position,
+                resolution_id=row.resolution_id,
+                execution_id=row.execution_id,
+                attempt_number=row.attempt_number,
+                started_at=row.started_at,
+                completed_at=row.completed_at,
+                outcome=row.outcome,
+                failure_code=row.failure_code,
+                tool_call_count=row.tool_call_count,
+                approval_count=row.approval_count,
+                duration_ms=row.duration_ms,
+                created_at=row.created_at,
+            )
+            .on_conflict_do_nothing(index_elements=["run_id", "skill_id"])
+        )
 
     def list_for_skill(self, skill_id: SkillId, limit: int) -> list[SkillUsageRecord]:
         return [
@@ -366,6 +432,11 @@ class SkillEvaluationSuiteRepository:
 
     def add(self, suite: SkillEvaluationSuite) -> None:
         self._session.add(skill_evaluation_suite_to_row(suite))
+        # Cases are separately mapped rows (rather than an ORM relationship),
+        # so make the parent visible to SQLite before the same transaction
+        # stages its child rows.  This is a flush, not a commit: suite and
+        # cases still succeed or roll back atomically together.
+        self._session.flush()
 
     def list_for_skill(self, skill_id: SkillId) -> list[SkillEvaluationSuite]:
         return [
@@ -469,6 +540,161 @@ class SkillImprovementProposalRepository:
         ]
 
 
+class SkillImprovementWorkRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, work: SkillImprovementWork) -> None:
+        self._session.add(skill_improvement_work_to_row(work))
+
+    def add_if_active_absent(self, work: SkillImprovementWork) -> bool:
+        row = skill_improvement_work_to_row(work)
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                insert(SkillImprovementWorkRow)
+                .values(
+                    id=row.id,
+                    skill_id=row.skill_id,
+                    state=row.state,
+                    proposal_id=row.proposal_id,
+                    attempt_count=row.attempt_count,
+                    next_attempt_at=row.next_attempt_at,
+                    claimed_by=row.claimed_by,
+                    claim_token=row.claim_token,
+                    claim_generation=row.claim_generation,
+                    lease_expires_at=row.lease_expires_at,
+                    failure_code=row.failure_code,
+                    failure_detail=row.failure_detail,
+                    created_at=row.created_at,
+                    updated_at=row.updated_at,
+                )
+                .on_conflict_do_nothing()
+            ),
+        )
+        return bool(result.rowcount)
+
+    def get(self, work_id: SkillImprovementWorkId) -> SkillImprovementWork | None:
+        row = self._session.get(SkillImprovementWorkRow, str(work_id))
+        return skill_improvement_work_from_row(row) if row is not None else None
+
+    def get_active_for_skill(self, skill_id: SkillId) -> SkillImprovementWork | None:
+        row = self._session.scalar(
+            select(SkillImprovementWorkRow)
+            .where(
+                SkillImprovementWorkRow.skill_id == str(skill_id),
+                SkillImprovementWorkRow.state.in_(
+                    (
+                        "evidence_selection",
+                        "candidate_generation",
+                        "baseline_evaluation",
+                        "candidate_evaluation",
+                        "comparison",
+                        "failed",
+                    )
+                ),
+            )
+            .order_by(SkillImprovementWorkRow.created_at, SkillImprovementWorkRow.id)
+        )
+        return skill_improvement_work_from_row(row) if row is not None else None
+
+    def list_due(self, now: datetime, limit: int) -> list[SkillImprovementWork]:
+        rows = self._session.execute(
+            select(SkillImprovementWorkRow)
+            .where(
+                SkillImprovementWorkRow.next_attempt_at <= now,
+                SkillImprovementWorkRow.state.not_in(("complete", "ready_for_review")),
+            )
+            .order_by(SkillImprovementWorkRow.next_attempt_at, SkillImprovementWorkRow.created_at)
+            .limit(limit)
+        ).scalars()
+        return [skill_improvement_work_from_row(row) for row in rows]
+
+    def save(self, work: SkillImprovementWork) -> None:
+        self._session.merge(skill_improvement_work_to_row(work))
+
+    def claim_for_skill(
+        self,
+        skill_id: SkillId,
+        worker_id: str,
+        claim_token: str,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> SkillImprovementWork | None:
+        active_states = (
+            "evidence_selection",
+            "candidate_generation",
+            "baseline_evaluation",
+            "candidate_evaluation",
+            "comparison",
+            "failed",
+        )
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(SkillImprovementWorkRow)
+                .where(
+                    SkillImprovementWorkRow.skill_id == str(skill_id),
+                    SkillImprovementWorkRow.state.in_(active_states),
+                    SkillImprovementWorkRow.next_attempt_at <= now,
+                    or_(
+                        SkillImprovementWorkRow.claimed_by.is_(None),
+                        SkillImprovementWorkRow.lease_expires_at <= now,
+                    ),
+                )
+                .values(
+                    claimed_by=worker_id,
+                    claim_token=claim_token,
+                    claim_generation=SkillImprovementWorkRow.claim_generation + 1,
+                    lease_expires_at=lease_expires_at,
+                    updated_at=now,
+                )
+            ),
+        )
+        if not result.rowcount:
+            return None
+        return self.get_active_for_skill(skill_id)
+
+    def save_if_claimed(
+        self,
+        work: SkillImprovementWork,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        row = skill_improvement_work_to_row(work)
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(SkillImprovementWorkRow)
+                .where(
+                    SkillImprovementWorkRow.id == row.id,
+                    SkillImprovementWorkRow.claimed_by == worker_id,
+                    SkillImprovementWorkRow.claim_token == claim_token,
+                    SkillImprovementWorkRow.claim_generation == claim_generation,
+                    SkillImprovementWorkRow.lease_expires_at > now,
+                )
+                .values(
+                    skill_id=row.skill_id,
+                    state=row.state,
+                    proposal_id=row.proposal_id,
+                    attempt_count=row.attempt_count,
+                    next_attempt_at=row.next_attempt_at,
+                    claimed_by=row.claimed_by,
+                    claim_token=row.claim_token,
+                    claim_generation=row.claim_generation,
+                    lease_expires_at=row.lease_expires_at,
+                    failure_code=row.failure_code,
+                    failure_detail=row.failure_detail,
+                    created_at=row.created_at,
+                    updated_at=row.updated_at,
+                )
+            ),
+        )
+        return bool(result.rowcount)
+
+
 class SkillEvidenceSnapshotRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -499,6 +725,16 @@ class SkillImprovementPolicyRepository:
                 .limit(limit)
             ).scalars()
         ]
+
+    def list_due_enabled(self, now: datetime, limit: int) -> list[SkillImprovementPolicy]:
+        policies = self.list_enabled(100_000)
+        due = [
+            policy
+            for policy in policies
+            if policy.last_triggered_at is None
+            or (now - policy.last_triggered_at).total_seconds() >= policy.cooldown_seconds
+        ]
+        return due[:limit]
 
     def save(self, policy: SkillImprovementPolicy) -> None:
         self._session.merge(skill_improvement_policy_to_row(policy))
@@ -629,6 +865,22 @@ class RunRepository:
             )
             or 0
         )
+
+    def ordinal_for_execution(self, run_id: RunId) -> int:
+        run = self._session.get(RunRow, str(run_id))
+        if run is None:
+            return 0
+        rows = list(
+            self._session.execute(
+                select(RunRow)
+                .where(RunRow.execution_id == run.execution_id)
+                .order_by(RunRow.created_at, RunRow.id)
+            ).scalars()
+        )
+        for ordinal, candidate in enumerate(rows, start=1):
+            if candidate.id == str(run_id):
+                return ordinal
+        return 0
 
     def list_for_execution(self, execution_id: RunId) -> list[Run]:
         stmt = (
@@ -1081,6 +1333,21 @@ class ApprovalRepository:
 
     def save(self, approval: ApprovalRequest) -> None:
         self._session.merge(approval_to_row(approval))
+
+    def consume_if_unconsumed(self, approval_id: ApprovalRequestId, at: datetime) -> bool:
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(ApprovalRequestRow)
+                .where(
+                    ApprovalRequestRow.id == str(approval_id),
+                    ApprovalRequestRow.status == ApprovalStatus.APPROVED.value,
+                    ApprovalRequestRow.consumed_at.is_(None),
+                )
+                .values(consumed_at=at)
+            ),
+        )
+        return bool(result.rowcount)
 
     def list_pending_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
         stmt = (

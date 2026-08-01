@@ -64,6 +64,7 @@ from friday.domain.identifiers import (
     SkillEvidenceSnapshotId,
     SkillId,
     SkillImprovementProposalId,
+    SkillImprovementWorkId,
     SkillPromotionRequestId,
     SkillRevisionId,
     SkillRollbackRequestId,
@@ -93,6 +94,7 @@ from friday.domain.skill_evaluation import (
 from friday.domain.skill_evidence_snapshot import SkillEvidenceSnapshot
 from friday.domain.skill_improvement import SkillImprovementProposal
 from friday.domain.skill_improvement_policy import SkillImprovementPolicy
+from friday.domain.skill_improvement_work import SkillImprovementWork
 from friday.domain.skill_promotion import SkillPromotionRequest, SkillRollbackRequest
 from friday.domain.skill_usage import SkillRunFeedback, SkillUsageRecord
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES, RunStep
@@ -178,6 +180,13 @@ class FakeRunRepository:
 
     def count_for_execution(self, execution_id: RunId) -> int:
         return sum(run.execution_id == execution_id for run in self.items.values())
+
+    def ordinal_for_execution(self, run_id: RunId) -> int:
+        run = self.items.get(run_id)
+        if run is None:
+            return 0
+        rows = self.list_for_execution(run.execution_id)
+        return next((index for index, candidate in enumerate(rows, 1) if candidate.id == run_id), 0)
 
     def list_for_execution(self, execution_id: RunId) -> list[Run]:
         runs = [run for run in self.items.values() if run.execution_id == execution_id]
@@ -965,6 +974,13 @@ class FakeApprovalRepository:
     def save(self, approval: ApprovalRequest) -> None:
         self.items[approval.id] = approval
 
+    def consume_if_unconsumed(self, approval_id: ApprovalRequestId, at: datetime) -> bool:
+        approval = self.items.get(approval_id)
+        if approval is None or approval.consumed_at is not None:
+            return False
+        approval.consume(at)
+        return True
+
     def list_pending_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
         matching = [
             a
@@ -1374,6 +1390,19 @@ class FakeRunSkillResolutionRepository:
     def add(self, resolution: RunSkillResolution) -> None:
         self.items[resolution.run_id] = resolution
 
+    def add_if_claimed(
+        self,
+        resolution: RunSkillResolution,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        if resolution.run_id in self.items:
+            return False
+        self.add(resolution)
+        return True
+
 
 class FakeRunSkillBindingRepository:
     def __init__(self) -> None:
@@ -1509,8 +1538,95 @@ class FakeSkillImprovementPolicyRepository:
     def list_enabled(self, limit: int) -> list[SkillImprovementPolicy]:
         return [policy for policy in self.items.values() if policy.enabled][:limit]
 
+    def list_due_enabled(self, now: datetime, limit: int) -> list[SkillImprovementPolicy]:
+        return [
+            policy
+            for policy in self.list_enabled(limit)
+            if policy.last_triggered_at is None
+            or (now - policy.last_triggered_at).total_seconds() >= policy.cooldown_seconds
+        ][:limit]
+
     def save(self, policy: SkillImprovementPolicy) -> None:
         self.items[policy.skill_id] = policy
+
+
+class FakeSkillImprovementWorkRepository:
+    def __init__(self) -> None:
+        self.items: dict[SkillImprovementWorkId, SkillImprovementWork] = {}
+
+    def add(self, work: SkillImprovementWork) -> None:
+        self.items[work.id] = work
+
+    def add_if_active_absent(self, work: SkillImprovementWork) -> bool:
+        if self.get_active_for_skill(work.skill_id) is not None:
+            return False
+        self.add(work)
+        return True
+
+    def get(self, work_id: SkillImprovementWorkId) -> SkillImprovementWork | None:
+        return self.items.get(work_id)
+
+    def get_active_for_skill(self, skill_id: SkillId) -> SkillImprovementWork | None:
+        return next(
+            (
+                work
+                for work in self.items.values()
+                if work.skill_id == skill_id and work.state.value not in {"failed", "complete"}
+            ),
+            None,
+        )
+
+    def list_due(self, now: datetime, limit: int) -> list[SkillImprovementWork]:
+        return sorted(
+            (work for work in self.items.values() if work.next_attempt_at <= now),
+            key=lambda work: (work.next_attempt_at, str(work.id)),
+        )[:limit]
+
+    def save(self, work: SkillImprovementWork) -> None:
+        self.items[work.id] = work
+
+    def claim_for_skill(
+        self,
+        skill_id: SkillId,
+        worker_id: str,
+        claim_token: str,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> SkillImprovementWork | None:
+        work = self.get_active_for_skill(skill_id)
+        if work is None or work.next_attempt_at > now:
+            return None
+        claimed = replace(
+            work,
+            claimed_by=worker_id,
+            claim_token=claim_token,
+            claim_generation=work.claim_generation + 1,
+            lease_expires_at=lease_expires_at,
+            updated_at=now,
+        )
+        self.save(claimed)
+        return claimed
+
+    def save_if_claimed(
+        self,
+        work: SkillImprovementWork,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        current = self.items.get(work.id)
+        if (
+            current is None
+            or current.claimed_by != worker_id
+            or current.claim_token != claim_token
+            or current.claim_generation != claim_generation
+            or current.lease_expires_at is None
+            or current.lease_expires_at <= now
+        ):
+            return False
+        self.save(work)
+        return True
 
 
 class FakeSkillPromotionRequestRepository:
@@ -1557,6 +1673,7 @@ class FakeUnitOfWork:
         self.skill_evaluation_case_result_repo = FakeSkillEvaluationCaseResultRepository()
         self.skill_candidate_evaluation_repo = FakeSkillCandidateEvaluationRepository()
         self.skill_improvement_proposal_repo = FakeSkillImprovementProposalRepository()
+        self.skill_improvement_work_repo = FakeSkillImprovementWorkRepository()
         self.skill_evidence_snapshot_repo = FakeSkillEvidenceSnapshotRepository()
         self.skill_improvement_policy_repo = FakeSkillImprovementPolicyRepository()
         self.skill_promotion_request_repo = FakeSkillPromotionRequestRepository()
@@ -1641,6 +1758,10 @@ class FakeUnitOfWork:
     @property
     def skill_improvement_proposals(self) -> FakeSkillImprovementProposalRepository:
         return self.skill_improvement_proposal_repo
+
+    @property
+    def skill_improvement_work(self) -> FakeSkillImprovementWorkRepository:
+        return self.skill_improvement_work_repo
 
     @property
     def skill_evidence_snapshots(self) -> FakeSkillEvidenceSnapshotRepository:

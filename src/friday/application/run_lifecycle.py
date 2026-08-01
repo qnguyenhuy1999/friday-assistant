@@ -18,9 +18,10 @@ from friday.application.results import RunResult
 from friday.application.skill_usage import materialize_skill_usage_in_uow
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure
-from friday.domain.identifiers import RunId, RunStepId, TaskId
+from friday.domain.identifiers import RunId, RunSkillResolutionId, RunStepId, TaskId
 from friday.domain.json_value import JsonValue
 from friday.domain.run import TERMINAL_RUN_STATUSES, Run, RunStatus
+from friday.domain.skill import RunSkillBinding, RunSkillResolution
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
 from friday.domain.task import TaskStatus
 from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
@@ -268,6 +269,25 @@ class RetryFailedRun(LifecycleEvents):
                 id=RunId.new(), task_id=task.id, created_at=now, execution_id=source.execution_id
             )
             uow.runs.add(retry)
+            # Retry inheritance is an exact source-run copy.  It deliberately
+            # does not inspect siblings in the execution lineage: an
+            # unresolved source produces an unresolved retry, including when a
+            # different sibling happened to resolve later.
+            source_resolution = uow.run_skill_resolutions.get(source.id)
+            if source_resolution is not None:
+                uow.run_skill_resolutions.add(
+                    RunSkillResolution(
+                        RunSkillResolutionId.new(), retry.id, source_resolution.resolved_at
+                    )
+                )
+                uow.run_skill_bindings.add_all(
+                    [
+                        RunSkillBinding(
+                            retry.id, binding.skill_id, binding.revision_id, binding.position
+                        )
+                        for binding in uow.run_skill_bindings.list_for_run(source.id)
+                    ]
+                )
             uow.work_queue.enqueue(retry.id, available_at=now, enqueued_at=now)
             self.append_run_events(
                 uow,

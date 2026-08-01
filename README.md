@@ -182,8 +182,11 @@ Domain never depends outward. See [docs/architecture/README.md](docs/architectur
 Completed core foundations through:
 
 ```text
-Phase 20 — Skills & Self-Improvement Loop
+Phase 19 — Durable Messaging & Scheduled Delivery
 ```
+
+Phase 20 — Skills & Self-Improvement Loop is under its closure-review gate;
+it is not marked complete until the exact-head audit suite passes and merges.
 
 Remaining v1 phases:
 
@@ -227,6 +230,6 @@ See `justfile` for the complete command set and `docs/` for architecture, govern
 
 Friday is actively developed and should still be treated as pre-release software.
 
-The core execution/runtime foundations, messaging, and skills/self-improvement
-loop are implemented through Phase 20. Multi-agent workflows remain upcoming
-work.
+The core execution/runtime foundations and messaging are implemented through
+Phase 19. Phase 20 skills/self-improvement closure work is in progress.
+Multi-agent workflows remain upcoming work.

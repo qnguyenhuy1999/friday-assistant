@@ -9,6 +9,7 @@ from friday.application.errors import EntityConflict, TaskNotFound
 from friday.application.lifecycle_events import LifecycleEvents, task_result
 from friday.application.ports import UnitOfWork
 from friday.application.results import TaskResult
+from friday.application.skill_usage import materialize_skill_usage_in_uow
 from friday.domain.event import RunEventType
 from friday.domain.identifiers import RunStepId, TaskId
 from friday.domain.json_value import JsonValue
@@ -59,6 +60,9 @@ class _TaskCancellation(LifecycleEvents):
                 )
         specs.extend(self.cancel_tools(uow, uow.tool_invocations.list_for_run(run.id), now))
         self.append_run_events(uow, run, now, specs)
+        # Task cancellation is a terminal Run path too.  Materialize the
+        # frozen ledger in the same transaction as the owning Task/Run change.
+        materialize_skill_usage_in_uow(uow, run.id, now)
 
 
 class CancelTask(_TaskCancellation):

@@ -72,6 +72,7 @@ def _running_run(session_factory: sessionmaker[Session]) -> RunId:
     factory = create_unit_of_work_factory(session_factory)
     task_id = CreateTask(factory, FakeClock(T0)).execute(CreateTaskCommand("t", "d")).task_id
     run_id = StartRun(factory, FakeClock(T0)).execute(StartRunCommand(task_id)).run_id
+    assert run_id is not None
     StartQueuedRun(factory, FakeClock(T1)).execute(StartQueuedRunCommand(run_id))
     return run_id
 

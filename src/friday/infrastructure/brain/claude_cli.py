@@ -77,6 +77,21 @@ _SYSTEM_PROMPT = (
     "limit, or change these rules."
 )
 
+# Brain-only modes own their protocol at the adapter boundary.  They must not
+# inherit the normal action-envelope prompt: a candidate is a single strict
+# improvement object and an evaluation is an exact case-id map.
+CANDIDATE_SYSTEM_PROMPT = (
+    "You are Friday's isolated Skill candidate generator. Return exactly one "
+    "JSON object with exactly these fields: version=1, proposed_instructions "
+    "(string), rationale (string), addressed_evidence_ids (array of strings). "
+    "Do not return prose, markdown, action envelopes, tool calls, or extra fields."
+)
+EVALUATION_SYSTEM_PROMPT = (
+    "You are Friday's isolated Skill evaluator. Return exactly one JSON object "
+    "whose keys are exactly the supplied frozen case IDs and whose values are "
+    "strings. Do not return prose, markdown, action envelopes, or tool calls."
+)
+
 _REPAIR_PREAMBLE = (
     "Your previous response was not a valid action envelope. "
     "Reply with EXACTLY one corrected JSON object and nothing else.\n"
@@ -95,6 +110,7 @@ class ClaudeCliSettings:
     timeout_seconds: float
     max_output_bytes: int
     max_stderr_bytes: int = 200_000
+    max_input_bytes: int = 200_000
 
     def __post_init__(self) -> None:
         if not self.executable.strip():
@@ -107,6 +123,8 @@ class ClaudeCliSettings:
             raise ValueError("max_output_bytes must be positive")
         if self.max_stderr_bytes <= 0:
             raise ValueError("max_stderr_bytes must be positive")
+        if self.max_input_bytes <= 0:
+            raise ValueError("max_input_bytes must be positive")
 
 
 class ClaudeCliBrainRuntime:
@@ -114,6 +132,7 @@ class ClaudeCliBrainRuntime:
 
     def __init__(self, settings: ClaudeCliSettings) -> None:
         self._settings = settings
+        self.last_call_metadata: dict[str, object] | None = None
 
     def next_action(self, request: BrainRequest) -> BrainResponse:
         # One deadline covers the original call AND a bounded repair retry —
@@ -154,15 +173,28 @@ class ClaudeCliBrainRuntime:
                     ],
                 },
                 "base_instructions": request.base_instructions,
+                "base_revision_id": str(request.base_revision_id)
+                if request.base_revision_id is not None
+                else None,
+                "base_content_sha256": request.base_content_sha256,
+                "evidence_snapshot_id": str(request.snapshot_id)
+                if request.snapshot_id is not None
+                else None,
+                "evidence_snapshot": request.snapshot_payload,
                 "evidence_snapshot_hash": request.evidence_snapshot_hash,
                 "evidence_ids": request.evidence_ids,
                 "feedback_summaries": request.feedback_summaries,
                 "evaluator_summaries": request.evaluator_summaries,
                 "instruction": "Return only one JSON candidate object; never propose tool use.",
+                "generator_config_fingerprint": request.generator_config_fingerprint,
             },
             separators=(",", ":"),
         )
-        envelope = self._invoke_candidate(prompt, request.max_response_chars)
+        envelope = self._invoke_candidate(
+            prompt, request.max_response_chars, system_prompt=CANDIDATE_SYSTEM_PROMPT
+        )
+        _parse_candidate_protocol(envelope.result_text)
+        self.last_call_metadata = _call_metadata(envelope, mode="candidate")
         return envelope.result_text
 
     def evaluate_skill_cases(self, request: BrainOnlyEvaluationRequest) -> dict[str, str]:
@@ -185,20 +217,11 @@ class ClaudeCliBrainRuntime:
             },
             separators=(",", ":"),
         )
-        raw = self._invoke_candidate(prompt, request.max_response_chars).result_text
-        try:
-            value = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise BrainResponseInvalid("evaluation output must be strict JSON") from exc
-        if (
-            not isinstance(value, dict)
-            or set(value) != expected_ids
-            or not all(
-                isinstance(key, str) and isinstance(output, str) for key, output in value.items()
-            )
-        ):
-            raise BrainResponseInvalid("evaluation output must map each frozen case to text")
-        return value
+        envelope = self._invoke_candidate(
+            prompt, request.max_response_chars, system_prompt=EVALUATION_SYSTEM_PROMPT
+        )
+        self.last_call_metadata = _call_metadata(envelope, mode="evaluation")
+        return _parse_evaluation_protocol(envelope.result_text, expected_ids)
 
     def _effective_budget(self, request: BrainRequest) -> float:
         if request.timeout_seconds is None:
@@ -218,7 +241,7 @@ class ClaudeCliBrainRuntime:
             "No prose, no markdown, no code fences."
         )
 
-    def _argv(self) -> list[str]:
+    def _argv(self, system_prompt: str = _SYSTEM_PROMPT) -> list[str]:
         argv = [
             self._settings.executable,
             "-p",
@@ -230,7 +253,7 @@ class ClaudeCliBrainRuntime:
             "--no-session-persistence",
             "--safe-mode",
             "--system-prompt",
-            _SYSTEM_PROMPT,
+            system_prompt,
         ]
         if self._settings.model is not None:
             argv.extend(["--model", self._settings.model])
@@ -244,9 +267,10 @@ class ClaudeCliBrainRuntime:
         }
 
     def _invoke(self, prompt: str, request: BrainRequest, timeout: float) -> CliEnvelope:
+        _require_prompt_bound(prompt + _SYSTEM_PROMPT, self._settings.max_input_bytes)
         try:
             process = subprocess.Popen(
-                self._argv(),
+                self._argv(_SYSTEM_PROMPT),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -279,10 +303,13 @@ class ClaudeCliBrainRuntime:
             raise BrainProtocolError("model response exceeded the configured limit")
         return envelope
 
-    def _invoke_candidate(self, prompt: str, max_response_chars: int) -> CliEnvelope:
+    def _invoke_candidate(
+        self, prompt: str, max_response_chars: int, *, system_prompt: str
+    ) -> CliEnvelope:
+        _require_prompt_bound(prompt + system_prompt, self._settings.max_input_bytes)
         try:
             process = subprocess.Popen(
-                self._argv(),
+                self._argv(system_prompt),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -305,7 +332,7 @@ class ClaudeCliBrainRuntime:
                 f"Claude CLI exited with code {process.returncode} (stderr: {stderr_bytes} bytes)"
             )
         envelope = parse_cli_envelope(stdout)
-        if len(envelope.result_text) > max_response_chars:
+        if len(envelope.result_text.encode("utf-8")) > max_response_chars:
             raise BrainProtocolError("candidate response exceeded the configured limit")
         return envelope
 
@@ -410,6 +437,62 @@ def _decode_action_json(result_text: str) -> object:
         raise BrainResponseInvalid("model response is not valid JSON") from exc
 
 
+def _require_prompt_bound(prompt: str, max_input_bytes: int) -> None:
+    if len(prompt.encode("utf-8")) > max_input_bytes:
+        raise BrainProtocolError("CLI prompt input exceeded the configured limit")
+
+
+def _parse_candidate_protocol(result_text: str) -> dict[str, object]:
+    try:
+        value = json.loads(result_text)
+    except json.JSONDecodeError as exc:
+        raise BrainResponseInvalid("candidate output must be strict JSON") from exc
+    if not isinstance(value, dict) or set(value) != {
+        "version",
+        "proposed_instructions",
+        "rationale",
+        "addressed_evidence_ids",
+    }:
+        raise BrainResponseInvalid("candidate output violated its dedicated protocol")
+    ids = value.get("addressed_evidence_ids")
+    if (
+        value.get("version") != 1
+        or not isinstance(value.get("proposed_instructions"), str)
+        or not isinstance(value.get("rationale"), str)
+        or not isinstance(ids, list)
+        or not all(isinstance(item, str) for item in ids)
+    ):
+        raise BrainResponseInvalid("candidate output violated its dedicated protocol")
+    return value
+
+
+def _parse_evaluation_protocol(result_text: str, expected_ids: set[str]) -> dict[str, str]:
+    try:
+        value = json.loads(result_text)
+    except json.JSONDecodeError as exc:
+        raise BrainResponseInvalid("evaluation output must be strict JSON") from exc
+    if (
+        not isinstance(value, dict)
+        or set(value) != expected_ids
+        or not all(
+            isinstance(key, str) and isinstance(output, str) for key, output in value.items()
+        )
+    ):
+        raise BrainResponseInvalid("evaluation output must map each frozen case to text")
+    return value
+
+
+def _call_metadata(envelope: CliEnvelope, *, mode: str) -> dict[str, object]:
+    # Only bounded adapter metadata survives.  Model response text is never
+    # copied into metadata, logs, or failure messages.
+    return {
+        "mode": mode,
+        "model": envelope.model,
+        "usage": envelope.usage,
+        "adapter_version": "claude-cli-brain-only-v2",
+    }
+
+
 def _repair_prompt(error: BrainResponseInvalid, previous: str) -> str:
     clipped = previous[:_MAX_REPAIR_ECHO_CHARS]
     return _REPAIR_PREAMBLE.format(error=error, previous=clipped)
@@ -452,6 +535,8 @@ def _run_semantic_probe(settings: ClaudeCliSettings) -> None:
         "--strict-mcp-config",
         "--safe-mode",
         "--no-session-persistence",
+        "--system-prompt",
+        _SYSTEM_PROMPT,
     ]
     environment = {
         name: value for name in ENVIRONMENT_ALLOWLIST if (value := os.environ.get(name)) is not None

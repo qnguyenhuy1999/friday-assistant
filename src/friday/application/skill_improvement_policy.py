@@ -6,7 +6,13 @@ from dataclasses import replace
 
 from friday.application.errors import EntityConflict, SkillNotFound
 from friday.application.ports import Clock, UnitOfWorkFactory
-from friday.domain import SkillId, SkillImprovementPolicy
+from friday.domain import (
+    SkillId,
+    SkillImprovementPolicy,
+    SkillImprovementWork,
+    SkillImprovementWorkId,
+    SkillImprovementWorkState,
+)
 from friday.domain.skill_improvement import SkillProposalStatus
 from friday.domain.skill_usage import SkillFeedbackRating, SkillUsageOutcome
 
@@ -22,6 +28,8 @@ class SaveSkillImprovementPolicy:
             suite = uow.skill_evaluation_suites.get(policy.evaluation_suite_id)
             if suite is None or suite.skill_id != policy.skill_id:
                 raise EntityConflict("policy evaluation suite does not belong to skill")
+            if not uow.skill_evaluation_cases.list_for_suite(suite.id):
+                raise EntityConflict("policy evaluation suite requires at least one case")
             current = uow.skill_improvement_policies.get(policy.skill_id)
             saved = replace(
                 policy,
@@ -46,6 +54,42 @@ class RunSkillImprovementPolicyNow:
             if policy is None or not policy.enabled:
                 return False
             now = self._clock.now()
+            work_repo = getattr(uow, "skill_improvement_work", None)
+            if work_repo is not None and work_repo.get_active_for_skill(skill_id) is not None:
+                return True
+            if work_repo is not None:
+                resumable = next(
+                    (
+                        proposal
+                        for proposal in uow.skill_improvement_proposals.list_for_skill(skill_id)
+                        if proposal.status is SkillProposalStatus.READY_FOR_EVALUATION
+                    ),
+                    None,
+                )
+                if resumable is not None:
+                    resumable_work = SkillImprovementWork(
+                        id=SkillImprovementWorkId.new(),
+                        skill_id=skill_id,
+                        state=SkillImprovementWorkState.CANDIDATE_GENERATION,
+                        proposal_id=resumable.id,
+                        attempt_count=0,
+                        next_attempt_at=now,
+                        claimed_by=None,
+                        claim_token=None,
+                        claim_generation=0,
+                        lease_expires_at=None,
+                        failure_code=None,
+                        failure_detail=None,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    add_if_absent = getattr(work_repo, "add_if_active_absent", None)
+                    if callable(add_if_absent):
+                        add_if_absent(resumable_work)
+                    else:
+                        work_repo.add(resumable_work)
+                    uow.commit()
+                    return True
             if (
                 policy.last_triggered_at
                 and (now - policy.last_triggered_at).total_seconds() < policy.cooldown_seconds
@@ -75,6 +119,30 @@ class RunSkillImprovementPolicyNow:
                 or open_count >= policy.max_open_proposals
             ):
                 return False
+            if work_repo is not None:
+                work = SkillImprovementWork(
+                    id=SkillImprovementWorkId.new(),
+                    skill_id=skill_id,
+                    state=SkillImprovementWorkState.EVIDENCE_SELECTION,
+                    proposal_id=None,
+                    attempt_count=0,
+                    next_attempt_at=now,
+                    claimed_by=None,
+                    claim_token=None,
+                    claim_generation=0,
+                    lease_expires_at=None,
+                    failure_code=None,
+                    failure_detail=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+                add_if_absent = getattr(work_repo, "add_if_active_absent", None)
+                if callable(add_if_absent):
+                    add_if_absent(work)
+                else:
+                    work_repo.add(work)
+                uow.commit()
+                return True
             if record_trigger:
                 uow.skill_improvement_policies.save(
                     replace(policy, last_triggered_at=now, updated_at=now)

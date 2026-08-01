@@ -22,6 +22,8 @@ from friday.application.skill_usage import MaterializeSkillUsage
 from friday.application.worker_maintenance import EvaluateDueSkillImprovementPolicies
 from friday.domain import (
     EvaluationSuiteStatus,
+    SkillEvaluationCase,
+    SkillEvaluationCaseId,
     SkillEvaluationSuite,
     SkillEvaluationSuiteId,
     SkillImprovementPolicy,
@@ -51,7 +53,8 @@ class _CandidateGenerator:
 
 class _CaseEvaluator:
     def evaluate_skill_cases(self, request: BrainOnlyEvaluationRequest) -> dict[str, str]:
-        return {case_id: "" for case_id, _input in request.cases}
+        output = "candidate" if "safer" in request.instructions else "baseline"
+        return {case_id: output for case_id, _input in request.cases}
 
 
 def test_phase20_safe_loop_e2e_freezes_evidence_reviews_promotes_and_rolls_back() -> None:
@@ -87,6 +90,18 @@ def test_phase20_safe_loop_e2e_freezes_evidence_reviews_promotes_and_rolls_back(
         updated_at=clock.now(),
     )
     uow.skill_evaluation_suites.add(suite)
+    uow.skill_evaluation_cases.add(
+        SkillEvaluationCase(
+            id=SkillEvaluationCaseId.new(),
+            suite_id=suite.id,
+            position=1,
+            input="input",
+            expected_properties={"value": "candidate"},
+            grading_kind="exact_match",
+            created_at=clock.now(),
+            updated_at=clock.now(),
+        )
+    )
     uow.skill_improvement_policies.save(
         SkillImprovementPolicy(
             skill_id=skill.id,
@@ -98,7 +113,7 @@ def test_phase20_safe_loop_e2e_freezes_evidence_reviews_promotes_and_rolls_back(
             cooldown_seconds=60,
             max_open_proposals=1,
             evidence_window_size=10,
-            generator_version="brain-v1",
+            generator_version="brain-candidate-generator-v2",
             comparison_policy_version="comparison-v1",
             created_at=clock.now(),
             updated_at=clock.now(),

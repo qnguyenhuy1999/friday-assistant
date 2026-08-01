@@ -63,6 +63,8 @@ const approval = {
   resolver: null,
   authorization_fingerprint: null,
   consumed_at: null,
+  subject_kind: "run",
+  subject_id: "r-1",
 };
 
 /** Routes each of the page's six concurrent reads to its own fixture. */

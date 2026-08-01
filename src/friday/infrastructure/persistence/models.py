@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -55,6 +56,12 @@ class SkillRevisionRow(Base):
             "source_kind IN ('operator', 'imported', 'generated')",
             name="ck_skill_revisions_source_kind",
         ),
+        CheckConstraint(
+            "(source_kind = 'generated' AND promotion_request_id IS NOT NULL) OR "
+            "(source_kind IN ('operator', 'imported') AND promotion_request_id IS NULL)",
+            name="ck_skill_revisions_promotion_provenance",
+        ),
+        UniqueConstraint("promotion_request_id", name="uq_skill_revisions_promotion_request"),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
     skill_id: Mapped[str] = mapped_column(ForeignKey("skills.id"), index=True)
@@ -63,6 +70,9 @@ class SkillRevisionRow(Base):
     content_sha256: Mapped[str]
     source_kind: Mapped[str]
     created_at: Mapped[datetime]
+    promotion_request_id: Mapped[str | None] = mapped_column(
+        ForeignKey("skill_promotion_requests.id")
+    )
 
 
 class TaskSkillBindingRow(Base):
@@ -80,8 +90,12 @@ class TaskSkillBindingRow(Base):
 
 class RunSkillResolutionRow(Base):
     __tablename__ = "run_skill_resolutions"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_run_skill_resolutions_run_id"),
+        UniqueConstraint("run_id", "id", name="uq_run_skill_resolutions_run_id_id"),
+    )
     id: Mapped[str] = mapped_column(primary_key=True)
-    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), unique=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
     resolved_at: Mapped[datetime]
 
 
@@ -89,6 +103,9 @@ class RunSkillBindingRow(Base):
     __tablename__ = "run_skill_bindings"
     __table_args__ = (
         UniqueConstraint("run_id", "skill_id", name="uq_run_skill_bindings_skill"),
+        UniqueConstraint(
+            "run_id", "skill_id", "revision_id", name="uq_run_skill_bindings_frozen_revision"
+        ),
         UniqueConstraint("run_id", "position", name="uq_run_skill_bindings_position"),
         ForeignKeyConstraint(
             ["skill_id", "revision_id"],
@@ -107,6 +124,30 @@ class SkillUsageRecordRow(Base):
     __tablename__ = "skill_usage_records"
     __table_args__ = (
         UniqueConstraint("run_id", "skill_id", name="uq_skill_usage_records_run_skill"),
+        ForeignKeyConstraint(
+            ["run_id", "skill_id", "revision_id"],
+            [
+                "run_skill_bindings.run_id",
+                "run_skill_bindings.skill_id",
+                "run_skill_bindings.revision_id",
+            ],
+            name="fk_skill_usage_records_frozen_binding",
+        ),
+        ForeignKeyConstraint(
+            ["run_id", "resolution_id"],
+            ["run_skill_resolutions.run_id", "run_skill_resolutions.id"],
+            name="fk_skill_usage_records_resolution_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["run_id", "task_id"],
+            ["runs.id", "runs.task_id"],
+            name="fk_skill_usage_records_task_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["run_id", "execution_id"],
+            ["runs.id", "runs.execution_id"],
+            name="fk_skill_usage_records_execution_ownership",
+        ),
         CheckConstraint(
             "outcome IN ('succeeded', 'failed', 'cancelled', 'resolution_failed')",
             name="ck_skill_usage_records_outcome",
@@ -116,6 +157,13 @@ class SkillUsageRecordRow(Base):
         CheckConstraint("approval_count >= 0", name="ck_skill_usage_records_approval_count"),
         CheckConstraint(
             "duration_ms IS NULL OR duration_ms >= 0", name="ck_skill_usage_records_duration"
+        ),
+        CheckConstraint("position BETWEEN 1 AND 16", name="ck_skill_usage_records_position"),
+        CheckConstraint(
+            "(outcome = 'failed' AND failure_code IS NOT NULL AND "
+            "length(failure_code) BETWEEN 1 AND 128 AND failure_code NOT GLOB '*[^a-z0-9_]*') OR "
+            "(outcome <> 'failed' AND failure_code IS NULL)",
+            name="ck_skill_usage_records_failure_code_shape",
         ),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
@@ -146,6 +194,15 @@ class SkillRunFeedbackRow(Base):
             "rating IN ('helpful', 'neutral', 'harmful')", name="ck_skill_feedback_rating"
         ),
         CheckConstraint("length(created_by) BETWEEN 1 AND 128", name="ck_skill_feedback_creator"),
+        ForeignKeyConstraint(
+            ["run_id", "skill_id", "revision_id"],
+            [
+                "run_skill_bindings.run_id",
+                "run_skill_bindings.skill_id",
+                "run_skill_bindings.revision_id",
+            ],
+            name="fk_skill_feedback_frozen_binding",
+        ),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), nullable=False, index=True)
@@ -159,7 +216,14 @@ class SkillRunFeedbackRow(Base):
 
 class SkillEvaluationSuiteRow(Base):
     __tablename__ = "skill_evaluation_suites"
-    __table_args__ = (UniqueConstraint("skill_id", "name", name="uq_skill_evaluation_suite_name"),)
+    __table_args__ = (
+        UniqueConstraint("skill_id", "id", name="uq_skill_evaluation_suites_skill_id"),
+        UniqueConstraint("skill_id", "name", name="uq_skill_evaluation_suite_name"),
+        CheckConstraint(
+            "status IN ('active', 'disabled')", name="ck_skill_evaluation_suites_status"
+        ),
+        CheckConstraint("length(name) BETWEEN 1 AND 256", name="ck_skill_evaluation_suites_name"),
+    )
     id: Mapped[str] = mapped_column(primary_key=True)
     skill_id: Mapped[str] = mapped_column(ForeignKey("skills.id"))
     name: Mapped[str]
@@ -174,6 +238,12 @@ class SkillEvaluationCaseRow(Base):
     __table_args__ = (
         UniqueConstraint("suite_id", "position", name="uq_skill_evaluation_case_position"),
         CheckConstraint("position > 0", name="ck_skill_evaluation_case_position"),
+        CheckConstraint("length(input) BETWEEN 1 AND 32000", name="ck_skill_evaluation_case_input"),
+        CheckConstraint(
+            "grading_kind IN ('exact_match', 'contains_all', 'contains_none', "
+            "'json_schema', 'required_keys', 'tool_proposal_shape')",
+            name="ck_skill_evaluation_case_grading_kind",
+        ),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
     suite_id: Mapped[str] = mapped_column(ForeignKey("skill_evaluation_suites.id"))
@@ -187,6 +257,40 @@ class SkillEvaluationCaseRow(Base):
 
 class SkillEvaluationRunRow(Base):
     __tablename__ = "skill_evaluation_runs"
+    __table_args__ = (
+        UniqueConstraint("skill_id", "id", name="uq_skill_evaluation_runs_skill_id"),
+        ForeignKeyConstraint(
+            ["skill_id", "suite_id"],
+            ["skill_evaluation_suites.skill_id", "skill_evaluation_suites.id"],
+            name="fk_skill_evaluation_runs_suite_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["skill_id", "revision_id"],
+            ["skill_revisions.skill_id", "skill_revisions.id"],
+            name="fk_skill_evaluation_runs_revision_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["skill_id", "proposal_id"],
+            ["skill_improvement_proposals.skill_id", "skill_improvement_proposals.id"],
+            name="fk_skill_evaluation_runs_proposal_ownership",
+        ),
+        CheckConstraint(
+            "(revision_id IS NOT NULL AND proposal_id IS NULL) OR "
+            "(revision_id IS NULL AND proposal_id IS NOT NULL)",
+            name="ck_skill_evaluation_runs_target_xor",
+        ),
+        CheckConstraint(
+            "status IN ('succeeded', 'failed')", name="ck_skill_evaluation_runs_status"
+        ),
+        CheckConstraint(
+            "length(runtime_fingerprint) = 64 AND runtime_fingerprint NOT GLOB '*[^0-9a-f]*'",
+            name="ck_skill_evaluation_runs_runtime_fingerprint",
+        ),
+        CheckConstraint(
+            "length(target_content_sha256) = 64 AND target_content_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_skill_evaluation_runs_target_sha256",
+        ),
+    )
     id: Mapped[str] = mapped_column(primary_key=True)
     suite_id: Mapped[str] = mapped_column(ForeignKey("skill_evaluation_suites.id"))
     skill_id: Mapped[str] = mapped_column(ForeignKey("skills.id"))
@@ -201,6 +305,8 @@ class SkillEvaluationRunRow(Base):
     aggregate_result: Mapped[object] = mapped_column(JSON)
     suite_snapshot: Mapped[object] = mapped_column(JSON)
     runtime_fingerprint: Mapped[str]
+    target_content_sha256: Mapped[str]
+    runtime_metadata: Mapped[object] = mapped_column(JSON)
 
 
 class SkillEvaluationCaseResultRow(Base):
@@ -208,6 +314,13 @@ class SkillEvaluationCaseResultRow(Base):
     __table_args__ = (
         UniqueConstraint("evaluation_run_id", "case_id", name="uq_skill_evaluation_case_result"),
         CheckConstraint("score BETWEEN 0 AND 1", name="ck_skill_evaluation_case_score"),
+        CheckConstraint(
+            "status IN ('succeeded', 'failed')", name="ck_skill_evaluation_case_status"
+        ),
+        CheckConstraint(
+            "length(output_sha256) = 64 AND output_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_skill_evaluation_case_output_sha256",
+        ),
     )
     evaluation_run_id: Mapped[str] = mapped_column(
         ForeignKey("skill_evaluation_runs.id"), primary_key=True
@@ -230,14 +343,48 @@ class SkillImprovementProposalRow(Base):
             "generator_version",
             name="uq_skill_improvement_proposal_fingerprint",
         ),
+        UniqueConstraint("skill_id", "id", name="uq_skill_improvement_proposals_skill_id"),
+        ForeignKeyConstraint(
+            ["skill_id", "base_revision_id"],
+            ["skill_revisions.skill_id", "skill_revisions.id"],
+            name="fk_skill_improvement_proposals_base_revision_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["skill_id", "evidence_snapshot_id"],
+            ["skill_evidence_snapshots.skill_id", "skill_evidence_snapshots.id"],
+            name="fk_skill_improvement_proposals_evidence_snapshot_ownership",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'ready_for_evaluation', 'evaluating', 'ready_for_review', "
+            "'approved', 'rejected', 'superseded', 'cancelled', 'expired', 'promoted')",
+            name="ck_skill_improvement_proposals_status",
+        ),
+        CheckConstraint(
+            "length(evidence_snapshot_hash) = 64 AND evidence_snapshot_hash NOT GLOB '*[^0-9a-f]*'",
+            name="ck_skill_improvement_proposals_evidence_hash",
+        ),
+        CheckConstraint(
+            "length(proposed_content_sha256) = 64 AND "
+            "proposed_content_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_skill_improvement_proposals_content_hash",
+        ),
+        Index(
+            "uq_skill_improvement_proposals_one_open",
+            "skill_id",
+            unique=True,
+            sqlite_where=text(
+                "status IN ('draft', 'ready_for_evaluation', 'evaluating', "
+                "'ready_for_review', 'approved')"
+            ),
+        ),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
     skill_id: Mapped[str] = mapped_column(ForeignKey("skills.id"), index=True)
     base_revision_id: Mapped[str] = mapped_column(ForeignKey("skill_revisions.id"))
     status: Mapped[str]
     trigger_kind: Mapped[str]
-    evidence_snapshot_id: Mapped[str | None] = mapped_column(
-        ForeignKey("skill_evidence_snapshots.id"), nullable=True
+    evidence_snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("skill_evidence_snapshots.id"), nullable=False
     )
     evidence_snapshot_hash: Mapped[str]
     proposed_instructions: Mapped[str]
@@ -247,8 +394,79 @@ class SkillImprovementProposalRow(Base):
     created_at: Mapped[datetime]
 
 
+class SkillImprovementWorkRow(Base):
+    __tablename__ = "skill_improvement_work_items"
+    __table_args__ = (
+        Index(
+            "uq_skill_improvement_work_active_skill",
+            "skill_id",
+            unique=True,
+            sqlite_where=text(
+                "state IN ('evidence_selection', 'candidate_generation', "
+                "'baseline_evaluation', 'candidate_evaluation', 'comparison', 'failed')"
+            ),
+        ),
+        CheckConstraint(
+            "state IN ('evidence_selection', 'candidate_generation', 'baseline_evaluation', "
+            "'candidate_evaluation', 'comparison', 'ready_for_review', 'failed', 'complete')",
+            name="ck_skill_improvement_work_state",
+        ),
+        CheckConstraint("attempt_count >= 0", name="ck_skill_improvement_work_attempt_count"),
+        CheckConstraint("claim_generation >= 0", name="ck_skill_improvement_work_claim_generation"),
+        CheckConstraint(
+            "failure_code IS NULL OR (length(failure_code) BETWEEN 1 AND 128 "
+            "AND failure_code NOT GLOB '*[^a-z0-9_]*')",
+            name="ck_skill_improvement_work_failure_code",
+        ),
+        CheckConstraint(
+            "(claimed_by IS NULL AND claim_token IS NULL AND lease_expires_at IS NULL) OR "
+            "(claimed_by IS NOT NULL AND claim_token IS NOT NULL AND lease_expires_at IS NOT NULL)",
+            name="ck_skill_improvement_work_claim_shape",
+        ),
+        CheckConstraint(
+            "failure_detail IS NULL OR length(failure_detail) BETWEEN 1 AND 512",
+            name="ck_skill_improvement_work_failure_detail",
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    skill_id: Mapped[str] = mapped_column(ForeignKey("skills.id"), nullable=False)
+    state: Mapped[str]
+    proposal_id: Mapped[str | None] = mapped_column(
+        ForeignKey("skill_improvement_proposals.id"), nullable=True
+    )
+    attempt_count: Mapped[int]
+    next_attempt_at: Mapped[datetime]
+    claimed_by: Mapped[str | None]
+    claim_token: Mapped[str | None]
+    claim_generation: Mapped[int]
+    lease_expires_at: Mapped[datetime | None]
+    failure_code: Mapped[str | None]
+    failure_detail: Mapped[str | None]
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+
+
 class SkillCandidateEvaluationRow(Base):
     __tablename__ = "skill_candidate_evaluations"
+    __table_args__ = (
+        UniqueConstraint("proposal_id", "id", name="uq_skill_candidate_evaluations_proposal_id"),
+        CheckConstraint(
+            "result IN ('better', 'worse', 'equivalent', 'mixed', 'inconclusive')",
+            name="ck_skill_candidate_evaluations_result",
+        ),
+        CheckConstraint(
+            "recommendation IN ('eligible', 'not_eligible', 'requires_manual_override')",
+            name="ck_skill_candidate_evaluations_recommendation",
+        ),
+        CheckConstraint(
+            "regression_count >= 0 AND improvement_count >= 0 AND inconclusive_count >= 0",
+            name="ck_skill_candidate_evaluations_counts",
+        ),
+        CheckConstraint(
+            "length(report_sha256) = 64 AND report_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_skill_candidate_evaluations_report_sha256",
+        ),
+    )
     id: Mapped[str] = mapped_column(primary_key=True)
     proposal_id: Mapped[str] = mapped_column(
         ForeignKey("skill_improvement_proposals.id"), unique=True
@@ -266,12 +484,52 @@ class SkillCandidateEvaluationRow(Base):
     inconclusive_count: Mapped[int]
     report_sha256: Mapped[str]
     created_at: Mapped[datetime]
+    comparison_report: Mapped[object] = mapped_column(JSON, nullable=False)
 
 
 class SkillPromotionRequestRow(Base):
     __tablename__ = "skill_promotion_requests"
     __table_args__ = (
         CheckConstraint("target_version > 0", name="ck_skill_promotion_target_version"),
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected', 'stale', 'cancelled', 'promoted')",
+            name="ck_skill_promotion_status",
+        ),
+        CheckConstraint(
+            "length(candidate_sha256) = 64 AND candidate_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_skill_promotion_candidate_sha256",
+        ),
+        CheckConstraint(
+            "length(comparison_report_sha256) = 64 AND "
+            "comparison_report_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_skill_promotion_report_sha256",
+        ),
+        CheckConstraint(
+            "length(authorization_fingerprint) = 64 AND "
+            "authorization_fingerprint NOT GLOB '*[^0-9a-f]*'",
+            name="ck_skill_promotion_authorization_fingerprint",
+        ),
+        ForeignKeyConstraint(
+            ["skill_id", "proposal_id"],
+            ["skill_improvement_proposals.skill_id", "skill_improvement_proposals.id"],
+            name="fk_skill_promotion_proposal_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["proposal_id", "candidate_evaluation_id"],
+            ["skill_candidate_evaluations.proposal_id", "skill_candidate_evaluations.id"],
+            name="fk_skill_promotion_candidate_evaluation_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["skill_id", "base_revision_id"],
+            ["skill_revisions.skill_id", "skill_revisions.id"],
+            name="fk_skill_promotion_base_revision_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["skill_id", "expected_active_revision_id"],
+            ["skill_revisions.skill_id", "skill_revisions.id"],
+            name="fk_skill_promotion_expected_active_ownership",
+        ),
+        UniqueConstraint("approval_request_id", name="uq_skill_promotion_approval_request"),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
     proposal_id: Mapped[str] = mapped_column(
@@ -292,10 +550,39 @@ class SkillPromotionRequestRow(Base):
     resolved_at: Mapped[datetime | None]
     resolver: Mapped[str | None]
     promoted_revision_id: Mapped[str | None] = mapped_column(ForeignKey("skill_revisions.id"))
+    approval_request_id: Mapped[str] = mapped_column(
+        ForeignKey("approval_requests.id"), nullable=False
+    )
 
 
 class SkillRollbackRequestRow(Base):
     __tablename__ = "skill_rollback_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected', 'stale', 'cancelled', 'completed')",
+            name="ck_skill_rollback_status",
+        ),
+        CheckConstraint(
+            "length(authorization_fingerprint) = 64 AND "
+            "authorization_fingerprint NOT GLOB '*[^0-9a-f]*'",
+            name="ck_skill_rollback_authorization_fingerprint",
+        ),
+        CheckConstraint(
+            "target_revision_id <> expected_current_revision_id",
+            name="ck_skill_rollback_target_not_current",
+        ),
+        ForeignKeyConstraint(
+            ["skill_id", "expected_current_revision_id"],
+            ["skill_revisions.skill_id", "skill_revisions.id"],
+            name="fk_skill_rollback_current_revision_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["skill_id", "target_revision_id"],
+            ["skill_revisions.skill_id", "skill_revisions.id"],
+            name="fk_skill_rollback_target_revision_ownership",
+        ),
+        UniqueConstraint("approval_request_id", name="uq_skill_rollback_approval_request"),
+    )
     id: Mapped[str] = mapped_column(primary_key=True)
     skill_id: Mapped[str] = mapped_column(ForeignKey("skills.id"))
     expected_current_revision_id: Mapped[str] = mapped_column(ForeignKey("skill_revisions.id"))
@@ -306,10 +593,25 @@ class SkillRollbackRequestRow(Base):
     created_at: Mapped[datetime]
     resolved_at: Mapped[datetime | None]
     resolver: Mapped[str | None]
+    approval_request_id: Mapped[str] = mapped_column(
+        ForeignKey("approval_requests.id"), nullable=False
+    )
 
 
 class SkillImprovementPolicyRow(Base):
     __tablename__ = "skill_improvement_policies"
+    __table_args__ = (
+        CheckConstraint(
+            "minimum_usage_records >= 0 AND minimum_failures >= 0 AND "
+            "minimum_harmful_feedback >= 0",
+            name="ck_skill_improvement_policy_thresholds",
+        ),
+        CheckConstraint("cooldown_seconds >= 0", name="ck_skill_improvement_policy_cooldown"),
+        CheckConstraint(
+            "max_open_proposals = 1 AND evidence_window_size BETWEEN 1 AND 200",
+            name="ck_skill_improvement_policy_bounds",
+        ),
+    )
     skill_id: Mapped[str] = mapped_column(ForeignKey("skills.id"), primary_key=True)
     enabled: Mapped[bool]
     minimum_usage_records: Mapped[int]
@@ -328,6 +630,21 @@ class SkillImprovementPolicyRow(Base):
 
 class SkillEvidenceSnapshotRow(Base):
     __tablename__ = "skill_evidence_snapshots"
+    __table_args__ = (
+        UniqueConstraint("skill_id", "id", name="uq_skill_evidence_snapshots_skill_id"),
+        UniqueConstraint(
+            "skill_id", "base_revision_id", "id", name="uq_skill_evidence_snapshot_ownership"
+        ),
+        ForeignKeyConstraint(
+            ["skill_id", "base_revision_id"],
+            ["skill_revisions.skill_id", "skill_revisions.id"],
+            name="fk_skill_evidence_snapshots_base_revision_ownership",
+        ),
+        CheckConstraint(
+            "length(content_sha256) = 64 AND content_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_skill_evidence_snapshot_sha256",
+        ),
+    )
     id: Mapped[str] = mapped_column(primary_key=True)
     skill_id: Mapped[str] = mapped_column(ForeignKey("skills.id"))
     base_revision_id: Mapped[str] = mapped_column(ForeignKey("skill_revisions.id"))
@@ -374,7 +691,16 @@ class TaskEventSequenceCounterRow(Base):
 
 class RunRow(Base):
     __tablename__ = "runs"
-    __table_args__ = (Index("ix_runs_task_id", "task_id"),)
+    __table_args__ = (
+        Index("ix_runs_task_id", "task_id"),
+        UniqueConstraint("id", "task_id", name="uq_runs_id_task"),
+        UniqueConstraint("id", "execution_id", name="uq_runs_id_execution"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'waiting_for_approval', 'succeeded', 'failed', "
+            "'cancelled')",
+            name="ck_runs_status",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(primary_key=True)
     task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"))
@@ -586,6 +912,22 @@ class ApprovalRequestRow(Base):
     __tablename__ = "approval_requests"
     __table_args__ = (
         Index("ix_approval_requests_run_id", "run_id"),
+        Index("ix_approval_requests_subject", "subject_kind", "subject_id"),
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected', 'cancelled', 'expired')",
+            name="ck_approval_requests_status",
+        ),
+        CheckConstraint(
+            "category IN ('tool_execution', 'filesystem_write', 'network_access', "
+            "'computer_use', 'external_communication', 'other')",
+            name="ck_approval_requests_category",
+        ),
+        CheckConstraint(
+            "(subject_kind = 'run' AND run_id IS NOT NULL AND subject_id IS NULL) OR "
+            "(subject_kind IN ('skill_promotion', 'skill_rollback') AND run_id IS NULL "
+            "AND subject_id IS NOT NULL)",
+            name="ck_approval_requests_subject_shape",
+        ),
         CheckConstraint(
             "authorization_fingerprint IS NULL OR (length(authorization_fingerprint) = 64 "
             "AND authorization_fingerprint NOT GLOB '*[^0-9a-f]*')",
@@ -594,7 +936,7 @@ class ApprovalRequestRow(Base):
     )
 
     id: Mapped[str] = mapped_column(primary_key=True)
-    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
     step_id: Mapped[str | None] = mapped_column(ForeignKey("run_steps.id"))
     category: Mapped[str]
     summary: Mapped[str]
@@ -609,6 +951,8 @@ class ApprovalRequestRow(Base):
     resolver: Mapped[str | None]
     authorization_fingerprint: Mapped[str | None]
     consumed_at: Mapped[datetime | None]
+    subject_kind: Mapped[str] = mapped_column(server_default=text("'run'"))
+    subject_id: Mapped[str | None]
 
 
 class ArtifactRow(Base):

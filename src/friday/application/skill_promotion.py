@@ -6,9 +6,20 @@ import hashlib
 import json
 from dataclasses import replace
 
+from friday.application.approval_workflow import ApproveRequest, CancelApproval, RejectRequest
+from friday.application.commands import (
+    ApproveRequestCommand,
+    CancelApprovalCommand,
+    RejectRequestCommand,
+)
 from friday.application.errors import EntityConflict, SkillNotFound
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.domain import (
+    ApprovalCategory,
+    ApprovalRequest,
+    ApprovalRequestId,
+    ApprovalStatus,
+    CandidateRecommendation,
     PromotionRequestStatus,
     RollbackRequestStatus,
     SkillId,
@@ -22,6 +33,7 @@ from friday.domain import (
     SkillRollbackRequestId,
     SkillStatus,
 )
+from friday.domain.approval import ApprovalSubjectKind
 from friday.domain.skill_improvement import SkillProposalStatus
 
 
@@ -36,6 +48,9 @@ def _promotion_fingerprint(request: SkillPromotionRequest) -> str:
         {
             "version": 1,
             "promotion_request_id": str(request.id),
+            "approval_request_id": str(request.approval_request_id)
+            if request.approval_request_id
+            else None,
             "proposal_id": str(request.proposal_id),
             "skill_id": str(request.skill_id),
             "base_revision_id": str(request.base_revision_id),
@@ -53,6 +68,9 @@ def _rollback_fingerprint(request: SkillRollbackRequest) -> str:
         {
             "version": 1,
             "rollback_request_id": str(request.id),
+            "approval_request_id": str(request.approval_request_id)
+            if request.approval_request_id
+            else None,
             "skill_id": str(request.skill_id),
             "current_revision_id": str(request.expected_current_revision_id),
             "target_revision_id": str(request.target_revision_id),
@@ -75,6 +93,8 @@ class RequestSkillPromotion:
                 or proposal.status is not SkillProposalStatus.READY_FOR_REVIEW
             ):
                 raise EntityConflict("proposal is not ready for promotion review")
+            if comparison.recommendation is not CandidateRecommendation.ELIGIBLE:
+                raise EntityConflict("comparison is not eligible for ordinary promotion approval")
             skill = uow.skills.get(proposal.skill_id)
             if skill is None:
                 raise SkillNotFound(proposal.skill_id)
@@ -82,6 +102,7 @@ class RequestSkillPromotion:
                 raise EntityConflict("only an active skill can be promoted")
             if skill.active_revision_id != proposal.base_revision_id:
                 raise EntityConflict("proposal base is no longer active")
+            approval_id = ApprovalRequestId.new()
             request = SkillPromotionRequest(
                 id=SkillPromotionRequestId.new(),
                 proposal_id=proposal.id,
@@ -95,22 +116,61 @@ class RequestSkillPromotion:
                 authorization_fingerprint="0" * 64,
                 status=PromotionRequestStatus.PENDING,
                 created_at=self._clock.now(),
+                approval_request_id=approval_id,
             )
             request = replace(request, authorization_fingerprint=_promotion_fingerprint(request))
             uow.skill_promotion_requests.add(request)
+            uow.approvals.add(
+                ApprovalRequest.new(
+                    id=approval_id,
+                    run_id=None,
+                    category=ApprovalCategory.OTHER,
+                    summary="Approve Skill promotion",
+                    reason="A reviewed Skill candidate is ready to become active.",
+                    requested_action="skill.promote",
+                    requested_input={
+                        "promotion_request_id": str(request.id),
+                        "skill_id": str(request.skill_id),
+                        "candidate_instructions": proposal.proposed_instructions,
+                        "candidate_sha256": request.candidate_sha256,
+                        "evidence_snapshot_id": str(proposal.evidence_snapshot_id),
+                        "evidence_snapshot_hash": proposal.evidence_snapshot_hash,
+                        "comparison_report": comparison.comparison_report,
+                        "recommendation": comparison.recommendation.value,
+                        "authorization_fingerprint": request.authorization_fingerprint,
+                    },
+                    requested_at=request.created_at,
+                    authorization_fingerprint=request.authorization_fingerprint,
+                    subject_kind=ApprovalSubjectKind.SKILL_PROMOTION,
+                    subject_id=str(request.id),
+                )
+            )
             uow.commit()
             return request
 
 
-class ApproveSkillPromotion:
+class ExecuteSkillPromotion:
     def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
         self._uow_factory, self._clock = uow_factory, clock
 
-    def execute(self, request_id: SkillPromotionRequestId, resolver: str) -> SkillPromotionRequest:
+    def execute(
+        self, request_id: SkillPromotionRequestId, resolver: str | None = None
+    ) -> SkillPromotionRequest:
         with self._uow_factory() as uow:
             request = uow.skill_promotion_requests.get(request_id)
-            if request is None or request.status is not PromotionRequestStatus.PENDING:
+            if request is None:
+                raise EntityConflict("promotion request was not found")
+            if request.status is PromotionRequestStatus.PROMOTED:
+                return request
+            if request.status is not PromotionRequestStatus.PENDING:
                 raise EntityConflict("promotion request is not pending")
+            if request.approval_request_id is None:
+                raise EntityConflict("promotion request has no canonical approval")
+            approval = uow.approvals.get(request.approval_request_id)
+            if approval is None:
+                raise EntityConflict("promotion approval was not found")
+            if approval.status is not ApprovalStatus.APPROVED or approval.is_consumed:
+                raise EntityConflict("promotion requires one unconsumed approved request")
             proposal = uow.skill_improvement_proposals.get(request.proposal_id)
             comparison = uow.skill_candidate_evaluations.get_for_proposal(request.proposal_id)
             skill = uow.skills.get(request.skill_id)
@@ -123,10 +183,14 @@ class ApproveSkillPromotion:
                 or proposal.proposed_content_sha256 != request.candidate_sha256
                 or comparison.id != request.candidate_evaluation_id
                 or comparison.report_sha256 != request.comparison_report_sha256
+                or comparison.recommendation is not CandidateRecommendation.ELIGIBLE
                 or skill.status is not SkillStatus.ACTIVE
                 or skill.active_revision_id != request.expected_active_revision_id
                 or uow.skill_revisions.next_version(skill.id) != request.target_version
                 or _promotion_fingerprint(request) != request.authorization_fingerprint
+                or approval.authorization_fingerprint != request.authorization_fingerprint
+                or approval.subject_kind is not ApprovalSubjectKind.SKILL_PROMOTION
+                or approval.subject_id != str(request.id)
             )
             now = self._clock.now()
             if stale:
@@ -135,7 +199,7 @@ class ApproveSkillPromotion:
                         request,
                         status=PromotionRequestStatus.STALE,
                         resolved_at=now,
-                        resolver=resolver,
+                        resolver=resolver or approval.resolver,
                     )
                 )
                 uow.commit()
@@ -149,10 +213,9 @@ class ApproveSkillPromotion:
                 instructions=proposal.proposed_instructions,
                 source_kind=SkillRevisionSourceKind.GENERATED,
                 created_at=now,
+                promotion_request_id=str(request.id),
             )
             uow.skill_revisions.add(revision)
-            skill.activate(revision, now)
-            uow.skills.save(skill)
             uow.skill_improvement_proposals.save(
                 replace(proposal, status=SkillProposalStatus.PROMOTED)
             )
@@ -160,12 +223,54 @@ class ApproveSkillPromotion:
                 request,
                 status=PromotionRequestStatus.PROMOTED,
                 resolved_at=now,
-                resolver=resolver,
+                resolver=resolver or approval.resolver,
                 promoted_revision_id=revision.id,
             )
             uow.skill_promotion_requests.save(completed)
+            # Stage the promotion row before the active-pointer update.  The
+            # final database trigger permits a generated active revision only
+            # when this exact promotion row already names it as promoted.
+            skill.activate(revision, now)
+            uow.skills.save(skill)
+            consume_if_unconsumed = getattr(uow.approvals, "consume_if_unconsumed", None)
+            if callable(consume_if_unconsumed):
+                if not consume_if_unconsumed(approval.id, now):
+                    raise EntityConflict("promotion approval was already consumed")
+            else:
+                approval.consume(now)
+                uow.approvals.save(approval)
             uow.commit()
             return completed
+
+
+class ApproveSkillPromotion:
+    """Compatibility façade for old in-process callers.
+
+    Public API routes use ``ApproveRequest`` followed by
+    ``ExecuteSkillPromotion``; approval and execution are separate durable
+    operations.  This façade preserves the pre-Phase-20 application test
+    helper without creating an endpoint-controlled approval lane.
+    """
+
+    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
+        self._uow_factory, self._clock = uow_factory, clock
+
+    def execute(self, request_id: SkillPromotionRequestId, resolver: str) -> SkillPromotionRequest:
+        with self._uow_factory() as uow:
+            request = uow.skill_promotion_requests.get(request_id)
+            if request is None or request.approval_request_id is None:
+                raise EntityConflict("promotion request is not pending")
+            approval = uow.approvals.get(request.approval_request_id)
+            if approval is None:
+                raise EntityConflict("promotion approval was not found")
+            if approval.status is ApprovalStatus.PENDING:
+                uow.commit()
+                ApproveRequest(self._uow_factory, self._clock).execute(
+                    ApproveRequestCommand(request.approval_request_id, resolver)
+                )
+            else:
+                uow.commit()
+        return ExecuteSkillPromotion(self._uow_factory, self._clock).execute(request_id, resolver)
 
 
 class RejectSkillPromotion:
@@ -177,6 +282,27 @@ class RejectSkillPromotion:
             request = uow.skill_promotion_requests.get(request_id)
             if request is None or request.status is not PromotionRequestStatus.PENDING:
                 raise EntityConflict("promotion request is not pending")
+            approval_id = request.approval_request_id
+            if approval_id is not None:
+                approval = uow.approvals.get(approval_id)
+                if approval is not None and approval.status is ApprovalStatus.PENDING:
+                    uow.commit()
+                    RejectRequest(self._uow_factory, self._clock).execute(
+                        RejectRequestCommand(approval_id, resolver)
+                    )
+                    with self._uow_factory() as follow_up:
+                        request = follow_up.skill_promotion_requests.get(request_id)
+                        if request is None:
+                            raise EntityConflict("promotion request was not found")
+                        rejected = replace(
+                            request,
+                            status=PromotionRequestStatus.REJECTED,
+                            resolved_at=self._clock.now(),
+                            resolver=resolver,
+                        )
+                        follow_up.skill_promotion_requests.save(rejected)
+                        follow_up.commit()
+                        return rejected
             rejected = replace(
                 request,
                 status=PromotionRequestStatus.REJECTED,
@@ -186,6 +312,44 @@ class RejectSkillPromotion:
             uow.skill_promotion_requests.save(rejected)
             uow.commit()
             return rejected
+
+
+class CancelSkillPromotion:
+    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
+        self._uow_factory, self._clock = uow_factory, clock
+
+    def execute(self, request_id: SkillPromotionRequestId) -> SkillPromotionRequest:
+        with self._uow_factory() as uow:
+            request = uow.skill_promotion_requests.get(request_id)
+            if request is None or request.status is not PromotionRequestStatus.PENDING:
+                raise EntityConflict("promotion request is not pending")
+            if request.approval_request_id is not None:
+                approval = uow.approvals.get(request.approval_request_id)
+                if approval is not None and approval.status is ApprovalStatus.PENDING:
+                    uow.commit()
+                    CancelApproval(self._uow_factory, self._clock).execute(
+                        CancelApprovalCommand(request.approval_request_id)
+                    )
+                    with self._uow_factory() as follow_up:
+                        current = follow_up.skill_promotion_requests.get(request_id)
+                        if current is None:
+                            raise EntityConflict("promotion request was not found")
+                        cancelled = replace(
+                            current,
+                            status=PromotionRequestStatus.CANCELLED,
+                            resolved_at=self._clock.now(),
+                        )
+                        follow_up.skill_promotion_requests.save(cancelled)
+                        follow_up.commit()
+                        return cancelled
+            cancelled = replace(
+                request,
+                status=PromotionRequestStatus.CANCELLED,
+                resolved_at=self._clock.now(),
+            )
+            uow.skill_promotion_requests.save(cancelled)
+            uow.commit()
+            return cancelled
 
 
 class RequestSkillRollback:
@@ -207,6 +371,9 @@ class RequestSkillRollback:
                 or target.skill_id != skill_id
             ):
                 raise EntityConflict("rollback target or current revision is invalid")
+            if target_revision_id == skill.active_revision_id:
+                raise EntityConflict("rollback target is already active")
+            approval_id = ApprovalRequestId.new()
             request = SkillRollbackRequest(
                 id=SkillRollbackRequestId.new(),
                 skill_id=skill_id,
@@ -216,22 +383,56 @@ class RequestSkillRollback:
                 authorization_fingerprint="0" * 64,
                 status=RollbackRequestStatus.PENDING,
                 created_at=self._clock.now(),
+                approval_request_id=approval_id,
             )
             request = replace(request, authorization_fingerprint=_rollback_fingerprint(request))
             uow.skill_rollback_requests.add(request)
+            uow.approvals.add(
+                ApprovalRequest.new(
+                    id=approval_id,
+                    run_id=None,
+                    category=ApprovalCategory.OTHER,
+                    summary="Approve Skill rollback",
+                    reason=request.reason,
+                    requested_action="skill.rollback",
+                    requested_input={
+                        "rollback_request_id": str(request.id),
+                        "skill_id": str(request.skill_id),
+                        "target_revision_id": str(request.target_revision_id),
+                        "authorization_fingerprint": request.authorization_fingerprint,
+                    },
+                    requested_at=request.created_at,
+                    authorization_fingerprint=request.authorization_fingerprint,
+                    subject_kind=ApprovalSubjectKind.SKILL_ROLLBACK,
+                    subject_id=str(request.id),
+                )
+            )
             uow.commit()
             return request
 
 
-class ApproveSkillRollback:
+class ExecuteSkillRollback:
     def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
         self._uow_factory, self._clock = uow_factory, clock
 
-    def execute(self, request_id: SkillRollbackRequestId, resolver: str) -> SkillRollbackRequest:
+    def execute(
+        self, request_id: SkillRollbackRequestId, resolver: str | None = None
+    ) -> SkillRollbackRequest:
         with self._uow_factory() as uow:
             request = uow.skill_rollback_requests.get(request_id)
-            if request is None or request.status is not RollbackRequestStatus.PENDING:
+            if request is None:
+                raise EntityConflict("rollback request was not found")
+            if request.status is RollbackRequestStatus.COMPLETED:
+                return request
+            if request.status is not RollbackRequestStatus.PENDING:
                 raise EntityConflict("rollback request is not pending")
+            if request.approval_request_id is None:
+                raise EntityConflict("rollback request has no canonical approval")
+            approval = uow.approvals.get(request.approval_request_id)
+            if approval is None:
+                raise EntityConflict("rollback approval was not found")
+            if approval.status is not ApprovalStatus.APPROVED or approval.is_consumed:
+                raise EntityConflict("rollback requires one unconsumed approved request")
             skill = uow.skills.get(request.skill_id)
             target = uow.skill_revisions.get(request.target_revision_id)
             now = self._clock.now()
@@ -240,15 +441,19 @@ class ApproveSkillRollback:
                 or skill.status is not SkillStatus.ACTIVE
                 or target is None
                 or target.skill_id != request.skill_id
+                or target.id == skill.active_revision_id
                 or skill.active_revision_id != request.expected_current_revision_id
                 or _rollback_fingerprint(request) != request.authorization_fingerprint
+                or approval.authorization_fingerprint != request.authorization_fingerprint
+                or approval.subject_kind is not ApprovalSubjectKind.SKILL_ROLLBACK
+                or approval.subject_id != str(request.id)
             ):
                 uow.skill_rollback_requests.save(
                     replace(
                         request,
                         status=RollbackRequestStatus.STALE,
                         resolved_at=now,
-                        resolver=resolver,
+                        resolver=resolver or approval.resolver,
                     )
                 )
                 uow.commit()
@@ -259,8 +464,119 @@ class ApproveSkillRollback:
                 request,
                 status=RollbackRequestStatus.COMPLETED,
                 resolved_at=now,
-                resolver=resolver,
+                resolver=resolver or approval.resolver,
             )
             uow.skill_rollback_requests.save(completed)
+            consume_if_unconsumed = getattr(uow.approvals, "consume_if_unconsumed", None)
+            if callable(consume_if_unconsumed):
+                if not consume_if_unconsumed(approval.id, now):
+                    raise EntityConflict("rollback approval was already consumed")
+            else:
+                approval.consume(now)
+                uow.approvals.save(approval)
             uow.commit()
             return completed
+
+
+class ApproveSkillRollback:
+    """Compatibility façade; public routes use separate approval/execute calls."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
+        self._uow_factory, self._clock = uow_factory, clock
+
+    def execute(self, request_id: SkillRollbackRequestId, resolver: str) -> SkillRollbackRequest:
+        with self._uow_factory() as uow:
+            request = uow.skill_rollback_requests.get(request_id)
+            if request is None or request.approval_request_id is None:
+                raise EntityConflict("rollback request is not pending")
+            approval = uow.approvals.get(request.approval_request_id)
+            if approval is None:
+                raise EntityConflict("rollback approval was not found")
+            if approval.status is ApprovalStatus.PENDING:
+                uow.commit()
+                ApproveRequest(self._uow_factory, self._clock).execute(
+                    ApproveRequestCommand(request.approval_request_id, resolver)
+                )
+            else:
+                uow.commit()
+        return ExecuteSkillRollback(self._uow_factory, self._clock).execute(request_id, resolver)
+
+
+class RejectSkillRollback:
+    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
+        self._uow_factory, self._clock = uow_factory, clock
+
+    def execute(self, request_id: SkillRollbackRequestId, resolver: str) -> SkillRollbackRequest:
+        with self._uow_factory() as uow:
+            request = uow.skill_rollback_requests.get(request_id)
+            if request is None or request.status is not RollbackRequestStatus.PENDING:
+                raise EntityConflict("rollback request is not pending")
+            approval_id = request.approval_request_id
+            if approval_id is not None:
+                approval = uow.approvals.get(approval_id)
+                if approval is not None and approval.status is ApprovalStatus.PENDING:
+                    uow.commit()
+                    RejectRequest(self._uow_factory, self._clock).execute(
+                        RejectRequestCommand(approval_id, resolver)
+                    )
+                    with self._uow_factory() as follow_up:
+                        current = follow_up.skill_rollback_requests.get(request_id)
+                        if current is None:
+                            raise EntityConflict("rollback request was not found")
+                        rejected = replace(
+                            current,
+                            status=RollbackRequestStatus.REJECTED,
+                            resolved_at=self._clock.now(),
+                            resolver=resolver,
+                        )
+                        follow_up.skill_rollback_requests.save(rejected)
+                        follow_up.commit()
+                        return rejected
+            rejected = replace(
+                request,
+                status=RollbackRequestStatus.REJECTED,
+                resolved_at=self._clock.now(),
+                resolver=resolver,
+            )
+            uow.skill_rollback_requests.save(rejected)
+            uow.commit()
+            return rejected
+
+
+class CancelSkillRollback:
+    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
+        self._uow_factory, self._clock = uow_factory, clock
+
+    def execute(self, request_id: SkillRollbackRequestId) -> SkillRollbackRequest:
+        with self._uow_factory() as uow:
+            request = uow.skill_rollback_requests.get(request_id)
+            if request is None or request.status is not RollbackRequestStatus.PENDING:
+                raise EntityConflict("rollback request is not pending")
+            approval_id = request.approval_request_id
+            if approval_id is not None:
+                approval = uow.approvals.get(approval_id)
+                if approval is not None and approval.status is ApprovalStatus.PENDING:
+                    uow.commit()
+                    CancelApproval(self._uow_factory, self._clock).execute(
+                        CancelApprovalCommand(approval_id)
+                    )
+                    with self._uow_factory() as follow_up:
+                        current = follow_up.skill_rollback_requests.get(request_id)
+                        if current is None:
+                            raise EntityConflict("rollback request was not found")
+                        cancelled = replace(
+                            current,
+                            status=RollbackRequestStatus.CANCELLED,
+                            resolved_at=self._clock.now(),
+                        )
+                        follow_up.skill_rollback_requests.save(cancelled)
+                        follow_up.commit()
+                        return cancelled
+            cancelled = replace(
+                request,
+                status=RollbackRequestStatus.CANCELLED,
+                resolved_at=self._clock.now(),
+            )
+            uow.skill_rollback_requests.save(cancelled)
+            uow.commit()
+            return cancelled

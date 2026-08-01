@@ -53,6 +53,7 @@ from friday.infrastructure.persistence.repositories import (
     SkillEvidenceSnapshotRepository,
     SkillImprovementPolicyRepository,
     SkillImprovementProposalRepository,
+    SkillImprovementWorkRepository,
     SkillPromotionRequestRepository,
     SkillRepository,
     SkillRevisionRepository,
@@ -94,6 +95,7 @@ class SqlAlchemyUnitOfWork:
         self._skill_evaluation_case_results = SkillEvaluationCaseResultRepository(session)
         self._skill_candidate_evaluations = SkillCandidateEvaluationRepository(session)
         self._skill_improvement_proposals = SkillImprovementProposalRepository(session)
+        self._skill_improvement_work = SkillImprovementWorkRepository(session)
         self._skill_evidence_snapshots = SkillEvidenceSnapshotRepository(session)
         self._skill_improvement_policies = SkillImprovementPolicyRepository(session)
         self._skill_promotion_requests = SkillPromotionRequestRepository(session)
@@ -148,6 +150,10 @@ class SqlAlchemyUnitOfWork:
     @property
     def skill_improvement_proposals(self) -> SkillImprovementProposalRepository:
         return self._skill_improvement_proposals
+
+    @property
+    def skill_improvement_work(self) -> SkillImprovementWorkRepository:
+        return self._skill_improvement_work
 
     @property
     def skill_evidence_snapshots(self) -> SkillEvidenceSnapshotRepository:

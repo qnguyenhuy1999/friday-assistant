@@ -9,6 +9,9 @@ from friday.domain.errors import DomainValidationError
 from friday.domain.identifiers import SkillEvaluationSuiteId, SkillId
 from friday.domain.time import ensure_utc
 
+CANONICAL_GENERATOR_VERSION = "brain-candidate-generator-v2"
+CANONICAL_COMPARISON_POLICY_VERSION = "comparison-v1"
+
 
 @dataclass(frozen=True, slots=True)
 class SkillImprovementPolicy:
@@ -36,12 +39,14 @@ class SkillImprovementPolicy:
                 self.cooldown_seconds,
             )
             < 0
-            or self.max_open_proposals < 1
+            or self.max_open_proposals != 1
             or not 1 <= self.evidence_window_size <= 200
         ):
             raise DomainValidationError("invalid skill improvement policy thresholds")
-        if not self.generator_version or not self.comparison_policy_version:
-            raise DomainValidationError("improvement policy versions are required")
+        if self.generator_version != CANONICAL_GENERATOR_VERSION:
+            raise DomainValidationError("generator version is not code-owned")
+        if self.comparison_policy_version != CANONICAL_COMPARISON_POLICY_VERSION:
+            raise DomainValidationError("comparison policy version is not code-owned")
         object.__setattr__(self, "created_at", ensure_utc(self.created_at))
         object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
         if self.last_triggered_at is not None:

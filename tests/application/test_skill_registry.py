@@ -116,7 +116,7 @@ def test_missing_skill_and_revision_raise_not_found_errors() -> None:
         )
 
 
-def test_task_bindings_freeze_active_revision_and_retry_inherits_it() -> None:
+def test_task_bindings_freeze_active_revision_and_new_retry_resolves_current_state() -> None:
     uow, clock = FakeUnitOfWork(), FakeClock()
     factory = CountingUnitOfWorkFactory(uow)
     task_id = CreateTask(factory, clock).execute(CreateTaskCommand("T", "")).task_id
@@ -143,7 +143,9 @@ def test_task_bindings_freeze_active_revision_and_retry_inherits_it() -> None:
         id=RunId.new(), task_id=task_id, execution_id=run.execution_id, created_at=clock.now()
     )
     uow.runs.add(retry)
-    assert ResolveRunSkills(factory, clock).execute(retry.id)[0].revision_id == v1.id
+    # Retry lineage inheritance belongs to RetryFailedRun, which copies the
+    # exact source freeze. A bare resolver must never scan sibling Runs.
+    assert ResolveRunSkills(factory, clock).execute(retry.id)[0].revision_id == v2.id
 
 
 def test_task_binding_replacement_rejects_unresolvable_and_duplicate_skills() -> None:

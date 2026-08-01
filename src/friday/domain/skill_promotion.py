@@ -8,6 +8,7 @@ from enum import StrEnum
 
 from friday.domain.errors import DomainValidationError
 from friday.domain.identifiers import (
+    ApprovalRequestId,
     SkillCandidateEvaluationId,
     SkillId,
     SkillImprovementProposalId,
@@ -23,6 +24,7 @@ class PromotionRequestStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     STALE = "stale"
+    CANCELLED = "cancelled"
     PROMOTED = "promoted"
 
 
@@ -31,6 +33,7 @@ class RollbackRequestStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     STALE = "stale"
+    CANCELLED = "cancelled"
     COMPLETED = "completed"
 
 
@@ -51,6 +54,7 @@ class SkillPromotionRequest:
     resolved_at: datetime | None = None
     resolver: str | None = None
     promoted_revision_id: SkillRevisionId | None = None
+    approval_request_id: ApprovalRequestId | None = None
 
     def __post_init__(self) -> None:
         for value in (
@@ -79,11 +83,14 @@ class SkillRollbackRequest:
     created_at: datetime
     resolved_at: datetime | None = None
     resolver: str | None = None
+    approval_request_id: ApprovalRequestId | None = None
 
     def __post_init__(self) -> None:
         if not self.reason.strip() or len(self.reason) > 4000:
             raise DomainValidationError("rollback reason must be present and bounded")
-        if len(self.authorization_fingerprint) != 64:
+        if len(self.authorization_fingerprint) != 64 or any(
+            char not in "0123456789abcdef" for char in self.authorization_fingerprint
+        ):
             raise DomainValidationError("rollback authorization fingerprint must be sha256")
         object.__setattr__(self, "created_at", ensure_utc(self.created_at))
         if self.resolved_at is not None:

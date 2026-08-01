@@ -9,10 +9,13 @@ site, not inside a shared reflection-based converter.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from friday.application.errors import SkillIntegrityFailed
 from friday.application.memory.models import (
     IndexSnapshot,
     IndexState,
@@ -26,6 +29,7 @@ from friday.domain import (
     ApprovalRequest,
     ApprovalRequestId,
     ApprovalStatus,
+    ApprovalSubjectKind,
     Artifact,
     ArtifactId,
     ArtifactKind,
@@ -81,6 +85,8 @@ from friday.domain import (
     SkillImprovementPolicy,
     SkillImprovementProposal,
     SkillImprovementProposalId,
+    SkillImprovementWork,
+    SkillImprovementWorkId,
     SkillPromotionRequest,
     SkillPromotionRequestId,
     SkillProposalStatus,
@@ -139,6 +145,7 @@ from friday.infrastructure.persistence.models import (
     SkillEvidenceSnapshotRow,
     SkillImprovementPolicyRow,
     SkillImprovementProposalRow,
+    SkillImprovementWorkRow,
     SkillPromotionRequestRow,
     SkillRevisionRow,
     SkillRollbackRequestRow,
@@ -189,10 +196,13 @@ def skill_revision_to_row(value: SkillRevision) -> SkillRevisionRow:
         content_sha256=value.content_sha256,
         source_kind=value.source_kind.value,
         created_at=value.created_at,
+        promotion_request_id=value.promotion_request_id,
     )
 
 
 def skill_revision_from_row(row: SkillRevisionRow) -> SkillRevision:
+    if hashlib.sha256(row.instructions.encode("utf-8")).hexdigest() != row.content_sha256:
+        raise SkillIntegrityFailed()
     return SkillRevision(
         SkillRevisionId.parse(row.id),
         SkillId.parse(row.skill_id),
@@ -201,6 +211,7 @@ def skill_revision_from_row(row: SkillRevisionRow) -> SkillRevision:
         row.content_sha256,
         SkillRevisionSourceKind(row.source_kind),
         read_back_utc(row.created_at),
+        row.promotion_request_id,
     )
 
 
@@ -390,6 +401,8 @@ def skill_evaluation_run_to_row(value: SkillEvaluationRun) -> SkillEvaluationRun
         aggregate_result=value.aggregate_result,
         suite_snapshot=value.suite_snapshot,
         runtime_fingerprint=value.runtime_fingerprint,
+        target_content_sha256=value.target_content_sha256,
+        runtime_metadata=value.runtime_metadata,
     )
 
 
@@ -409,6 +422,8 @@ def skill_evaluation_run_from_row(row: SkillEvaluationRunRow) -> SkillEvaluation
         aggregate_result=cast(JsonValue, row.aggregate_result),
         suite_snapshot=cast(JsonValue, row.suite_snapshot),
         runtime_fingerprint=row.runtime_fingerprint,
+        target_content_sha256=row.target_content_sha256,
+        runtime_metadata=cast(JsonValue, row.runtime_metadata),
     )
 
 
@@ -466,6 +481,10 @@ def skill_improvement_proposal_from_row(
 ) -> SkillImprovementProposal:
     if row.evidence_snapshot_id is None:
         raise ValueError("legacy proposal is missing its evidence snapshot link")
+    if hashlib.sha256(row.proposed_instructions.encode("utf-8")).hexdigest() != (
+        row.proposed_content_sha256
+    ):
+        raise SkillIntegrityFailed()
     return SkillImprovementProposal(
         id=SkillImprovementProposalId.parse(row.id),
         skill_id=SkillId.parse(row.skill_id),
@@ -479,6 +498,46 @@ def skill_improvement_proposal_from_row(
         rationale=row.rationale,
         generator_version=row.generator_version,
         created_at=read_back_utc(row.created_at),
+    )
+
+
+def skill_improvement_work_to_row(value: SkillImprovementWork) -> SkillImprovementWorkRow:
+    return SkillImprovementWorkRow(
+        id=str(value.id),
+        skill_id=str(value.skill_id),
+        state=value.state.value,
+        proposal_id=str(value.proposal_id) if value.proposal_id else None,
+        attempt_count=value.attempt_count,
+        next_attempt_at=value.next_attempt_at,
+        claimed_by=value.claimed_by,
+        claim_token=value.claim_token,
+        claim_generation=value.claim_generation,
+        lease_expires_at=value.lease_expires_at,
+        failure_code=value.failure_code,
+        failure_detail=value.failure_detail,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+    )
+
+
+def skill_improvement_work_from_row(row: SkillImprovementWorkRow) -> SkillImprovementWork:
+    from friday.domain import SkillImprovementWorkState
+
+    return SkillImprovementWork(
+        id=SkillImprovementWorkId.parse(row.id),
+        skill_id=SkillId.parse(row.skill_id),
+        state=SkillImprovementWorkState(row.state),
+        proposal_id=SkillImprovementProposalId.parse(row.proposal_id) if row.proposal_id else None,
+        attempt_count=row.attempt_count,
+        next_attempt_at=read_back_utc(row.next_attempt_at),
+        claimed_by=row.claimed_by,
+        claim_token=row.claim_token,
+        claim_generation=row.claim_generation,
+        lease_expires_at=read_back_utc(row.lease_expires_at) if row.lease_expires_at else None,
+        failure_code=row.failure_code,
+        failure_detail=row.failure_detail,
+        created_at=read_back_utc(row.created_at),
+        updated_at=read_back_utc(row.updated_at),
     )
 
 
@@ -499,12 +558,19 @@ def skill_candidate_evaluation_to_row(
         inconclusive_count=value.inconclusive_count,
         report_sha256=value.report_sha256,
         created_at=value.created_at,
+        comparison_report=value.comparison_report,
     )
 
 
 def skill_candidate_evaluation_from_row(
     row: SkillCandidateEvaluationRow,
 ) -> SkillCandidateEvaluation:
+    if row.comparison_report is not None:
+        report_bytes = json.dumps(
+            row.comparison_report, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        if hashlib.sha256(report_bytes).hexdigest() != row.report_sha256:
+            raise SkillIntegrityFailed()
     return SkillCandidateEvaluation(
         id=SkillCandidateEvaluationId.parse(row.id),
         proposal_id=SkillImprovementProposalId.parse(row.proposal_id),
@@ -519,6 +585,7 @@ def skill_candidate_evaluation_from_row(
         inconclusive_count=row.inconclusive_count,
         report_sha256=row.report_sha256,
         created_at=read_back_utc(row.created_at),
+        comparison_report=cast(JsonValue, row.comparison_report),
     )
 
 
@@ -541,6 +608,7 @@ def skill_promotion_request_to_row(value: SkillPromotionRequest) -> SkillPromoti
         promoted_revision_id=str(value.promoted_revision_id)
         if value.promoted_revision_id
         else None,
+        approval_request_id=str(value.approval_request_id) if value.approval_request_id else None,
     )
 
 
@@ -563,6 +631,9 @@ def skill_promotion_request_from_row(row: SkillPromotionRequestRow) -> SkillProm
         promoted_revision_id=SkillRevisionId.parse(row.promoted_revision_id)
         if row.promoted_revision_id
         else None,
+        approval_request_id=ApprovalRequestId.parse(row.approval_request_id)
+        if row.approval_request_id
+        else None,
     )
 
 
@@ -578,6 +649,7 @@ def skill_rollback_request_to_row(value: SkillRollbackRequest) -> SkillRollbackR
         created_at=value.created_at,
         resolved_at=value.resolved_at,
         resolver=value.resolver,
+        approval_request_id=str(value.approval_request_id) if value.approval_request_id else None,
     )
 
 
@@ -593,6 +665,9 @@ def skill_rollback_request_from_row(row: SkillRollbackRequestRow) -> SkillRollba
         created_at=read_back_utc(row.created_at),
         resolved_at=read_back_utc(row.resolved_at) if row.resolved_at else None,
         resolver=row.resolver,
+        approval_request_id=ApprovalRequestId.parse(row.approval_request_id)
+        if row.approval_request_id
+        else None,
     )
 
 
@@ -957,7 +1032,7 @@ def run_step_from_row(row: RunStepRow) -> RunStep:
 def approval_to_row(approval: ApprovalRequest) -> ApprovalRequestRow:
     return ApprovalRequestRow(
         id=str(approval.id),
-        run_id=str(approval.run_id),
+        run_id=str(approval.run_id) if approval.run_id is not None else None,
         step_id=str(approval.step_id) if approval.step_id else None,
         category=approval.category.value,
         summary=approval.summary,
@@ -972,13 +1047,15 @@ def approval_to_row(approval: ApprovalRequest) -> ApprovalRequestRow:
         resolver=approval.resolver,
         authorization_fingerprint=approval.authorization_fingerprint,
         consumed_at=approval.consumed_at,
+        subject_kind=approval.subject_kind.value,
+        subject_id=(approval.subject_id if approval.run_id is None else None),
     )
 
 
 def approval_from_row(row: ApprovalRequestRow) -> ApprovalRequest:
     return ApprovalRequest(
         _id=ApprovalRequestId.parse(row.id),
-        _run_id=RunId.parse(row.run_id),
+        _run_id=RunId.parse(row.run_id) if row.run_id else None,
         _step_id=RunStepId.parse(row.step_id) if row.step_id else None,
         _category=ApprovalCategory(row.category),
         _summary=row.summary,
@@ -993,6 +1070,8 @@ def approval_from_row(row: ApprovalRequestRow) -> ApprovalRequest:
         _resolver=row.resolver,
         _authorization_fingerprint=row.authorization_fingerprint,
         _consumed_at=read_back_utc(row.consumed_at) if row.consumed_at is not None else None,
+        _subject_kind=ApprovalSubjectKind(row.subject_kind),
+        _subject_id=row.subject_id,
     )
 
 

@@ -9,7 +9,13 @@ from datetime import datetime
 from enum import StrEnum
 
 from friday.domain.errors import DomainValidationError, InvalidStateTransition
-from friday.domain.identifiers import RunId, RunSkillResolutionId, SkillId, SkillRevisionId, TaskId
+from friday.domain.identifiers import (
+    RunId,
+    RunSkillResolutionId,
+    SkillId,
+    SkillRevisionId,
+    TaskId,
+)
 from friday.domain.time import ensure_utc
 
 MAX_SKILL_KEY_LENGTH = 96
@@ -67,6 +73,31 @@ class SkillRevision:
     content_sha256: str
     source_kind: SkillRevisionSourceKind
     created_at: datetime
+    promotion_request_id: str | None = None
+
+    def __post_init__(self) -> None:
+        # Instructions are immutable persisted authority.  Rechecking the
+        # digest while reconstructing the domain object makes a corrupt row
+        # fail closed before it can reach a runtime, evaluator, or API.
+        validate_skill_instructions(self.instructions)
+        if self.content_sha256 != hashlib.sha256(self.instructions.encode("utf-8")).hexdigest():
+            raise DomainValidationError("skill_integrity_failed")
+        if len(self.content_sha256) != 64 or any(
+            char not in "0123456789abcdef" for char in self.content_sha256
+        ):
+            raise DomainValidationError("SkillRevision.content_sha256 must be lowercase sha256")
+        if (
+            self.source_kind is SkillRevisionSourceKind.GENERATED
+            and self.promotion_request_id is None
+        ):
+            raise DomainValidationError(
+                "generated SkillRevision requires an approved promotion request"
+            )
+        if self.source_kind is not SkillRevisionSourceKind.GENERATED and self.promotion_request_id:
+            raise DomainValidationError(
+                "only generated SkillRevisions may carry promotion provenance"
+            )
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
 
     @classmethod
     def new(
@@ -78,9 +109,21 @@ class SkillRevision:
         instructions: str,
         source_kind: SkillRevisionSourceKind,
         created_at: datetime,
+        promotion_request_id: str | None = None,
     ) -> SkillRevision:
         if version < 1:
             raise DomainValidationError("SkillRevision.version must be positive")
+        if source_kind is SkillRevisionSourceKind.GENERATED and promotion_request_id is None:
+            raise DomainValidationError(
+                "generated SkillRevision requires an approved promotion request"
+            )
+        if (
+            source_kind is not SkillRevisionSourceKind.GENERATED
+            and promotion_request_id is not None
+        ):
+            raise DomainValidationError(
+                "only generated SkillRevisions may carry promotion provenance"
+            )
         instructions = validate_skill_instructions(instructions)
         return cls(
             id,
@@ -90,6 +133,7 @@ class SkillRevision:
             hashlib.sha256(instructions.encode("utf-8")).hexdigest(),
             source_kind,
             ensure_utc(created_at),
+            promotion_request_id,
         )
 
 

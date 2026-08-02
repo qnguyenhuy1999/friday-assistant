@@ -236,8 +236,11 @@ def _deterministic_runtime_metadata() -> JsonValue:
 
 
 def _validate_runtime_metadata(metadata: JsonValue, evaluator_version: str) -> JsonValue:
-    if not isinstance(metadata, dict) or not set(metadata) >= _RUNTIME_METADATA_KEYS:
-        raise EntityConflict("evaluation runtime metadata is incomplete")
+    if not isinstance(metadata, dict) or set(metadata) != _RUNTIME_METADATA_KEYS:
+        raise EntityConflict(
+            "evaluation runtime metadata must contain exactly the code-owned stable "
+            "configuration keys"
+        )
     input_limit = metadata.get("input_limit_chars")
     response_limit = metadata.get("response_limit_chars")
     if (
@@ -378,6 +381,7 @@ class RunSkillEvaluation:
         suite_snapshot: JsonValue | None = None,
         runtime_fingerprint: str | None = None,
         runtime_metadata: JsonValue = None,
+        call_usage: JsonValue = None,
     ) -> SkillEvaluationRun:
         if (revision_id is None) == (proposal_id is None):
             raise EntityConflict("evaluation must target exactly one revision or proposal")
@@ -490,6 +494,7 @@ class RunSkillEvaluation:
                 runtime_fingerprint=computed_runtime_fingerprint,
                 target_content_sha256=target_hash,
                 runtime_metadata=metadata,
+                call_usage=call_usage,
             )
             results: list[SkillEvaluationCaseResult] = []
             for case_id, _input, expected_value, grading_kind in frozen_cases:
@@ -538,6 +543,7 @@ class RunSkillEvaluation:
                 runtime_fingerprint=run.runtime_fingerprint,
                 target_content_sha256=run.target_content_sha256,
                 runtime_metadata=run.runtime_metadata,
+                call_usage=run.call_usage,
             )
             uow.skill_evaluation_runs.add(run)
             uow.skill_evaluation_case_results.add_all(results)
@@ -644,14 +650,11 @@ class RunBrainOnlySkillEvaluation:
                     "mode": metadata.get("mode"),
                     "adapter_version": metadata.get("adapter_version"),
                 },
-                "adapter_metadata": {
-                    str(key): value
-                    for key, value in metadata.items()
-                    if key not in {"model", "mode", "adapter_version"}
-                },
             },
         )
         runtime_fingerprint = _runtime_fingerprint(runtime_metadata)
+        usage = metadata.get("usage")
+        call_usage = cast(JsonValue, usage) if isinstance(usage, dict) else None
         return RunSkillEvaluation(self._uow_factory, self._clock, self._registry).execute(
             suite_id=suite_id,
             revision_id=revision_id,
@@ -661,6 +664,7 @@ class RunBrainOnlySkillEvaluation:
             suite_snapshot=snapshot,
             runtime_fingerprint=runtime_fingerprint,
             runtime_metadata=runtime_metadata,
+            call_usage=call_usage,
         )
 
 

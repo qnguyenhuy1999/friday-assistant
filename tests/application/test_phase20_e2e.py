@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 
-from friday.application.commands import CreateTaskCommand
+from friday.application.approval_workflow import ApproveRequest
+from friday.application.commands import ApproveRequestCommand, CreateTaskCommand
 from friday.application.create_task import CreateTask
 from friday.application.skill_evaluation import BrainOnlyEvaluationRequest
 from friday.application.skill_improvement import CandidateGenerationRequest
 from friday.application.skill_promotion import (
-    ApproveSkillPromotion,
-    ApproveSkillRollback,
+    ExecuteSkillPromotion,
+    ExecuteSkillRollback,
     RequestSkillPromotion,
     RequestSkillRollback,
 )
@@ -140,7 +141,11 @@ def test_phase20_safe_loop_e2e_freezes_evidence_reviews_promotes_and_rolls_back(
     assert uow.skill_revisions.list_for_skill(skill.id) == [v1]
 
     promotion = RequestSkillPromotion(factory, clock).execute(proposal.id)
-    promoted = ApproveSkillPromotion(factory, clock).execute(promotion.id, "operator")
+    assert promotion.approval_request_id is not None
+    ApproveRequest(factory, clock).execute(
+        ApproveRequestCommand(promotion.approval_request_id, "operator")
+    )
+    promoted = ExecuteSkillPromotion(factory, clock).execute(promotion.id, "operator")
     assert promoted.promoted_revision_id is not None
     v2 = uow.skill_revision_repo.get(promoted.promoted_revision_id)
     assert v2 is not None and v2.version == 2
@@ -153,7 +158,11 @@ def test_phase20_safe_loop_e2e_freezes_evidence_reviews_promotes_and_rolls_back(
     rollback = RequestSkillRollback(factory, clock).execute(
         skill_id=skill.id, target_revision_id=v1.id, reason="restore reviewed baseline"
     )
-    rollback_result = ApproveSkillRollback(factory, clock).execute(rollback.id, "operator")
+    assert rollback.approval_request_id is not None
+    ApproveRequest(factory, clock).execute(
+        ApproveRequestCommand(rollback.approval_request_id, "operator")
+    )
+    rollback_result = ExecuteSkillRollback(factory, clock).execute(rollback.id, "operator")
     assert rollback_result.status.value == "completed"
     run_c = Run.new(id=RunId.new(), task_id=task_id, created_at=clock.now())
     uow.runs.add(run_c)

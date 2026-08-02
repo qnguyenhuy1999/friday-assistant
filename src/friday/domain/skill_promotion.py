@@ -47,6 +47,7 @@ class SkillPromotionRequest:
     candidate_sha256: str
     candidate_evaluation_id: SkillCandidateEvaluationId
     comparison_report_sha256: str
+    target_revision_id: SkillRevisionId
     target_version: int
     authorization_fingerprint: str
     status: PromotionRequestStatus
@@ -66,6 +67,13 @@ class SkillPromotionRequest:
                 raise DomainValidationError("promotion fingerprints must be sha256 hex")
         if self.target_version < 1:
             raise DomainValidationError("promotion target version must be positive")
+        if (
+            self.status is PromotionRequestStatus.PROMOTED
+            and self.promoted_revision_id != self.target_revision_id
+        ):
+            raise DomainValidationError(
+                "promoted SkillPromotionRequest must identify its target revision"
+            )
         object.__setattr__(self, "created_at", ensure_utc(self.created_at))
         if self.resolved_at is not None:
             object.__setattr__(self, "resolved_at", ensure_utc(self.resolved_at))

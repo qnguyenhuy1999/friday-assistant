@@ -6,9 +6,8 @@ import hashlib
 import json
 from dataclasses import replace
 
-from friday.application.approval_workflow import ApproveRequest, CancelApproval, RejectRequest
+from friday.application.approval_workflow import CancelApproval, RejectRequest
 from friday.application.commands import (
-    ApproveRequestCommand,
     CancelApprovalCommand,
     RejectRequestCommand,
 )
@@ -58,6 +57,7 @@ def _promotion_fingerprint(request: SkillPromotionRequest) -> str:
             "candidate_sha256": request.candidate_sha256,
             "candidate_evaluation_id": str(request.candidate_evaluation_id),
             "comparison_report_sha256": request.comparison_report_sha256,
+            "target_revision_id": str(request.target_revision_id),
             "target_version": request.target_version,
         }
     )
@@ -102,6 +102,7 @@ class RequestSkillPromotion:
                 raise EntityConflict("only an active skill can be promoted")
             if skill.active_revision_id != proposal.base_revision_id:
                 raise EntityConflict("proposal base is no longer active")
+            target_revision_id = SkillRevisionId.new()
             approval_id = ApprovalRequestId.new()
             request = SkillPromotionRequest(
                 id=SkillPromotionRequestId.new(),
@@ -112,6 +113,7 @@ class RequestSkillPromotion:
                 candidate_sha256=proposal.proposed_content_sha256,
                 candidate_evaluation_id=comparison.id,
                 comparison_report_sha256=comparison.report_sha256,
+                target_revision_id=target_revision_id,
                 target_version=uow.skill_revisions.next_version(skill.id),
                 authorization_fingerprint="0" * 64,
                 status=PromotionRequestStatus.PENDING,
@@ -130,9 +132,17 @@ class RequestSkillPromotion:
                     requested_action="skill.promote",
                     requested_input={
                         "promotion_request_id": str(request.id),
+                        "approval_request_id": str(approval_id),
+                        "proposal_id": str(request.proposal_id),
                         "skill_id": str(request.skill_id),
+                        "base_revision_id": str(request.base_revision_id),
+                        "current_active_revision_id": str(request.expected_active_revision_id),
+                        "target_revision_id": str(request.target_revision_id),
                         "candidate_instructions": proposal.proposed_instructions,
                         "candidate_sha256": request.candidate_sha256,
+                        "candidate_evaluation_id": str(request.candidate_evaluation_id),
+                        "comparison_report_sha256": request.comparison_report_sha256,
+                        "target_version": request.target_version,
                         "evidence_snapshot_id": str(proposal.evidence_snapshot_id),
                         "evidence_snapshot_hash": proposal.evidence_snapshot_hash,
                         "comparison_report": comparison.comparison_report,
@@ -207,7 +217,7 @@ class ExecuteSkillPromotion:
             assert proposal is not None
             assert skill is not None
             revision = SkillRevision.new(
-                id=SkillRevisionId.new(),
+                id=request.target_revision_id,
                 skill_id=skill.id,
                 version=request.target_version,
                 instructions=proposal.proposed_instructions,
@@ -241,36 +251,6 @@ class ExecuteSkillPromotion:
                 uow.approvals.save(approval)
             uow.commit()
             return completed
-
-
-class ApproveSkillPromotion:
-    """Compatibility façade for old in-process callers.
-
-    Public API routes use ``ApproveRequest`` followed by
-    ``ExecuteSkillPromotion``; approval and execution are separate durable
-    operations.  This façade preserves the pre-Phase-20 application test
-    helper without creating an endpoint-controlled approval lane.
-    """
-
-    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
-        self._uow_factory, self._clock = uow_factory, clock
-
-    def execute(self, request_id: SkillPromotionRequestId, resolver: str) -> SkillPromotionRequest:
-        with self._uow_factory() as uow:
-            request = uow.skill_promotion_requests.get(request_id)
-            if request is None or request.approval_request_id is None:
-                raise EntityConflict("promotion request is not pending")
-            approval = uow.approvals.get(request.approval_request_id)
-            if approval is None:
-                raise EntityConflict("promotion approval was not found")
-            if approval.status is ApprovalStatus.PENDING:
-                uow.commit()
-                ApproveRequest(self._uow_factory, self._clock).execute(
-                    ApproveRequestCommand(request.approval_request_id, resolver)
-                )
-            else:
-                uow.commit()
-        return ExecuteSkillPromotion(self._uow_factory, self._clock).execute(request_id, resolver)
 
 
 class RejectSkillPromotion:
@@ -476,30 +456,6 @@ class ExecuteSkillRollback:
                 uow.approvals.save(approval)
             uow.commit()
             return completed
-
-
-class ApproveSkillRollback:
-    """Compatibility façade; public routes use separate approval/execute calls."""
-
-    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
-        self._uow_factory, self._clock = uow_factory, clock
-
-    def execute(self, request_id: SkillRollbackRequestId, resolver: str) -> SkillRollbackRequest:
-        with self._uow_factory() as uow:
-            request = uow.skill_rollback_requests.get(request_id)
-            if request is None or request.approval_request_id is None:
-                raise EntityConflict("rollback request is not pending")
-            approval = uow.approvals.get(request.approval_request_id)
-            if approval is None:
-                raise EntityConflict("rollback approval was not found")
-            if approval.status is ApprovalStatus.PENDING:
-                uow.commit()
-                ApproveRequest(self._uow_factory, self._clock).execute(
-                    ApproveRequestCommand(request.approval_request_id, resolver)
-                )
-            else:
-                uow.commit()
-        return ExecuteSkillRollback(self._uow_factory, self._clock).execute(request_id, resolver)
 
 
 class RejectSkillRollback:

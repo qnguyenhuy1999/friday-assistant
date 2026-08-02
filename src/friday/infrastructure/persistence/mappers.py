@@ -403,6 +403,7 @@ def skill_evaluation_run_to_row(value: SkillEvaluationRun) -> SkillEvaluationRun
         runtime_fingerprint=value.runtime_fingerprint,
         target_content_sha256=value.target_content_sha256,
         runtime_metadata=value.runtime_metadata,
+        call_usage=value.call_usage,
     )
 
 
@@ -424,6 +425,7 @@ def skill_evaluation_run_from_row(row: SkillEvaluationRunRow) -> SkillEvaluation
         runtime_fingerprint=row.runtime_fingerprint,
         target_content_sha256=row.target_content_sha256,
         runtime_metadata=cast(JsonValue, row.runtime_metadata),
+        call_usage=cast(JsonValue, row.call_usage),
     )
 
 
@@ -599,6 +601,7 @@ def skill_promotion_request_to_row(value: SkillPromotionRequest) -> SkillPromoti
         candidate_sha256=value.candidate_sha256,
         candidate_evaluation_id=str(value.candidate_evaluation_id),
         comparison_report_sha256=value.comparison_report_sha256,
+        target_revision_id=str(value.target_revision_id),
         target_version=value.target_version,
         authorization_fingerprint=value.authorization_fingerprint,
         status=value.status.value,
@@ -622,6 +625,7 @@ def skill_promotion_request_from_row(row: SkillPromotionRequestRow) -> SkillProm
         candidate_sha256=row.candidate_sha256,
         candidate_evaluation_id=SkillCandidateEvaluationId.parse(row.candidate_evaluation_id),
         comparison_report_sha256=row.comparison_report_sha256,
+        target_revision_id=SkillRevisionId.parse(row.target_revision_id),
         target_version=row.target_version,
         authorization_fingerprint=row.authorization_fingerprint,
         status=PromotionRequestStatus(row.status),

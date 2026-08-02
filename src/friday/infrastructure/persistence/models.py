@@ -307,6 +307,7 @@ class SkillEvaluationRunRow(Base):
     runtime_fingerprint: Mapped[str]
     target_content_sha256: Mapped[str]
     runtime_metadata: Mapped[object] = mapped_column(JSON)
+    call_usage: Mapped[object | None] = mapped_column(JSON, nullable=True)
 
 
 class SkillEvaluationCaseResultRow(Base):
@@ -509,6 +510,7 @@ class SkillPromotionRequestRow(Base):
             "authorization_fingerprint NOT GLOB '*[^0-9a-f]*'",
             name="ck_skill_promotion_authorization_fingerprint",
         ),
+        UniqueConstraint("target_revision_id", name="uq_skill_promotion_target_revision"),
         ForeignKeyConstraint(
             ["skill_id", "proposal_id"],
             ["skill_improvement_proposals.skill_id", "skill_improvement_proposals.id"],
@@ -543,6 +545,7 @@ class SkillPromotionRequestRow(Base):
         ForeignKey("skill_candidate_evaluations.id")
     )
     comparison_report_sha256: Mapped[str]
+    target_revision_id: Mapped[str]
     target_version: Mapped[int]
     authorization_fingerprint: Mapped[str]
     status: Mapped[str]

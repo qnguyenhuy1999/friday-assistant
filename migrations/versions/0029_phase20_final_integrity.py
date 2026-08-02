@@ -246,6 +246,7 @@ def upgrade() -> None:
         batch.add_column(
             sa.Column("runtime_metadata", sa.JSON(), nullable=False, server_default="{}")
         )
+        batch.add_column(sa.Column("call_usage", sa.JSON(), nullable=True))
         batch.create_unique_constraint("uq_skill_evaluation_runs_skill_id", ["skill_id", "id"])
         batch.create_foreign_key(
             "fk_skill_evaluation_runs_suite_ownership",
@@ -380,7 +381,9 @@ def upgrade() -> None:
         )
 
     with op.batch_alter_table("skill_promotion_requests") as batch:
+        batch.add_column(sa.Column("target_revision_id", sa.String(), nullable=True))
         batch.add_column(sa.Column("approval_request_id", sa.String(), nullable=True))
+        batch.create_unique_constraint("uq_skill_promotion_target_revision", ["target_revision_id"])
         batch.create_foreign_key(
             "fk_skill_promotion_approval_request",
             "approval_requests",
@@ -430,6 +433,7 @@ def upgrade() -> None:
             "ck_skill_promotion_authorization_fingerprint",
             "length(authorization_fingerprint) = 64 AND authorization_fingerprint NOT GLOB '*[^0-9a-f]*'",
         )
+        batch.alter_column("target_revision_id", existing_type=sa.String(), nullable=False)
         batch.alter_column("approval_request_id", existing_type=sa.String(), nullable=False)
 
     with op.batch_alter_table("skill_rollback_requests") as batch:
@@ -554,20 +558,61 @@ def upgrade() -> None:
              AND NOT EXISTS (
                 SELECT 1
                 FROM skill_promotion_requests p
-                JOIN approval_requests a ON a.id = p.approval_request_id
-                WHERE p.id = NEW.promotion_request_id
+                JOIN skills s ON s.id = p.skill_id
+                JOIN skill_improvement_proposals proposal
+                  ON proposal.id = p.proposal_id
+                 AND proposal.skill_id = p.skill_id
+                JOIN skill_evidence_snapshots snapshot
+                  ON snapshot.id = proposal.evidence_snapshot_id
+                 AND snapshot.skill_id = proposal.skill_id
+                 AND snapshot.base_revision_id = proposal.base_revision_id
+                JOIN skill_candidate_evaluations evaluation
+                  ON evaluation.id = p.candidate_evaluation_id
+                 AND evaluation.proposal_id = p.proposal_id
+                JOIN approval_requests approval ON approval.id = p.approval_request_id
+                WHERE proposal.id = p.proposal_id
+                  AND proposal.skill_id = p.skill_id
+                  AND proposal.base_revision_id = p.base_revision_id
+                  AND evaluation.id = p.candidate_evaluation_id
+                  AND evaluation.proposal_id = p.proposal_id
+                  AND approval.id = p.approval_request_id
+                  AND NEW.id = p.target_revision_id
                   AND p.skill_id = NEW.skill_id
-                  AND a.subject_kind = 'skill_promotion'
-                  AND a.subject_id = p.id
-                  AND a.authorization_fingerprint = p.authorization_fingerprint
-                  AND (
-                    (p.status IN ('pending', 'approved')
-                     AND a.status = 'approved' AND a.consumed_at IS NULL)
-                    OR
-                    (p.status = 'promoted'
-                     AND p.promoted_revision_id = NEW.id
-                     AND a.status = 'approved' AND a.consumed_at IS NOT NULL)
-                  )
+                  AND NEW.promotion_request_id = p.id
+                  AND NEW.version = p.target_version
+                  AND NEW.instructions = proposal.proposed_instructions
+                  AND NEW.content_sha256 = proposal.proposed_content_sha256
+                  AND NEW.content_sha256 = p.candidate_sha256
+                  AND evaluation.report_sha256 = p.comparison_report_sha256
+                  AND proposal.status = 'ready_for_review'
+                  AND evaluation.recommendation = 'eligible'
+                  AND s.status = 'active'
+                  AND s.active_revision_id = p.expected_active_revision_id
+                  AND proposal.evidence_snapshot_hash = snapshot.content_sha256
+                  AND json_extract(approval.requested_input, '$.promotion_request_id') = p.id
+                  AND json_extract(approval.requested_input, '$.approval_request_id') = approval.id
+                  AND json_extract(approval.requested_input, '$.proposal_id') = p.proposal_id
+                  AND json_extract(approval.requested_input, '$.skill_id') = p.skill_id
+                  AND json_extract(approval.requested_input, '$.base_revision_id') = p.base_revision_id
+                  AND json_extract(approval.requested_input, '$.current_active_revision_id') = p.expected_active_revision_id
+                  AND json_extract(approval.requested_input, '$.target_revision_id') = p.target_revision_id
+                  AND json_extract(approval.requested_input, '$.candidate_sha256') = p.candidate_sha256
+                  AND json_extract(approval.requested_input, '$.candidate_evaluation_id') = p.candidate_evaluation_id
+                  AND json_extract(approval.requested_input, '$.comparison_report_sha256') = p.comparison_report_sha256
+                  AND json_extract(approval.requested_input, '$.target_version') = p.target_version
+                  AND json_extract(approval.requested_input, '$.candidate_instructions') = proposal.proposed_instructions
+                  AND json_extract(approval.requested_input, '$.evidence_snapshot_id') = proposal.evidence_snapshot_id
+                  AND json_extract(approval.requested_input, '$.evidence_snapshot_hash') = proposal.evidence_snapshot_hash
+                  AND json(json_extract(approval.requested_input, '$.comparison_report')) = json(evaluation.comparison_report)
+                  AND json_extract(approval.requested_input, '$.recommendation') = evaluation.recommendation
+                  AND json_extract(approval.requested_input, '$.authorization_fingerprint') = p.authorization_fingerprint
+                  AND approval.subject_kind = 'skill_promotion'
+                  AND approval.subject_id = p.id
+                  AND approval.requested_action = 'skill.promote'
+                  AND approval.authorization_fingerprint = p.authorization_fingerprint
+                  AND p.status IN ('pending', 'approved')
+                  AND approval.status = 'approved'
+                  AND approval.consumed_at IS NULL
              )
             BEGIN
                 SELECT RAISE(ABORT, 'generated revision requires canonical approval');
@@ -577,19 +622,31 @@ def upgrade() -> None:
         bind.exec_driver_sql(
             """
             CREATE TRIGGER ck_promoted_revision_success
-            AFTER UPDATE OF status, promoted_revision_id ON skill_promotion_requests
+            AFTER UPDATE OF status, promoted_revision_id, target_revision_id ON skill_promotion_requests
             FOR EACH ROW
             WHEN NEW.status = 'promoted'
              AND NOT EXISTS (
                 SELECT 1
                 FROM skill_revisions r
-                WHERE r.id = NEW.promoted_revision_id
+                JOIN skill_improvement_proposals proposal
+                  ON proposal.id = NEW.proposal_id
+                 AND proposal.skill_id = NEW.skill_id
+                JOIN skill_candidate_evaluations evaluation
+                  ON evaluation.id = NEW.candidate_evaluation_id
+                 AND evaluation.proposal_id = NEW.proposal_id
+                WHERE r.id = NEW.target_revision_id
+                  AND r.id = NEW.promoted_revision_id
                   AND r.skill_id = NEW.skill_id
                   AND r.source_kind = 'generated'
                   AND r.promotion_request_id = NEW.id
+                  AND r.version = NEW.target_version
+                  AND r.instructions = proposal.proposed_instructions
+                  AND r.content_sha256 = proposal.proposed_content_sha256
+                  AND r.content_sha256 = NEW.candidate_sha256
+                  AND evaluation.report_sha256 = NEW.comparison_report_sha256
              )
             BEGIN
-                SELECT RAISE(ABORT, 'promoted request requires generated revision provenance');
+                SELECT RAISE(ABORT, 'promoted request requires its exact generated revision');
             END
             """
         )
@@ -600,18 +657,33 @@ def upgrade() -> None:
             FOR EACH ROW
             WHEN NEW.subject_kind = 'skill_promotion'
              AND NEW.consumed_at IS NOT NULL
+             AND NEW.status = 'approved'
              AND NOT EXISTS (
                 SELECT 1
                 FROM skill_promotion_requests p
-                JOIN skill_revisions r ON r.id = p.promoted_revision_id
+                JOIN skill_improvement_proposals proposal
+                  ON proposal.id = p.proposal_id
+                 AND proposal.skill_id = p.skill_id
+                JOIN skill_candidate_evaluations evaluation
+                  ON evaluation.id = p.candidate_evaluation_id
+                 AND evaluation.proposal_id = p.proposal_id
+                JOIN skill_revisions r ON r.id = p.target_revision_id
                 WHERE p.id = NEW.subject_id
                   AND p.approval_request_id = NEW.id
                   AND p.status = 'promoted'
+                  AND p.promoted_revision_id = p.target_revision_id
+                  AND r.id = p.promoted_revision_id
+                  AND r.skill_id = p.skill_id
                   AND r.source_kind = 'generated'
                   AND r.promotion_request_id = p.id
+                  AND r.version = p.target_version
+                  AND r.instructions = proposal.proposed_instructions
+                  AND r.content_sha256 = proposal.proposed_content_sha256
+                  AND r.content_sha256 = p.candidate_sha256
+                  AND evaluation.report_sha256 = p.comparison_report_sha256
              )
             BEGIN
-                SELECT RAISE(ABORT, 'consumed promotion approval lacks successful promotion');
+                SELECT RAISE(ABORT, 'consumed promotion approval lacks exact successful promotion');
             END
             """
         )
@@ -631,10 +703,33 @@ def upgrade() -> None:
                           AND r.source_kind = 'generated'
                     )
                     AND NOT EXISTS (
-                        SELECT 1 FROM skill_promotion_requests p
+                        SELECT 1
+                        FROM skill_promotion_requests p
+                        JOIN skill_improvement_proposals proposal
+                          ON proposal.id = p.proposal_id
+                         AND proposal.skill_id = p.skill_id
+                        JOIN skill_candidate_evaluations evaluation
+                          ON evaluation.id = p.candidate_evaluation_id
+                         AND evaluation.proposal_id = p.proposal_id
+                        JOIN approval_requests approval ON approval.id = p.approval_request_id
+                        JOIN skill_revisions r ON r.id = p.target_revision_id
                         WHERE p.skill_id = NEW.id
+                          AND p.target_revision_id = NEW.active_revision_id
                           AND p.promoted_revision_id = NEW.active_revision_id
                           AND p.status = 'promoted'
+                          AND r.id = NEW.active_revision_id
+                          AND r.skill_id = NEW.id
+                          AND r.source_kind = 'generated'
+                          AND r.promotion_request_id = p.id
+                          AND r.version = p.target_version
+                          AND r.instructions = proposal.proposed_instructions
+                          AND r.content_sha256 = proposal.proposed_content_sha256
+                          AND r.content_sha256 = p.candidate_sha256
+                          AND evaluation.report_sha256 = p.comparison_report_sha256
+                          AND approval.subject_kind = 'skill_promotion'
+                          AND approval.subject_id = p.id
+                          AND approval.authorization_fingerprint = p.authorization_fingerprint
+                          AND approval.status = 'approved'
                     )
                 )
                 OR
@@ -726,7 +821,9 @@ def downgrade() -> None:
         ):
             batch.drop_constraint(name, type_="foreignkey")
         batch.drop_constraint("uq_skill_promotion_approval_request", type_="unique")
+        batch.drop_constraint("uq_skill_promotion_target_revision", type_="unique")
         batch.drop_column("approval_request_id")
+        batch.drop_column("target_revision_id")
     with op.batch_alter_table("skill_candidate_evaluations") as batch:
         for name in (
             "ck_skill_candidate_evaluations_report_sha256",
@@ -772,6 +869,7 @@ def downgrade() -> None:
         ):
             batch.drop_constraint(name, type_="foreignkey")
         batch.drop_constraint("uq_skill_evaluation_runs_skill_id", type_="unique")
+        batch.drop_column("call_usage")
         batch.drop_column("runtime_metadata")
         batch.drop_column("target_content_sha256")
     with op.batch_alter_table("skill_evaluation_cases") as batch:

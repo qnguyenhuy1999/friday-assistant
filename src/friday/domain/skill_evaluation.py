@@ -90,6 +90,7 @@ class SkillEvaluationRun:
     runtime_fingerprint: str
     target_content_sha256: str
     runtime_metadata: JsonValue = None
+    call_usage: JsonValue = None
 
     def __post_init__(self) -> None:
         if (
@@ -134,6 +135,10 @@ class SkillEvaluationRun:
         if not isinstance(runtime_metadata, dict):
             raise DomainValidationError("evaluation run runtime metadata is malformed")
         object.__setattr__(self, "runtime_metadata", runtime_metadata)
+        call_usage = ensure_json_value(self.call_usage)
+        if call_usage is not None and not isinstance(call_usage, dict):
+            raise DomainValidationError("evaluation run call usage is malformed")
+        object.__setattr__(self, "call_usage", call_usage)
         object.__setattr__(self, "started_at", ensure_utc(self.started_at))
         object.__setattr__(self, "completed_at", ensure_utc(self.completed_at))
 

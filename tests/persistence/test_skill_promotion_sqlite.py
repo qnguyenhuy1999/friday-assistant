@@ -307,13 +307,14 @@ def _seed_valid_promotion(connection: Connection) -> None:
             "INSERT INTO skill_improvement_proposals ("
             "id, skill_id, base_revision_id, status, trigger_kind, evidence_snapshot_hash, "
             "proposed_instructions, proposed_content_sha256, rationale, generator_version, "
-            "created_at, evidence_snapshot_id"
+            "candidate_prompt_version, candidate_prompt_sha256, created_at, evidence_snapshot_id"
             ") VALUES "
             "(:id, :skill_id, :base_revision_id, 'ready_for_review', 'manual', :evidence_hash, "
-            ":instructions, :content_sha256, 'reviewed', :generator, :at, :snapshot_id), "
+            ":instructions, :content_sha256, 'reviewed', :generator, :prompt_version, "
+            ":prompt_sha256, :at, :snapshot_id), "
             "(:other_id, :skill_id, :base_revision_id, 'rejected', 'manual', :evidence_hash, "
-            ":other_instructions, :other_content_sha256, 'other', 'other-generator', :at, "
-            ":snapshot_id)"
+            ":other_instructions, :other_content_sha256, 'other', 'other-generator', "
+            ":prompt_version, :other_prompt_sha256, :at, :snapshot_id)"
         ),
         {
             "id": PROPOSAL_ID,
@@ -327,6 +328,9 @@ def _seed_valid_promotion(connection: Connection) -> None:
             "other_instructions": OTHER_CANDIDATE_INSTRUCTIONS,
             "other_content_sha256": OTHER_CANDIDATE_SHA256,
             "snapshot_id": SNAPSHOT_ID,
+            "prompt_version": "candidate-prompt-v1",
+            "prompt_sha256": hashlib.sha256(b"prompt").hexdigest(),
+            "other_prompt_sha256": hashlib.sha256(b"other-prompt").hexdigest(),
             "at": AT,
         },
     )

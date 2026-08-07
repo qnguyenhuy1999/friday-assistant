@@ -474,6 +474,8 @@ def skill_improvement_proposal_to_row(
         proposed_content_sha256=value.proposed_content_sha256,
         rationale=value.rationale,
         generator_version=value.generator_version,
+        candidate_prompt_version=value.candidate_prompt_version,
+        candidate_prompt_sha256=value.candidate_prompt_sha256,
         created_at=value.created_at,
     )
 
@@ -499,6 +501,8 @@ def skill_improvement_proposal_from_row(
         proposed_content_sha256=row.proposed_content_sha256,
         rationale=row.rationale,
         generator_version=row.generator_version,
+        candidate_prompt_version=row.candidate_prompt_version,
+        candidate_prompt_sha256=row.candidate_prompt_sha256,
         created_at=read_back_utc(row.created_at),
     )
 

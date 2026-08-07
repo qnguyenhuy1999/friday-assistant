@@ -87,8 +87,9 @@ def _promoted_skill_setup(
         trigger_kind="manual",
         evidence_snapshot_id=snapshot.id,
         evidence_snapshot_hash=snapshot.content_sha256,
-        evidence_ids={"e"},
         generator_version="brain-candidate-generator-v2",
+        candidate_prompt_version="candidate-prompt-v1",
+        candidate_prompt_sha256="a" * 64,
         raw_candidate=(
             '{"version":1,"proposed_instructions":"better","rationale":"r",'
             '"addressed_evidence_ids":["e"]}'
@@ -155,9 +156,7 @@ def test_tampered_target_revision_identity_makes_promotion_stale() -> None:
     request = RequestSkillPromotion(factory, clock).execute(proposal.id)
     assert request.approval_request_id is not None
     _approve(factory, clock, request.approval_request_id)
-    uow.skill_promotion_requests.save(
-        replace(request, target_revision_id=SkillRevisionId.new())
-    )
+    uow.skill_promotion_requests.save(replace(request, target_revision_id=SkillRevisionId.new()))
 
     with pytest.raises(EntityConflict, match="stale"):
         ExecuteSkillPromotion(factory, clock).execute(request.id, "operator")

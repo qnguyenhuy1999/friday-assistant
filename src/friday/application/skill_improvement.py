@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from friday.application.errors import EntityConflict, SkillNotFound, SkillRevisionNotFound
@@ -24,8 +24,53 @@ from friday.domain.skill_evidence_snapshot import evidence_ids_from_payload, evi
 from friday.domain.skill_improvement_policy import CANONICAL_GENERATOR_VERSION
 
 GENERATOR_CONFIG_FINGERPRINT = CANONICAL_GENERATOR_VERSION
+CANDIDATE_PROMPT_VERSION = "candidate-prompt-v1"
 MAX_CANDIDATE_PROMPT_CHARS = 120_000
 MAX_CANDIDATE_RESPONSE_CHARS = 40_000
+
+
+def build_candidate_prompt(
+    *,
+    base_revision_id: SkillRevisionId,
+    base_instructions: str,
+    base_content_sha256: str,
+    snapshot_id: SkillEvidenceSnapshotId,
+    snapshot_payload: JsonValue,
+    evidence_snapshot_hash: str,
+    generator_config_fingerprint: str,
+) -> str:
+    """The exact, deterministic prompt sent to the brain adapter.
+
+    Every field is either a persisted/domain object or code-owned
+    configuration; there is no free-text or per-call channel. Reconstructing
+    this from the same persisted rows must always yield the same bytes.
+    """
+    payload = {
+        "contract": {
+            "version": 1,
+            "required_fields": [
+                "version",
+                "proposed_instructions",
+                "rationale",
+                "addressed_evidence_ids",
+            ],
+        },
+        "prompt_version": CANDIDATE_PROMPT_VERSION,
+        "base_instructions": base_instructions,
+        "base_revision_id": str(base_revision_id),
+        "base_content_sha256": base_content_sha256,
+        "evidence_snapshot_id": str(snapshot_id),
+        "evidence_snapshot": snapshot_payload,
+        "evidence_snapshot_hash": evidence_snapshot_hash,
+        "evidence_ids": sorted(evidence_ids_from_payload(snapshot_payload)),
+        "instruction": "Return only one JSON candidate object; never propose tool use.",
+        "generator_config_fingerprint": generator_config_fingerprint,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def candidate_prompt_sha256(prompt: str) -> str:
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,19 +83,23 @@ class CandidateOutput:
 
 @dataclass(frozen=True, slots=True)
 class CandidateGenerationRequest:
-    """Bounded, policy-selected input for a brain-only candidate generator."""
+    """Bounded input for a brain-only candidate generator.
+
+    Every field is either a persisted/domain object or code-owned
+    configuration. ``evidence_ids`` is derived from ``snapshot_payload``, not
+    caller-supplied, so the persisted evidence snapshot is the sole authority
+    for which evidence IDs the generator may see.
+    """
 
     base_instructions: str
     evidence_snapshot_hash: str
-    evidence_ids: tuple[str, ...]
-    feedback_summaries: tuple[str, ...]
-    evaluator_summaries: tuple[str, ...]
+    snapshot_id: SkillEvidenceSnapshotId
+    snapshot_payload: JsonValue
+    base_revision_id: SkillRevisionId
+    base_content_sha256: str
     max_response_chars: int = 40_000
-    snapshot_id: SkillEvidenceSnapshotId | None = None
-    snapshot_payload: JsonValue = None
-    base_revision_id: SkillRevisionId | None = None
-    base_content_sha256: str | None = None
     generator_config_fingerprint: str = GENERATOR_CONFIG_FINGERPRINT
+    evidence_ids: tuple[str, ...] = field(init=False)
 
     def __post_init__(self) -> None:
         if not self.base_instructions or len(self.base_instructions) > 32_000:
@@ -61,34 +110,6 @@ class CandidateGenerationRequest:
             or not 1 <= self.max_response_chars <= MAX_CANDIDATE_RESPONSE_CHARS
         ):
             raise DomainValidationError("candidate generation request is invalid")
-        if len(self.evidence_ids) > 200 or any(len(item) > 128 for item in self.evidence_ids):
-            raise DomainValidationError("candidate evidence package is bounded")
-        prompt_payload = {
-            "base_instructions": self.base_instructions,
-            "base_revision_id": str(self.base_revision_id) if self.base_revision_id else None,
-            "base_content_sha256": self.base_content_sha256,
-            "evidence_snapshot_id": str(self.snapshot_id) if self.snapshot_id else None,
-            "evidence_snapshot": self.snapshot_payload,
-            "evidence_snapshot_hash": self.evidence_snapshot_hash,
-            "evidence_ids": self.evidence_ids,
-            "feedback_summaries": self.feedback_summaries,
-            "evaluator_summaries": self.evaluator_summaries,
-            "generator_config_fingerprint": self.generator_config_fingerprint,
-        }
-        if (
-            len(json.dumps(prompt_payload, sort_keys=True, separators=(",", ":")))
-            > MAX_CANDIDATE_PROMPT_CHARS
-        ):
-            raise DomainValidationError("candidate generation prompt is too large")
-        if len(set(self.evidence_ids)) != len(self.evidence_ids):
-            raise DomainValidationError("candidate evidence IDs must be unique")
-        if (
-            self.snapshot_id is None
-            or self.base_revision_id is None
-            or self.base_content_sha256 is None
-            or self.snapshot_payload is None
-        ):
-            raise DomainValidationError("candidate generation provenance is incomplete")
         if (
             self.base_content_sha256
             != hashlib.sha256(self.base_instructions.encode("utf-8")).hexdigest()
@@ -98,8 +119,21 @@ class CandidateGenerationRequest:
             raise DomainValidationError("candidate generator configuration is not code-owned")
         if evidence_payload_hash(self.snapshot_payload) != self.evidence_snapshot_hash:
             raise DomainValidationError("candidate evidence snapshot integrity failed")
-        if set(self.evidence_ids) != set(evidence_ids_from_payload(self.snapshot_payload)):
-            raise DomainValidationError("candidate evidence IDs do not match the snapshot")
+        evidence_ids = tuple(sorted(evidence_ids_from_payload(self.snapshot_payload)))
+        if len(evidence_ids) > 200 or any(len(item) > 128 for item in evidence_ids):
+            raise DomainValidationError("candidate evidence package is bounded")
+        object.__setattr__(self, "evidence_ids", evidence_ids)
+        prompt = build_candidate_prompt(
+            base_revision_id=self.base_revision_id,
+            base_instructions=self.base_instructions,
+            base_content_sha256=self.base_content_sha256,
+            snapshot_id=self.snapshot_id,
+            snapshot_payload=self.snapshot_payload,
+            evidence_snapshot_hash=self.evidence_snapshot_hash,
+            generator_config_fingerprint=self.generator_config_fingerprint,
+        )
+        if len(prompt) > MAX_CANDIDATE_PROMPT_CHARS:
+            raise DomainValidationError("candidate generation prompt is too large")
 
 
 class BrainOnlyCandidateGenerator(Protocol):
@@ -196,8 +230,9 @@ class CreateSkillImprovementProposal:
         trigger_kind: str,
         evidence_snapshot_id: SkillEvidenceSnapshotId,
         evidence_snapshot_hash: str,
-        evidence_ids: set[str],
         generator_version: str,
+        candidate_prompt_version: str,
+        candidate_prompt_sha256: str,
         raw_candidate: str,
     ) -> SkillImprovementProposal:
         with self._uow_factory() as uow:
@@ -235,6 +270,8 @@ class CreateSkillImprovementProposal:
                 proposed_content_sha256=candidate.content_sha256,
                 rationale=candidate.rationale,
                 generator_version=generator_version,
+                candidate_prompt_version=candidate_prompt_version,
+                candidate_prompt_sha256=candidate_prompt_sha256,
                 created_at=self._clock.now(),
             )
             uow.skill_improvement_proposals.add(proposal)
@@ -260,9 +297,6 @@ class GenerateSkillImprovementProposal:
         trigger_kind: str,
         evidence_snapshot_id: SkillEvidenceSnapshotId,
         evidence_snapshot_hash: str,
-        evidence_ids: set[str],
-        feedback_summaries: tuple[str, ...],
-        evaluator_summaries: tuple[str, ...],
         generator_version: str,
         base_instructions: str,
     ) -> SkillImprovementProposal:
@@ -282,29 +316,34 @@ class GenerateSkillImprovementProposal:
             if base.instructions != base_instructions:
                 raise EntityConflict("candidate base instructions do not match the persisted base")
             snapshot_payload = snapshot.evidence
-            frozen_evidence_ids = set(evidence_ids_from_payload(snapshot_payload))
             frozen_base_hash = base.content_sha256
-        raw_candidate = self._generator.generate_candidate(
-            CandidateGenerationRequest(
-                base_instructions=base_instructions,
-                evidence_snapshot_hash=evidence_snapshot_hash,
-                evidence_ids=tuple(sorted(frozen_evidence_ids)),
-                feedback_summaries=feedback_summaries,
-                evaluator_summaries=evaluator_summaries,
-                snapshot_id=evidence_snapshot_id,
-                snapshot_payload=snapshot_payload,
-                base_revision_id=base_revision_id,
-                base_content_sha256=frozen_base_hash,
-            )
+        request = CandidateGenerationRequest(
+            base_instructions=base_instructions,
+            evidence_snapshot_hash=evidence_snapshot_hash,
+            snapshot_id=evidence_snapshot_id,
+            snapshot_payload=snapshot_payload,
+            base_revision_id=base_revision_id,
+            base_content_sha256=frozen_base_hash,
         )
+        prompt = build_candidate_prompt(
+            base_revision_id=base_revision_id,
+            base_instructions=base_instructions,
+            base_content_sha256=frozen_base_hash,
+            snapshot_id=evidence_snapshot_id,
+            snapshot_payload=snapshot_payload,
+            evidence_snapshot_hash=evidence_snapshot_hash,
+            generator_config_fingerprint=request.generator_config_fingerprint,
+        )
+        raw_candidate = self._generator.generate_candidate(request)
         return self._create_proposal.execute(
             skill_id=skill_id,
             base_revision_id=base_revision_id,
             trigger_kind=trigger_kind,
             evidence_snapshot_id=evidence_snapshot_id,
             evidence_snapshot_hash=evidence_snapshot_hash,
-            evidence_ids=frozen_evidence_ids,
             generator_version=generator_version,
+            candidate_prompt_version=CANDIDATE_PROMPT_VERSION,
+            candidate_prompt_sha256=candidate_prompt_sha256(prompt),
             raw_candidate=raw_candidate,
         )
 

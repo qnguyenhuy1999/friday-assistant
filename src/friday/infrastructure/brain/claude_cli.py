@@ -36,7 +36,7 @@ from friday.application.errors import (
 )
 from friday.application.runtime_actions import parse_brain_action
 from friday.application.skill_evaluation import BrainOnlyEvaluationRequest
-from friday.application.skill_improvement import CandidateGenerationRequest
+from friday.application.skill_improvement import CandidateGenerationRequest, build_candidate_prompt
 from friday.infrastructure.brain.claude_cli_protocol import CliEnvelope, parse_cli_envelope
 
 ENVIRONMENT_ALLOWLIST = (
@@ -159,36 +159,18 @@ class ClaudeCliBrainRuntime:
         """Brain-only candidate generation with the same process-level isolation.
 
         This deliberately does not reuse the action envelope parser: the sole
-        allowed output is the improvement-candidate JSON contract.
+        allowed output is the improvement-candidate JSON contract. The prompt
+        is the exact canonical bytes built from persisted/domain inputs — the
+        adapter never augments or reshapes it.
         """
-        prompt = json.dumps(
-            {
-                "contract": {
-                    "version": 1,
-                    "required_fields": [
-                        "version",
-                        "proposed_instructions",
-                        "rationale",
-                        "addressed_evidence_ids",
-                    ],
-                },
-                "base_instructions": request.base_instructions,
-                "base_revision_id": str(request.base_revision_id)
-                if request.base_revision_id is not None
-                else None,
-                "base_content_sha256": request.base_content_sha256,
-                "evidence_snapshot_id": str(request.snapshot_id)
-                if request.snapshot_id is not None
-                else None,
-                "evidence_snapshot": request.snapshot_payload,
-                "evidence_snapshot_hash": request.evidence_snapshot_hash,
-                "evidence_ids": request.evidence_ids,
-                "feedback_summaries": request.feedback_summaries,
-                "evaluator_summaries": request.evaluator_summaries,
-                "instruction": "Return only one JSON candidate object; never propose tool use.",
-                "generator_config_fingerprint": request.generator_config_fingerprint,
-            },
-            separators=(",", ":"),
+        prompt = build_candidate_prompt(
+            base_revision_id=request.base_revision_id,
+            base_instructions=request.base_instructions,
+            base_content_sha256=request.base_content_sha256,
+            snapshot_id=request.snapshot_id,
+            snapshot_payload=request.snapshot_payload,
+            evidence_snapshot_hash=request.evidence_snapshot_hash,
+            generator_config_fingerprint=request.generator_config_fingerprint,
         )
         envelope = self._invoke_candidate(
             prompt, request.max_response_chars, system_prompt=CANDIDATE_SYSTEM_PROMPT

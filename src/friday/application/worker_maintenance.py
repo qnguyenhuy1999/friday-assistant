@@ -406,8 +406,6 @@ class EvaluateDueSkillImprovementPolicies:
                 for item in uow.skill_run_feedback.list_for_run_skill(usage_item.run_id, skill_id)
                 if item.revision_id == base.id
             ]
-            evidence_ids = {f"usage:{item.id}" for item in usage}
-            evidence_ids.update(f"feedback:{item.id}" for item in feedback)
             evidence = {
                 "usage": [
                     {
@@ -435,9 +433,6 @@ class EvaluateDueSkillImprovementPolicies:
                     for item in feedback
                 ],
             }
-            feedback_summaries = tuple(
-                f"{item.rating.value}:{item.note}"[:4096] for item in feedback
-            )
             base_id, base_instructions = base.id, base.instructions
             generator_version = policy.generator_version
         snapshot = CreateSkillEvidenceSnapshot(self._uow_factory, self._clock).execute(
@@ -453,9 +448,6 @@ class EvaluateDueSkillImprovementPolicies:
             trigger_kind="policy",
             evidence_snapshot_id=snapshot.id,
             evidence_snapshot_hash=snapshot.content_sha256,
-            evidence_ids=evidence_ids,
-            feedback_summaries=feedback_summaries,
-            evaluator_summaries=(),
             generator_version=generator_version,
             base_instructions=base_instructions,
         )

@@ -12,7 +12,6 @@ from friday.application.skill_evaluation import (
     RunSkillEvaluation,
     _deterministic_runtime_metadata,
 )
-from friday.domain.skill_evaluation import CANONICAL_BRAIN_EVALUATOR_VERSION
 from friday.application.skill_improvement import (
     CreateSkillEvidenceSnapshot,
     CreateSkillImprovementProposal,
@@ -30,12 +29,13 @@ from friday.domain import (
     SkillEvaluationSuiteId,
     SkillRevisionSourceKind,
 )
+from friday.domain.skill_evaluation import CANONICAL_BRAIN_EVALUATOR_VERSION
 from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
 
 
-def _suite_and_case(uow: FakeUnitOfWork, clock: FakeClock, skill_id: object) -> tuple[
-    SkillEvaluationSuite, SkillEvaluationCase
-]:
+def _suite_and_case(
+    uow: FakeUnitOfWork, clock: FakeClock, skill_id: object
+) -> tuple[SkillEvaluationSuite, SkillEvaluationCase]:
     suite = SkillEvaluationSuite(
         id=SkillEvaluationSuiteId.new(),
         skill_id=skill_id,
@@ -179,8 +179,9 @@ def test_candidate_comparison_requires_identical_frozen_evaluation_configuration
         trigger_kind="manual",
         evidence_snapshot_id=snapshot.id,
         evidence_snapshot_hash=snapshot.content_sha256,
-        evidence_ids={"u1"},
         generator_version="brain-candidate-generator-v2",
+        candidate_prompt_version="candidate-prompt-v1",
+        candidate_prompt_sha256="a" * 64,
         raw_candidate=(
             '{"version":1,"proposed_instructions":"candidate","rationale":"r",'
             '"addressed_evidence_ids":["u1"]}'
@@ -304,7 +305,9 @@ def test_response_and_input_limit_changes_change_runtime_fingerprint() -> None:
 def test_reordering_runtime_metadata_keys_does_not_change_fingerprint() -> None:
     uow, clock = FakeUnitOfWork(), FakeClock()
     factory = CountingUnitOfWorkFactory(uow)
-    skill = CreateSkill(factory, clock).execute(key="eval.reorder", display_name="E", description="")
+    skill = CreateSkill(factory, clock).execute(
+        key="eval.reorder", display_name="E", description=""
+    )
     revision = CreateSkillRevision(factory, clock).execute(
         skill_id=skill.id, instructions="base", source_kind=SkillRevisionSourceKind.OPERATOR
     )
@@ -324,7 +327,9 @@ def test_reordering_runtime_metadata_keys_does_not_change_fingerprint() -> None:
 def test_adding_per_call_usage_fields_cannot_change_fingerprint() -> None:
     uow, clock = FakeUnitOfWork(), FakeClock()
     factory = CountingUnitOfWorkFactory(uow)
-    skill = CreateSkill(factory, clock).execute(key="eval.no-usage", display_name="E", description="")
+    skill = CreateSkill(factory, clock).execute(
+        key="eval.no-usage", display_name="E", description=""
+    )
     revision = CreateSkillRevision(factory, clock).execute(
         skill_id=skill.id, instructions="base", source_kind=SkillRevisionSourceKind.OPERATOR
     )

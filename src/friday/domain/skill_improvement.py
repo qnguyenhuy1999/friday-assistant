@@ -44,14 +44,22 @@ class SkillImprovementProposal:
     proposed_content_sha256: str
     rationale: str
     generator_version: str
+    candidate_prompt_version: str
+    candidate_prompt_sha256: str
     created_at: datetime
 
     def __post_init__(self) -> None:
         instructions = validate_skill_instructions(self.proposed_instructions)
         if not self.trigger_kind or not self.generator_version or len(self.rationale) > 8000:
             raise DomainValidationError("proposal metadata must be present and bounded")
+        if not self.candidate_prompt_version or len(self.candidate_prompt_version) > 128:
+            raise DomainValidationError("proposal candidate prompt version must be bounded")
         if len(self.evidence_snapshot_hash) != 64:
             raise DomainValidationError("proposal evidence snapshot must be sha256")
+        if len(self.candidate_prompt_sha256) != 64 or any(
+            char not in "0123456789abcdef" for char in self.candidate_prompt_sha256
+        ):
+            raise DomainValidationError("proposal candidate prompt must be sha256")
         digest = hashlib.sha256(instructions.encode("utf-8")).hexdigest()
         if self.proposed_content_sha256 != digest:
             raise DomainValidationError("proposal content hash does not match instructions")

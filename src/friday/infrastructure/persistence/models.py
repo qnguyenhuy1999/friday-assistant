@@ -369,6 +369,11 @@ class SkillImprovementProposalRow(Base):
             "proposed_content_sha256 NOT GLOB '*[^0-9a-f]*'",
             name="ck_skill_improvement_proposals_content_hash",
         ),
+        CheckConstraint(
+            "length(candidate_prompt_sha256) = 64 AND "
+            "candidate_prompt_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_skill_improvement_proposals_candidate_prompt_hash",
+        ),
         Index(
             "uq_skill_improvement_proposals_one_open",
             "skill_id",
@@ -392,6 +397,8 @@ class SkillImprovementProposalRow(Base):
     proposed_content_sha256: Mapped[str]
     rationale: Mapped[str]
     generator_version: Mapped[str]
+    candidate_prompt_version: Mapped[str]
+    candidate_prompt_sha256: Mapped[str]
     created_at: Mapped[datetime]
 
 

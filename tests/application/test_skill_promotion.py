@@ -8,7 +8,7 @@ import pytest
 
 from friday.application.approval_workflow import ApproveRequest
 from friday.application.commands import ApproveRequestCommand
-from friday.application.errors import EntityConflict
+from friday.application.errors import EntityConflict, SkillNotFound
 from friday.application.skill_evaluation import (
     CompareSkillImprovementProposal,
     DeterministicEvaluatorRegistry,
@@ -23,6 +23,7 @@ from friday.application.skill_promotion import (
     ExecuteSkillPromotion,
     ExecuteSkillRollback,
     RejectSkillPromotion,
+    RejectSkillRollback,
     RequestSkillPromotion,
     RequestSkillRollback,
     _promotion_fingerprint,
@@ -42,7 +43,13 @@ from friday.domain import (
 )
 from friday.domain.approval import ApprovalSubjectKind
 from friday.domain.errors import DomainValidationError
-from friday.domain.identifiers import ApprovalRequestId, SkillRevisionId
+from friday.domain.identifiers import (
+    ApprovalRequestId,
+    SkillId,
+    SkillPromotionRequestId,
+    SkillRevisionId,
+    SkillRollbackRequestId,
+)
 from friday.domain.skill import Skill
 from friday.domain.skill_improvement import SkillImprovementProposal
 from tests.application.fakes import (
@@ -664,3 +671,406 @@ def test_no_production_import_named_approve_skill_promotion_or_rollback() -> Non
 
     assert not hasattr(module, "ApproveSkillPromotion")
     assert not hasattr(module, "ApproveSkillRollback")
+
+
+def test_execute_promotion_rejects_missing_proposal() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    _, proposal = _promoted_skill_setup(uow, factory, clock)
+    request = RequestSkillPromotion(factory, clock).execute(proposal.id)
+    assert request.approval_request_id is not None
+    _approve(factory, clock, request.approval_request_id)
+    uow.skill_improvement_proposal_repo.items.pop(proposal.id)
+
+    with pytest.raises(EntityConflict, match="promotion proposal was not found"):
+        ExecuteSkillPromotion(factory, clock).execute(request.id, "operator")
+
+
+def test_execute_promotion_rejects_proposal_of_another_skill() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    _, proposal = _promoted_skill_setup(uow, factory, clock)
+    other_skill = CreateSkill(factory, clock).execute(
+        key="promote.other", display_name="O", description=""
+    )
+    request = RequestSkillPromotion(factory, clock).execute(proposal.id)
+    assert request.approval_request_id is not None
+    _approve(factory, clock, request.approval_request_id)
+    stored = uow.skill_improvement_proposals.get(proposal.id)
+    assert stored is not None
+    uow.skill_improvement_proposal_repo.save(replace(stored, skill_id=other_skill.id))
+
+    with pytest.raises(EntityConflict, match="does not belong to request"):
+        ExecuteSkillPromotion(factory, clock).execute(request.id, "operator")
+
+
+def test_execute_promotion_rejects_missing_approval() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    _, proposal = _promoted_skill_setup(uow, factory, clock)
+    request = RequestSkillPromotion(factory, clock).execute(proposal.id)
+    uow.skill_promotion_request_repo.save(
+        replace(request, approval_request_id=ApprovalRequestId.new())
+    )
+
+    with pytest.raises(EntityConflict, match="approval was not found"):
+        ExecuteSkillPromotion(factory, clock).execute(request.id, "operator")
+
+
+def test_execute_promotion_rejects_approval_of_another_request() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    _, proposal_a = _promoted_skill_setup(uow, factory, clock)
+    _, proposal_b = _promoted_skill_setup(uow, factory, clock)
+    request_a = RequestSkillPromotion(factory, clock).execute(proposal_a.id)
+    request_b = RequestSkillPromotion(factory, clock).execute(proposal_b.id)
+    uow.skill_promotion_request_repo.save(
+        replace(request_a, approval_request_id=request_b.approval_request_id)
+    )
+
+    with pytest.raises(EntityConflict, match="does not belong to request"):
+        ExecuteSkillPromotion(factory, clock).execute(request_a.id, "operator")
+
+
+def test_execute_promotion_unknown_request_raises() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    with pytest.raises(EntityConflict, match="promotion request was not found"):
+        ExecuteSkillPromotion(factory, clock).execute(SkillPromotionRequestId.new(), "operator")
+
+
+def test_request_promotion_rejects_proposal_not_ready_for_review() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill = CreateSkill(factory, clock).execute(
+        key="promote.unready", display_name="P", description=""
+    )
+    base = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="base", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    skill.activate(base, clock.now())
+    snapshot = CreateSkillEvidenceSnapshot(factory, clock).execute(
+        skill_id=skill.id, base_revision_id=base.id, evidence={"items": [{"id": "e"}]}
+    )
+    proposal = CreateSkillImprovementProposal(factory, clock).execute(
+        skill_id=skill.id,
+        base_revision_id=base.id,
+        trigger_kind="manual",
+        evidence_snapshot_id=snapshot.id,
+        evidence_snapshot_hash=snapshot.content_sha256,
+        generator_version="brain-candidate-generator-v2",
+        candidate_prompt_version="candidate-prompt-v1",
+        candidate_prompt_sha256="a" * 64,
+        raw_candidate=(
+            '{"version":1,"proposed_instructions":"better","rationale":"r",'
+            '"addressed_evidence_ids":["e"]}'
+        ),
+    )
+
+    with pytest.raises(EntityConflict, match="not ready"):
+        RequestSkillPromotion(factory, clock).execute(proposal.id)
+
+
+def test_request_promotion_rejects_non_eligible_comparison() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill = CreateSkill(factory, clock).execute(
+        key="promote.noteligible", display_name="P", description=""
+    )
+    base = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="base", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    skill.activate(base, clock.now())
+    suite = SkillEvaluationSuite(
+        id=SkillEvaluationSuiteId.new(),
+        skill_id=skill.id,
+        name="suite",
+        description="",
+        status=EvaluationSuiteStatus.ACTIVE,
+        created_at=clock.now(),
+        updated_at=clock.now(),
+    )
+    case = SkillEvaluationCase(
+        id=SkillEvaluationCaseId.new(),
+        suite_id=suite.id,
+        position=1,
+        input="x",
+        expected_properties={"value": "ok"},
+        grading_kind="exact_match",
+        created_at=clock.now(),
+        updated_at=clock.now(),
+    )
+    uow.skill_evaluation_suites.add(suite)
+    uow.skill_evaluation_cases.add(case)
+    baseline = RunSkillEvaluation(factory, clock, DeterministicEvaluatorRegistry()).execute(
+        suite_id=suite.id, revision_id=base.id, outputs={str(case.id): "ok"}
+    )
+    snapshot = CreateSkillEvidenceSnapshot(factory, clock).execute(
+        skill_id=skill.id, base_revision_id=base.id, evidence={"items": [{"id": "e"}]}
+    )
+    proposal = CreateSkillImprovementProposal(factory, clock).execute(
+        skill_id=skill.id,
+        base_revision_id=base.id,
+        trigger_kind="manual",
+        evidence_snapshot_id=snapshot.id,
+        evidence_snapshot_hash=snapshot.content_sha256,
+        generator_version="brain-candidate-generator-v2",
+        candidate_prompt_version="candidate-prompt-v1",
+        candidate_prompt_sha256="a" * 64,
+        raw_candidate=(
+            '{"version":1,"proposed_instructions":"better","rationale":"r",'
+            '"addressed_evidence_ids":["e"]}'
+        ),
+    )
+    CompareSkillImprovementProposal(factory, clock, DeterministicEvaluatorRegistry()).execute(
+        proposal_id=proposal.id,
+        baseline_evaluation_run_id=baseline.id,
+        candidate_outputs={str(case.id): "bad"},
+    )
+
+    with pytest.raises(EntityConflict, match="not eligible"):
+        RequestSkillPromotion(factory, clock).execute(proposal.id)
+
+
+def test_request_promotion_rejects_missing_skill() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill, proposal = _promoted_skill_setup(uow, factory, clock)
+    uow.skill_repo.items.pop(skill.id)
+
+    with pytest.raises(SkillNotFound):
+        RequestSkillPromotion(factory, clock).execute(proposal.id)
+
+
+def test_request_promotion_rejects_inactive_skill() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill, proposal = _promoted_skill_setup(uow, factory, clock)
+    skill.disable(clock.now())
+    uow.skill_repo.save(skill)
+
+    with pytest.raises(EntityConflict, match="active skill"):
+        RequestSkillPromotion(factory, clock).execute(proposal.id)
+
+
+def test_request_promotion_rejects_moved_base_revision() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill, proposal = _promoted_skill_setup(uow, factory, clock)
+    newer = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="newer", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    skill.activate(newer, clock.now())
+    uow.skill_repo.save(skill)
+
+    with pytest.raises(EntityConflict, match="base is no longer active"):
+        RequestSkillPromotion(factory, clock).execute(proposal.id)
+
+
+def test_execute_rollback_unknown_request_raises() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    with pytest.raises(EntityConflict, match="rollback request was not found"):
+        ExecuteSkillRollback(factory, clock).execute(SkillRollbackRequestId.new(), "operator")
+
+
+def test_execute_rollback_completed_request_is_idempotent() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill = CreateSkill(factory, clock).execute(
+        key="rollback.idempotent", display_name="R", description=""
+    )
+    v1 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v1", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    v2 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v2", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    skill.activate(v2, clock.now())
+    uow.skill_repo.save(skill)
+    request = RequestSkillRollback(factory, clock).execute(
+        skill_id=skill.id, target_revision_id=v1.id, reason="restore known behavior"
+    )
+    assert request.approval_request_id is not None
+    _approve(factory, clock, request.approval_request_id)
+    completed = ExecuteSkillRollback(factory, clock).execute(request.id, "operator")
+    assert completed.status is RollbackRequestStatus.COMPLETED
+
+    again = ExecuteSkillRollback(factory, clock).execute(request.id, "operator")
+    assert again == completed
+    stored = uow.skill_repo.get(skill.id)
+    assert stored is not None and stored.active_revision_id == v1.id
+
+
+def test_execute_rollback_rejects_not_pending_request() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill = CreateSkill(factory, clock).execute(
+        key="rollback.notpending", display_name="R", description=""
+    )
+    v1 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v1", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    v2 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v2", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    skill.activate(v2, clock.now())
+    uow.skill_repo.save(skill)
+    request = RequestSkillRollback(factory, clock).execute(
+        skill_id=skill.id, target_revision_id=v1.id, reason="restore known behavior"
+    )
+    uow.skill_rollback_request_repo.save(replace(request, status=RollbackRequestStatus.REJECTED))
+
+    with pytest.raises(EntityConflict, match="not pending"):
+        ExecuteSkillRollback(factory, clock).execute(request.id, "operator")
+
+
+def test_execute_rollback_rejects_missing_canonical_approval() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill = CreateSkill(factory, clock).execute(
+        key="rollback.noapproval", display_name="R", description=""
+    )
+    v1 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v1", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    v2 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v2", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    skill.activate(v2, clock.now())
+    uow.skill_repo.save(skill)
+    request = RequestSkillRollback(factory, clock).execute(
+        skill_id=skill.id, target_revision_id=v1.id, reason="restore known behavior"
+    )
+    uow.skill_rollback_request_repo.save(replace(request, approval_request_id=None))
+
+    with pytest.raises(EntityConflict, match="no canonical approval"):
+        ExecuteSkillRollback(factory, clock).execute(request.id, "operator")
+
+
+def test_execute_rollback_rejects_missing_approval() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill = CreateSkill(factory, clock).execute(
+        key="rollback.missingapproval", display_name="R", description=""
+    )
+    v1 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v1", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    v2 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v2", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    skill.activate(v2, clock.now())
+    uow.skill_repo.save(skill)
+    request = RequestSkillRollback(factory, clock).execute(
+        skill_id=skill.id, target_revision_id=v1.id, reason="restore known behavior"
+    )
+    uow.skill_rollback_request_repo.save(
+        replace(request, approval_request_id=ApprovalRequestId.new())
+    )
+
+    with pytest.raises(EntityConflict, match="rollback approval was not found"):
+        ExecuteSkillRollback(factory, clock).execute(request.id, "operator")
+
+
+def test_execute_rollback_rejects_approval_of_another_request() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill = CreateSkill(factory, clock).execute(
+        key="rollback.crossreq", display_name="R", description=""
+    )
+    v1 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v1", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    v2 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v2", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    skill.activate(v2, clock.now())
+    uow.skill_repo.save(skill)
+    request_a = RequestSkillRollback(factory, clock).execute(
+        skill_id=skill.id, target_revision_id=v1.id, reason="restore v1"
+    )
+    v3 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v3", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    skill.activate(v3, clock.now())
+    uow.skill_repo.save(skill)
+    request_b = RequestSkillRollback(factory, clock).execute(
+        skill_id=skill.id, target_revision_id=v2.id, reason="restore v2"
+    )
+    uow.skill_rollback_request_repo.save(
+        replace(request_a, approval_request_id=request_b.approval_request_id)
+    )
+
+    with pytest.raises(EntityConflict, match="rollback approval does not belong"):
+        RejectSkillRollback(factory, clock).execute(request_a.id, "operator")
+
+
+def test_execute_rollback_marks_stale_when_active_pointer_moved() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill = CreateSkill(factory, clock).execute(
+        key="rollback.stale", display_name="R", description=""
+    )
+    v1 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v1", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    v2 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v2", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    skill.activate(v2, clock.now())
+    uow.skill_repo.save(skill)
+    request = RequestSkillRollback(factory, clock).execute(
+        skill_id=skill.id, target_revision_id=v1.id, reason="restore known behavior"
+    )
+    assert request.approval_request_id is not None
+    _approve(factory, clock, request.approval_request_id)
+    v3 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v3", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    skill.activate(v3, clock.now())
+    uow.skill_repo.save(skill)
+
+    with pytest.raises(EntityConflict, match="stale"):
+        ExecuteSkillRollback(factory, clock).execute(request.id, "operator")
+
+    stored = uow.skill_rollback_requests.get(request.id)
+    assert stored is not None and stored.status is RollbackRequestStatus.STALE
+
+
+def test_request_rollback_rejects_missing_skill() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    with pytest.raises(SkillNotFound):
+        RequestSkillRollback(factory, clock).execute(
+            skill_id=SkillId.new(), target_revision_id=SkillRevisionId.new(), reason="nope"
+        )
+
+
+def test_request_rollback_rejects_invalid_target() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill = CreateSkill(factory, clock).execute(
+        key="rollback.invalid", display_name="R", description=""
+    )
+    with pytest.raises(EntityConflict, match="invalid"):
+        RequestSkillRollback(factory, clock).execute(
+            skill_id=skill.id, target_revision_id=SkillRevisionId.new(), reason="nope"
+        )
+
+
+def test_request_rollback_rejects_already_active_target() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill = CreateSkill(factory, clock).execute(
+        key="rollback.active", display_name="R", description=""
+    )
+    v1 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="v1", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    skill.activate(v1, clock.now())
+    uow.skill_repo.save(skill)
+    with pytest.raises(EntityConflict, match="already active"):
+        RequestSkillRollback(factory, clock).execute(
+            skill_id=skill.id, target_revision_id=v1.id, reason="nope"
+        )

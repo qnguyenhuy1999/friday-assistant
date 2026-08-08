@@ -7,6 +7,7 @@ and the single bounded repair attempt."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -24,10 +25,17 @@ from friday.application.errors import (
     BrainUnavailable,
 )
 from friday.application.runtime_actions import FinishAction, InvokeToolAction
+from friday.application.skill_evaluation import BrainOnlyEvaluationRequest
+from friday.application.skill_improvement import CandidateGenerationRequest, build_candidate_prompt
 from friday.application.tool_gateway import ToolDescriptor
-from friday.domain.identifiers import RunId, TaskId
+from friday.domain.identifiers import RunId, SkillEvidenceSnapshotId, SkillRevisionId, TaskId
+from friday.domain.json_value import JsonValue
+from friday.domain.skill_evidence_snapshot import evidence_payload_hash
 from friday.infrastructure.brain.claude_cli import (
+    _SYSTEM_PROMPT,
+    CANDIDATE_SYSTEM_PROMPT,
     ENVIRONMENT_ALLOWLIST,
+    EVALUATION_SYSTEM_PROMPT,
     ClaudeCliBrainRuntime,
     ClaudeCliSettings,
 )
@@ -155,6 +163,89 @@ def test_model_flag_omitted_when_not_configured(tmp_path: Path) -> None:
     assert "--model" not in argv
 
 
+def test_brain_only_evaluation_requires_exact_frozen_case_output_map(tmp_path: Path) -> None:
+    executable, record = make_fake(tmp_path, stdouts=[envelope('{"case-a":"answer"}')])
+    runtime = ClaudeCliBrainRuntime(settings(executable))
+    assert runtime.evaluate_skill_cases(
+        BrainOnlyEvaluationRequest(instructions="be precise", cases=(("case-a", "question"),))
+    ) == {"case-a": "answer"}
+    prompt = json.loads((record / "stdin-0.txt").read_text())
+    assert prompt["instructions"] == "be precise"
+    assert prompt["cases"] == [{"id": "case-a", "input": "question"}]
+    argv = json.loads((record / "argv-0.json").read_text())
+    assert argv[argv.index("--system-prompt") + 1] == EVALUATION_SYSTEM_PROMPT
+
+
+def test_brain_only_candidate_uses_its_dedicated_protocol_and_provenance_prompt(
+    tmp_path: Path,
+) -> None:
+    snapshot: JsonValue = {
+        "version": 1,
+        "entries": [{"id": "manual:one", "kind": "manual", "payload": {"note": "x"}}],
+    }
+    base_instructions = "base instructions"
+    executable, record = make_fake(
+        tmp_path,
+        stdouts=[
+            envelope(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "proposed_instructions": "better instructions",
+                        "rationale": "r",
+                        "addressed_evidence_ids": ["manual:one"],
+                    }
+                )
+            )
+        ],
+    )
+    base_revision_id = SkillRevisionId.new()
+    snapshot_id = SkillEvidenceSnapshotId.new()
+    base_content_sha256 = hashlib.sha256(base_instructions.encode("utf-8")).hexdigest()
+    request = CandidateGenerationRequest(
+        base_instructions=base_instructions,
+        evidence_snapshot_hash=evidence_payload_hash(snapshot),
+        snapshot_id=snapshot_id,
+        snapshot_payload=snapshot,
+        base_revision_id=base_revision_id,
+        base_content_sha256=base_content_sha256,
+    )
+    runtime = ClaudeCliBrainRuntime(settings(executable))
+    raw = runtime.generate_candidate(request)
+    assert json.loads(raw)["proposed_instructions"] == "better instructions"
+    argv = json.loads((record / "argv-0.json").read_text())
+    system_prompt = argv[argv.index("--system-prompt") + 1]
+    assert system_prompt == CANDIDATE_SYSTEM_PROMPT
+    assert system_prompt != EVALUATION_SYSTEM_PROMPT
+    assert system_prompt != _SYSTEM_PROMPT
+    sent_prompt = (record / "stdin-0.txt").read_text()
+    expected_prompt = build_candidate_prompt(
+        base_revision_id=base_revision_id,
+        base_instructions=base_instructions,
+        base_content_sha256=base_content_sha256,
+        snapshot_id=snapshot_id,
+        snapshot_payload=snapshot,
+        evidence_snapshot_hash=request.evidence_snapshot_hash,
+        generator_config_fingerprint=request.generator_config_fingerprint,
+    )
+    assert sent_prompt == expected_prompt
+    prompt = json.loads(sent_prompt)
+    assert prompt["evidence_snapshot"] == snapshot
+    assert prompt["evidence_snapshot_hash"] == request.evidence_snapshot_hash
+    assert prompt["base_instructions"] == base_instructions
+    assert "feedback_summaries" not in prompt
+    assert "evaluator_summaries" not in prompt
+
+
+def test_brain_only_evaluation_rejects_missing_or_extra_case_outputs(tmp_path: Path) -> None:
+    executable, _ = make_fake(tmp_path, stdouts=[envelope('{"wrong":"answer"}')])
+    runtime = ClaudeCliBrainRuntime(settings(executable))
+    with pytest.raises(BrainResponseInvalid, match="map each frozen case"):
+        runtime.evaluate_skill_cases(
+            BrainOnlyEvaluationRequest(instructions="be precise", cases=(("case-a", "question"),))
+        )
+
+
 def test_prompt_travels_via_stdin_not_argv(tmp_path: Path) -> None:
     executable, record = make_fake(tmp_path, stdouts=[envelope(FINISH_ACTION)])
     ClaudeCliBrainRuntime(settings(executable)).next_action(request())
@@ -251,7 +342,7 @@ def test_stdin_write_never_blocks_past_the_deadline_on_a_stalled_child(
     runtime = ClaudeCliBrainRuntime(settings(str(script), timeout_seconds=0.3))
     big_context = "x" * (2 * 1024 * 1024)
     start = time.monotonic()
-    with pytest.raises(BrainTimeout):
+    with pytest.raises(BrainProtocolError, match="prompt input exceeded"):
         runtime.next_action(request(context=big_context))
     assert time.monotonic() - start < 2.0
 

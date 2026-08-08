@@ -62,6 +62,7 @@ class SubmitConversationTurn:
             )
             uow.tasks.add(task)
             started = StartRun.execute_in_uow(uow, task, now)
+            assert started.run_id is not None
             turn = ConversationTurn.new(
                 id=ConversationTurnId.new(),
                 conversation_id=command.conversation_id,

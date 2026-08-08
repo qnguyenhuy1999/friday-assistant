@@ -221,6 +221,7 @@ def test_cancel_task_event_append_failure_rolls_back_the_entire_persisted_hierar
     task_id = _create_pending_task(session_factory)
     factory = create_unit_of_work_factory(session_factory)
     run_id = StartRun(factory, FakeClock(T0)).execute(StartRunCommand(task_id)).run_id
+    assert run_id is not None
     StartQueuedRun(factory, FakeClock(T1)).execute(StartQueuedRunCommand(run_id))
     step_id = (
         CreateOrderedStep(factory, FakeClock(T1))

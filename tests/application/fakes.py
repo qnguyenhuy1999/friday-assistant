@@ -61,8 +61,13 @@ from friday.domain.identifiers import (
     RunStepId,
     ScheduleFireId,
     ScheduleId,
+    SkillEvidenceSnapshotId,
     SkillId,
+    SkillImprovementProposalId,
+    SkillImprovementWorkId,
+    SkillPromotionRequestId,
     SkillRevisionId,
+    SkillRollbackRequestId,
     TaskId,
     ToolInvocationId,
 )
@@ -72,7 +77,26 @@ from friday.domain.schedule import Schedule, ScheduleStatus
 from friday.domain.schedule_delivery_policy import ScheduleDeliveryPolicy
 from friday.domain.schedule_fire import ScheduleFire
 from friday.domain.schedule_fire_delivery_plan import ScheduleFireDeliveryPlan
-from friday.domain.skill import Skill, SkillRevision
+from friday.domain.skill import (
+    RunSkillBinding,
+    RunSkillResolution,
+    Skill,
+    SkillRevision,
+    TaskSkillBinding,
+)
+from friday.domain.skill_evaluation import (
+    SkillCandidateEvaluation,
+    SkillEvaluationCase,
+    SkillEvaluationCaseResult,
+    SkillEvaluationRun,
+    SkillEvaluationSuite,
+)
+from friday.domain.skill_evidence_snapshot import SkillEvidenceSnapshot
+from friday.domain.skill_improvement import SkillImprovementProposal
+from friday.domain.skill_improvement_policy import SkillImprovementPolicy
+from friday.domain.skill_improvement_work import SkillImprovementWork
+from friday.domain.skill_promotion import SkillPromotionRequest, SkillRollbackRequest
+from friday.domain.skill_usage import SkillRunFeedback, SkillUsageRecord
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES, RunStep
 from friday.domain.task import Task
 from friday.domain.task_event import TaskEvent
@@ -156,6 +180,13 @@ class FakeRunRepository:
 
     def count_for_execution(self, execution_id: RunId) -> int:
         return sum(run.execution_id == execution_id for run in self.items.values())
+
+    def ordinal_for_execution(self, run_id: RunId) -> int:
+        run = self.items.get(run_id)
+        if run is None:
+            return 0
+        rows = self.list_for_execution(run.execution_id)
+        return next((index for index, candidate in enumerate(rows, 1) if candidate.id == run_id), 0)
 
     def list_for_execution(self, execution_id: RunId) -> list[Run]:
         runs = [run for run in self.items.values() if run.execution_id == execution_id]
@@ -943,6 +974,13 @@ class FakeApprovalRepository:
     def save(self, approval: ApprovalRequest) -> None:
         self.items[approval.id] = approval
 
+    def consume_if_unconsumed(self, approval_id: ApprovalRequestId, at: datetime) -> bool:
+        approval = self.items.get(approval_id)
+        if approval is None or approval.consumed_at is not None:
+            return False
+        approval.consume(at)
+        return True
+
     def list_pending_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
         matching = [
             a
@@ -1331,11 +1369,315 @@ class FakeSkillRevisionRepository:
         return len(self.list_for_skill(skill_id)) + 1
 
 
+class FakeTaskSkillBindingRepository:
+    def __init__(self) -> None:
+        self.items: dict[TaskId, list[TaskSkillBinding]] = {}
+
+    def list_for_task(self, task_id: TaskId) -> list[TaskSkillBinding]:
+        return list(self.items.get(task_id, ()))
+
+    def replace(self, task_id: TaskId, bindings: list[TaskSkillBinding]) -> None:
+        self.items[task_id] = list(bindings)
+
+
+class FakeRunSkillResolutionRepository:
+    def __init__(self) -> None:
+        self.items: dict[RunId, RunSkillResolution] = {}
+
+    def get(self, run_id: RunId) -> RunSkillResolution | None:
+        return self.items.get(run_id)
+
+    def add(self, resolution: RunSkillResolution) -> None:
+        self.items[resolution.run_id] = resolution
+
+    def add_if_claimed(
+        self,
+        resolution: RunSkillResolution,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        if resolution.run_id in self.items:
+            return False
+        self.add(resolution)
+        return True
+
+
+class FakeRunSkillBindingRepository:
+    def __init__(self) -> None:
+        self.items: dict[RunId, list[RunSkillBinding]] = {}
+
+    def list_for_run(self, run_id: RunId) -> list[RunSkillBinding]:
+        return list(self.items.get(run_id, ()))
+
+    def add_all(self, bindings: list[RunSkillBinding]) -> None:
+        if not bindings:
+            return
+        self.items[bindings[0].run_id] = list(bindings)
+
+
+class FakeSkillUsageRecordRepository:
+    def __init__(self) -> None:
+        self.items: dict[tuple[RunId, SkillId], SkillUsageRecord] = {}
+
+    def get_for_run_skill(self, run_id: RunId, skill_id: SkillId) -> SkillUsageRecord | None:
+        return self.items.get((run_id, skill_id))
+
+    def add(self, record: SkillUsageRecord) -> None:
+        self.items[(record.run_id, record.skill_id)] = record
+
+    def list_for_skill(self, skill_id: SkillId, limit: int) -> list[SkillUsageRecord]:
+        return [x for x in self.items.values() if x.skill_id == skill_id][:limit]
+
+
+class FakeSkillRunFeedbackRepository:
+    def __init__(self) -> None:
+        self.items: list[SkillRunFeedback] = []
+
+    def add(self, feedback: SkillRunFeedback) -> None:
+        self.items.append(feedback)
+
+    def list_for_run_skill(self, run_id: RunId, skill_id: SkillId) -> list[SkillRunFeedback]:
+        return [x for x in self.items if x.run_id == run_id and x.skill_id == skill_id]
+
+
+class FakeSkillEvaluationSuiteRepository:
+    def __init__(self) -> None:
+        self.items: dict[object, SkillEvaluationSuite] = {}
+
+    def get(self, suite_id: object) -> SkillEvaluationSuite | None:
+        return self.items.get(suite_id)
+
+    def add(self, suite: SkillEvaluationSuite) -> None:
+        self.items[suite.id] = suite
+
+    def list_for_skill(self, skill_id: SkillId) -> list[SkillEvaluationSuite]:
+        return [x for x in self.items.values() if x.skill_id == skill_id]
+
+
+class FakeSkillEvaluationCaseRepository:
+    def __init__(self) -> None:
+        self.items: dict[object, list[SkillEvaluationCase]] = {}
+
+    def list_for_suite(self, suite_id: object) -> list[SkillEvaluationCase]:
+        return sorted(self.items.get(suite_id, ()), key=lambda x: x.position)
+
+    def add(self, case: SkillEvaluationCase) -> None:
+        self.items.setdefault(case.suite_id, []).append(case)
+
+
+class FakeSkillEvaluationRunRepository:
+    def __init__(self) -> None:
+        self.items: dict[object, SkillEvaluationRun] = {}
+
+    def add(self, run: SkillEvaluationRun) -> None:
+        self.items[run.id] = run
+
+    def get(self, run_id: object) -> SkillEvaluationRun | None:
+        return self.items.get(run_id)
+
+
+class FakeSkillEvaluationCaseResultRepository:
+    def __init__(self) -> None:
+        self.items: list[SkillEvaluationCaseResult] = []
+
+    def add_all(self, results: list[SkillEvaluationCaseResult]) -> None:
+        self.items.extend(results)
+
+    def list_for_run(self, run_id: object) -> list[SkillEvaluationCaseResult]:
+        return [item for item in self.items if item.evaluation_run_id == run_id]
+
+
+class FakeSkillCandidateEvaluationRepository:
+    def __init__(self) -> None:
+        self.items: dict[object, SkillCandidateEvaluation] = {}
+
+    def add(self, evaluation: SkillCandidateEvaluation) -> None:
+        self.items[evaluation.id] = evaluation
+
+    def get_for_proposal(self, proposal_id: object) -> SkillCandidateEvaluation | None:
+        return next((item for item in self.items.values() if item.proposal_id == proposal_id), None)
+
+
+class FakeSkillImprovementProposalRepository:
+    def __init__(self) -> None:
+        self.items: dict[SkillImprovementProposalId, SkillImprovementProposal] = {}
+
+    def add(self, proposal: SkillImprovementProposal) -> None:
+        self.items[proposal.id] = proposal
+
+    def get(self, proposal_id: SkillImprovementProposalId) -> SkillImprovementProposal | None:
+        return self.items.get(proposal_id)
+
+    def save(self, proposal: SkillImprovementProposal) -> None:
+        self.items[proposal.id] = proposal
+
+    def list_for_skill(self, skill_id: SkillId) -> list[SkillImprovementProposal]:
+        return [proposal for proposal in self.items.values() if proposal.skill_id == skill_id]
+
+
+class FakeSkillEvidenceSnapshotRepository:
+    def __init__(self) -> None:
+        self.items: dict[SkillEvidenceSnapshotId, SkillEvidenceSnapshot] = {}
+
+    def add(self, snapshot: SkillEvidenceSnapshot) -> None:
+        self.items[snapshot.id] = snapshot
+
+    def get(self, snapshot_id: SkillEvidenceSnapshotId) -> SkillEvidenceSnapshot | None:
+        return self.items.get(snapshot_id)
+
+
+class FakeSkillImprovementPolicyRepository:
+    def __init__(self) -> None:
+        self.items: dict[SkillId, SkillImprovementPolicy] = {}
+
+    def get(self, skill_id: SkillId) -> SkillImprovementPolicy | None:
+        return self.items.get(skill_id)
+
+    def list_enabled(self, limit: int) -> list[SkillImprovementPolicy]:
+        return [policy for policy in self.items.values() if policy.enabled][:limit]
+
+    def list_due_enabled(self, now: datetime, limit: int) -> list[SkillImprovementPolicy]:
+        return [
+            policy
+            for policy in self.list_enabled(limit)
+            if policy.last_triggered_at is None
+            or (now - policy.last_triggered_at).total_seconds() >= policy.cooldown_seconds
+        ][:limit]
+
+    def save(self, policy: SkillImprovementPolicy) -> None:
+        self.items[policy.skill_id] = policy
+
+
+class FakeSkillImprovementWorkRepository:
+    def __init__(self) -> None:
+        self.items: dict[SkillImprovementWorkId, SkillImprovementWork] = {}
+
+    def add(self, work: SkillImprovementWork) -> None:
+        self.items[work.id] = work
+
+    def add_if_active_absent(self, work: SkillImprovementWork) -> bool:
+        if self.get_active_for_skill(work.skill_id) is not None:
+            return False
+        self.add(work)
+        return True
+
+    def get(self, work_id: SkillImprovementWorkId) -> SkillImprovementWork | None:
+        return self.items.get(work_id)
+
+    def get_active_for_skill(self, skill_id: SkillId) -> SkillImprovementWork | None:
+        return next(
+            (
+                work
+                for work in self.items.values()
+                if work.skill_id == skill_id and work.state.value not in {"failed", "complete"}
+            ),
+            None,
+        )
+
+    def list_due(self, now: datetime, limit: int) -> list[SkillImprovementWork]:
+        return sorted(
+            (work for work in self.items.values() if work.next_attempt_at <= now),
+            key=lambda work: (work.next_attempt_at, str(work.id)),
+        )[:limit]
+
+    def save(self, work: SkillImprovementWork) -> None:
+        self.items[work.id] = work
+
+    def claim_for_skill(
+        self,
+        skill_id: SkillId,
+        worker_id: str,
+        claim_token: str,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> SkillImprovementWork | None:
+        work = self.get_active_for_skill(skill_id)
+        if work is None or work.next_attempt_at > now:
+            return None
+        claimed = replace(
+            work,
+            claimed_by=worker_id,
+            claim_token=claim_token,
+            claim_generation=work.claim_generation + 1,
+            lease_expires_at=lease_expires_at,
+            updated_at=now,
+        )
+        self.save(claimed)
+        return claimed
+
+    def save_if_claimed(
+        self,
+        work: SkillImprovementWork,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        current = self.items.get(work.id)
+        if (
+            current is None
+            or current.claimed_by != worker_id
+            or current.claim_token != claim_token
+            or current.claim_generation != claim_generation
+            or current.lease_expires_at is None
+            or current.lease_expires_at <= now
+        ):
+            return False
+        self.save(work)
+        return True
+
+
+class FakeSkillPromotionRequestRepository:
+    def __init__(self) -> None:
+        self.items: dict[SkillPromotionRequestId, SkillPromotionRequest] = {}
+
+    def add(self, request: SkillPromotionRequest) -> None:
+        self.items[request.id] = request
+
+    def get(self, request_id: SkillPromotionRequestId) -> SkillPromotionRequest | None:
+        return self.items.get(request_id)
+
+    def save(self, request: SkillPromotionRequest) -> None:
+        self.items[request.id] = request
+
+
+class FakeSkillRollbackRequestRepository:
+    def __init__(self) -> None:
+        self.items: dict[SkillRollbackRequestId, SkillRollbackRequest] = {}
+
+    def add(self, request: SkillRollbackRequest) -> None:
+        self.items[request.id] = request
+
+    def get(self, request_id: SkillRollbackRequestId) -> SkillRollbackRequest | None:
+        return self.items.get(request_id)
+
+    def save(self, request: SkillRollbackRequest) -> None:
+        self.items[request.id] = request
+
+
 class FakeUnitOfWork:
     def __init__(self) -> None:
         self.task_repo = FakeTaskRepository()
         self.skill_repo = FakeSkillRepository()
         self.skill_revision_repo = FakeSkillRevisionRepository()
+        self.task_skill_binding_repo = FakeTaskSkillBindingRepository()
+        self.run_skill_resolution_repo = FakeRunSkillResolutionRepository()
+        self.run_skill_binding_repo = FakeRunSkillBindingRepository()
+        self.skill_usage_record_repo = FakeSkillUsageRecordRepository()
+        self.skill_run_feedback_repo = FakeSkillRunFeedbackRepository()
+        self.skill_evaluation_suite_repo = FakeSkillEvaluationSuiteRepository()
+        self.skill_evaluation_case_repo = FakeSkillEvaluationCaseRepository()
+        self.skill_evaluation_run_repo = FakeSkillEvaluationRunRepository()
+        self.skill_evaluation_case_result_repo = FakeSkillEvaluationCaseResultRepository()
+        self.skill_candidate_evaluation_repo = FakeSkillCandidateEvaluationRepository()
+        self.skill_improvement_proposal_repo = FakeSkillImprovementProposalRepository()
+        self.skill_improvement_work_repo = FakeSkillImprovementWorkRepository()
+        self.skill_evidence_snapshot_repo = FakeSkillEvidenceSnapshotRepository()
+        self.skill_improvement_policy_repo = FakeSkillImprovementPolicyRepository()
+        self.skill_promotion_request_repo = FakeSkillPromotionRequestRepository()
+        self.skill_rollback_request_repo = FakeSkillRollbackRequestRepository()
         self.run_repo = FakeRunRepository()
         self.schedule_repo = FakeScheduleRepository()
         self.conversation_repo = FakeConversationRepository()
@@ -1372,6 +1714,70 @@ class FakeUnitOfWork:
     @property
     def skill_revisions(self) -> SkillRevisionRepository:
         return self.skill_revision_repo
+
+    @property
+    def task_skill_bindings(self) -> FakeTaskSkillBindingRepository:
+        return self.task_skill_binding_repo
+
+    @property
+    def run_skill_resolutions(self) -> FakeRunSkillResolutionRepository:
+        return self.run_skill_resolution_repo
+
+    @property
+    def run_skill_bindings(self) -> FakeRunSkillBindingRepository:
+        return self.run_skill_binding_repo
+
+    @property
+    def skill_usage_records(self) -> FakeSkillUsageRecordRepository:
+        return self.skill_usage_record_repo
+
+    @property
+    def skill_run_feedback(self) -> FakeSkillRunFeedbackRepository:
+        return self.skill_run_feedback_repo
+
+    @property
+    def skill_evaluation_suites(self) -> FakeSkillEvaluationSuiteRepository:
+        return self.skill_evaluation_suite_repo
+
+    @property
+    def skill_evaluation_cases(self) -> FakeSkillEvaluationCaseRepository:
+        return self.skill_evaluation_case_repo
+
+    @property
+    def skill_evaluation_runs(self) -> FakeSkillEvaluationRunRepository:
+        return self.skill_evaluation_run_repo
+
+    @property
+    def skill_evaluation_case_results(self) -> FakeSkillEvaluationCaseResultRepository:
+        return self.skill_evaluation_case_result_repo
+
+    @property
+    def skill_candidate_evaluations(self) -> FakeSkillCandidateEvaluationRepository:
+        return self.skill_candidate_evaluation_repo
+
+    @property
+    def skill_improvement_proposals(self) -> FakeSkillImprovementProposalRepository:
+        return self.skill_improvement_proposal_repo
+
+    @property
+    def skill_improvement_work(self) -> FakeSkillImprovementWorkRepository:
+        return self.skill_improvement_work_repo
+
+    @property
+    def skill_evidence_snapshots(self) -> FakeSkillEvidenceSnapshotRepository:
+        return self.skill_evidence_snapshot_repo
+
+    @property
+    def skill_improvement_policies(self) -> FakeSkillImprovementPolicyRepository:
+        return self.skill_improvement_policy_repo
+
+    @property
+    def skill_promotion_requests(self) -> FakeSkillPromotionRequestRepository:
+        return self.skill_promotion_request_repo
+
+    @property
+    def skill_rollback_requests(self) -> FakeSkillRollbackRequestRepository:
+        return self.skill_rollback_request_repo
 
     @property
     def runs(self) -> RunRepository:

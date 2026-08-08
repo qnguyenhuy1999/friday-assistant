@@ -14,7 +14,6 @@ left untouched.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import datetime
 
 from friday.application.commands import (
@@ -59,6 +58,8 @@ def approval_result(approval: ApprovalRequest) -> ApprovalRequestResult:
         approval.resolver,
         approval.authorization_fingerprint,
         approval.consumed_at,
+        approval.subject_kind,
+        approval.subject_id,
     )
 
 
@@ -169,6 +170,44 @@ def _approval_payload(approval: ApprovalRequest) -> JsonValue:
     }
 
 
+def transition_approval_in_transaction(
+    uow: UnitOfWork,
+    approval: ApprovalRequest,
+    target: ApprovalStatus,
+    now: datetime,
+    *,
+    resolver: str | None = None,
+    resolution_note: str | None = None,
+) -> ApprovalRequest:
+    """Stage a canonical ApprovalRequest transition without committing.
+
+    Skill promotion and rollback approvals are non-run subjects, so their
+    callers need the same domain transition rules without opening the public
+    resolution use cases (which own a commit). Run-facing callers use this
+    helper after validating their run/step coordination in ``_resolve``.
+    """
+    if approval.status is target:
+        return approval
+    if approval.status is not ApprovalStatus.PENDING:
+        raise EntityConflict("approval request is terminal")
+    if target is ApprovalStatus.APPROVED:
+        if resolver is None:
+            raise EntityConflict("approved approval requires a resolver")
+        approval.approve(now, resolver, resolution_note)
+    elif target is ApprovalStatus.REJECTED:
+        if resolver is None:
+            raise EntityConflict("rejected approval requires a resolver")
+        approval.reject(now, resolver, resolution_note)
+    elif target is ApprovalStatus.CANCELLED:
+        approval.cancel(now, resolution_note)
+    elif target is ApprovalStatus.EXPIRED:
+        approval.expire(now)
+    else:
+        raise EntityConflict("approval request transition is not terminal")
+    uow.approvals.save(approval)
+    return approval
+
+
 class _ApprovalResolution(LifecycleEvents):
     """Shared load/validate/coordinate mechanics for the four resolutions."""
 
@@ -183,29 +222,42 @@ class _ApprovalResolution(LifecycleEvents):
         uow: UnitOfWork,
         approval: ApprovalRequest,
         target: ApprovalStatus,
-        transition: Callable[[], None],
         now: datetime,
+        resolver: str | None,
+        resolution_note: str | None,
     ) -> ApprovalRequestResult:
         """Apply the terminal transition, resume waiting entities, and append
-        the canonical resolution event batch. `transition` is a zero-argument
-        callable staged by the caller (already bound to timestamps/resolver)."""
+        the canonical resolution event batch without nesting a commit."""
         if approval.status is target:
             uow.commit()
             return approval_result(approval)
         if approval.status is not ApprovalStatus.PENDING:
             raise EntityConflict("approval request is terminal")
-        run = uow.runs.get(approval.run_id)
-        if run is None:
+        run = uow.runs.get(approval.run_id) if approval.run_id is not None else None
+        if approval.run_id is not None and run is None:
             raise RunNotFound(approval.run_id)
         step: RunStep | None = None
         if approval.step_id is not None:
+            if run is None:
+                raise EntityConflict("non-run approval cannot reference a step")
             step = uow.steps.get(approval.step_id)
             if step is None:
                 raise RunStepNotFound(approval.step_id)
             if step.run_id != run.id:
                 raise EntityConflict("step does not belong to run")
-        transition()
-        uow.approvals.save(approval)
+        transition_approval_in_transaction(
+            uow,
+            approval,
+            target,
+            now,
+            resolver=resolver,
+            resolution_note=resolution_note,
+        )
+        if run is None:
+            # Skill promotion/rollback approvals are canonical ApprovalRequest
+            # subjects but do not fabricate a Task, Run, or RunEvent stream.
+            uow.commit()
+            return approval_result(approval)
         specs: list[tuple[RunEventType, JsonValue, RunStepId | None]] = [
             (
                 RunEventType.APPROVAL_RESOLVED,
@@ -217,13 +269,18 @@ class _ApprovalResolution(LifecycleEvents):
             )
         ]
         if (
-            step is not None
+            run is not None
+            and step is not None
             and step.status is RunStepStatus.WAITING_FOR_APPROVAL
             and step.approval_request_id == approval.id
         ):
             step.resume(now)
             uow.steps.save(step)
-        if run.status is RunStatus.WAITING_FOR_APPROVAL and run.approval_request_id == approval.id:
+        if (
+            run is not None
+            and run.status is RunStatus.WAITING_FOR_APPROVAL
+            and run.approval_request_id == approval.id
+        ):
             run.resume(now)
             uow.runs.save(run)
             uow.work_queue.enqueue(run.id, available_at=now, enqueued_at=now)
@@ -248,8 +305,9 @@ class ApproveRequest(_ApprovalResolution):
                 uow,
                 approval,
                 ApprovalStatus.APPROVED,
-                lambda: approval.approve(now, command.resolver, command.resolution_note),
                 now,
+                command.resolver,
+                command.resolution_note,
             )
 
 
@@ -262,8 +320,9 @@ class RejectRequest(_ApprovalResolution):
                 uow,
                 approval,
                 ApprovalStatus.REJECTED,
-                lambda: approval.reject(now, command.resolver, command.resolution_note),
                 now,
+                command.resolver,
+                command.resolution_note,
             )
 
 
@@ -276,8 +335,9 @@ class CancelApproval(_ApprovalResolution):
                 uow,
                 approval,
                 ApprovalStatus.CANCELLED,
-                lambda: approval.cancel(now, command.resolution_note),
                 now,
+                None,
+                command.resolution_note,
             )
 
 
@@ -295,6 +355,7 @@ class ExpireApproval(_ApprovalResolution):
                 uow,
                 approval,
                 ApprovalStatus.EXPIRED,
-                lambda: approval.expire(now),
                 now,
+                None,
+                None,
             )

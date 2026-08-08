@@ -118,6 +118,19 @@ class _FakeRunRepository:
     def count_for_execution(self, execution_id: RunId) -> int:
         return sum(run.execution_id == execution_id for run in self._runs.values())
 
+    def ordinal_for_execution(self, run_id: RunId) -> int:
+        run = self._runs.get(run_id)
+        if run is None:
+            return 0
+        return next(
+            (
+                index
+                for index, item in enumerate(self.list_for_execution(run.execution_id), start=1)
+                if item.id == run_id
+            ),
+            0,
+        )
+
     def list_for_execution(self, execution_id: RunId) -> list[Run]:
         runs = [run for run in self._runs.values() if run.execution_id == execution_id]
         return sorted(runs, key=lambda run: (run.created_at, str(run.id)))
@@ -176,6 +189,13 @@ class _FakeApprovalRepository:
 
     def save(self, approval: ApprovalRequest) -> None:
         self._approvals[approval.id] = approval
+
+    def consume_if_unconsumed(self, approval_id: ApprovalRequestId, at: datetime) -> bool:
+        approval = self._approvals.get(approval_id)
+        if approval is None or approval.consumed_at is not None:
+            return False
+        approval.consume(at)
+        return True
 
     def list_pending_for_run(self, run_id: RunId) -> list[ApprovalRequest]:
         matches = [a for a in self._approvals.values() if a.run_id == run_id]

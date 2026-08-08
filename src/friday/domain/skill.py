@@ -9,7 +9,13 @@ from datetime import datetime
 from enum import StrEnum
 
 from friday.domain.errors import DomainValidationError, InvalidStateTransition
-from friday.domain.identifiers import SkillId, SkillRevisionId
+from friday.domain.identifiers import (
+    RunId,
+    RunSkillResolutionId,
+    SkillId,
+    SkillRevisionId,
+    TaskId,
+)
 from friday.domain.time import ensure_utc
 
 MAX_SKILL_KEY_LENGTH = 96
@@ -26,6 +32,7 @@ class SkillStatus(StrEnum):
 class SkillRevisionSourceKind(StrEnum):
     OPERATOR = "operator"
     IMPORTED = "imported"
+    GENERATED = "generated"
 
 
 def validate_skill_key(value: str) -> str:
@@ -66,6 +73,31 @@ class SkillRevision:
     content_sha256: str
     source_kind: SkillRevisionSourceKind
     created_at: datetime
+    promotion_request_id: str | None = None
+
+    def __post_init__(self) -> None:
+        # Instructions are immutable persisted authority.  Rechecking the
+        # digest while reconstructing the domain object makes a corrupt row
+        # fail closed before it can reach a runtime, evaluator, or API.
+        validate_skill_instructions(self.instructions)
+        if self.content_sha256 != hashlib.sha256(self.instructions.encode("utf-8")).hexdigest():
+            raise DomainValidationError("skill_integrity_failed")
+        if len(self.content_sha256) != 64 or any(
+            char not in "0123456789abcdef" for char in self.content_sha256
+        ):
+            raise DomainValidationError("SkillRevision.content_sha256 must be lowercase sha256")
+        if (
+            self.source_kind is SkillRevisionSourceKind.GENERATED
+            and self.promotion_request_id is None
+        ):
+            raise DomainValidationError(
+                "generated SkillRevision requires an approved promotion request"
+            )
+        if self.source_kind is not SkillRevisionSourceKind.GENERATED and self.promotion_request_id:
+            raise DomainValidationError(
+                "only generated SkillRevisions may carry promotion provenance"
+            )
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
 
     @classmethod
     def new(
@@ -77,9 +109,21 @@ class SkillRevision:
         instructions: str,
         source_kind: SkillRevisionSourceKind,
         created_at: datetime,
+        promotion_request_id: str | None = None,
     ) -> SkillRevision:
         if version < 1:
             raise DomainValidationError("SkillRevision.version must be positive")
+        if source_kind is SkillRevisionSourceKind.GENERATED and promotion_request_id is None:
+            raise DomainValidationError(
+                "generated SkillRevision requires an approved promotion request"
+            )
+        if (
+            source_kind is not SkillRevisionSourceKind.GENERATED
+            and promotion_request_id is not None
+        ):
+            raise DomainValidationError(
+                "only generated SkillRevisions may carry promotion provenance"
+            )
         instructions = validate_skill_instructions(instructions)
         return cls(
             id,
@@ -89,7 +133,46 @@ class SkillRevision:
             hashlib.sha256(instructions.encode("utf-8")).hexdigest(),
             source_kind,
             ensure_utc(created_at),
+            promotion_request_id,
         )
+
+
+MAX_SKILLS_PER_TASK = 16
+
+
+@dataclass(frozen=True, slots=True)
+class TaskSkillBinding:
+    task_id: TaskId
+    skill_id: SkillId
+    position: int
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.position <= MAX_SKILLS_PER_TASK:
+            raise DomainValidationError("TaskSkillBinding.position is out of range")
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
+
+
+@dataclass(frozen=True, slots=True)
+class RunSkillResolution:
+    id: RunSkillResolutionId
+    run_id: RunId
+    resolved_at: datetime
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "resolved_at", ensure_utc(self.resolved_at))
+
+
+@dataclass(frozen=True, slots=True)
+class RunSkillBinding:
+    run_id: RunId
+    skill_id: SkillId
+    revision_id: SkillRevisionId
+    position: int
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.position <= MAX_SKILLS_PER_TASK:
+            raise DomainValidationError("RunSkillBinding.position is out of range")
 
 
 @dataclass(slots=True)

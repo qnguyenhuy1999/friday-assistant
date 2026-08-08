@@ -4,6 +4,8 @@ import hashlib
 
 import pytest
 
+from friday.application.commands import CreateTaskCommand
+from friday.application.create_task import CreateTask
 from friday.application.errors import EntityConflict, SkillNotFound, SkillRevisionNotFound
 from friday.application.skill_registry import (
     ActivateSkillRevision,
@@ -11,11 +13,16 @@ from friday.application.skill_registry import (
     CreateSkill,
     CreateSkillRevision,
     GetSkill,
+    ReplaceTaskSkills,
 )
+from friday.application.skill_usage import AddSkillRunFeedback, MaterializeSkillUsage
 from friday.domain.errors import DomainValidationError
-from friday.domain.identifiers import SkillId, SkillRevisionId
+from friday.domain.identifiers import RunId, SkillId, SkillRevisionId
+from friday.domain.run import Run
 from friday.domain.skill import SkillRevisionSourceKind, SkillStatus
+from friday.domain.skill_usage import SkillFeedbackRating, SkillUsageOutcome
 from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
+from tests.application.resolve_helpers import resolve_run_skills_without_claim
 
 
 def test_revision_lifecycle_is_explicit_and_immutable() -> None:
@@ -107,3 +114,109 @@ def test_missing_skill_and_revision_raise_not_found_errors() -> None:
         ActivateSkillRevision(factory, clock).execute(
             skill_id=skill.id, revision_id=SkillRevisionId.new()
         )
+
+
+def test_task_bindings_freeze_active_revision_and_new_retry_resolves_current_state() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    task_id = CreateTask(factory, clock).execute(CreateTaskCommand("T", "")).task_id
+    skill = CreateSkill(factory, clock).execute(key="review.pr", display_name="R", description="")
+    v1 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="use v1", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    ActivateSkillRevision(factory, clock).execute(skill_id=skill.id, revision_id=v1.id)
+    ReplaceTaskSkills(factory, clock).execute(task_id=task_id, skill_ids=[skill.id])
+    run = Run.new(id=RunId.new(), task_id=task_id, created_at=clock.now())
+    uow.runs.add(run)
+
+    frozen = resolve_run_skills_without_claim(factory, clock, run.id)
+    assert [(x.skill_id, x.revision_id, x.position) for x in frozen] == [(skill.id, v1.id, 1)]
+    assert uow.run_skill_resolutions.get(run.id) is not None
+
+    v2 = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="use v2", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    ActivateSkillRevision(factory, clock).execute(skill_id=skill.id, revision_id=v2.id)
+    assert resolve_run_skills_without_claim(factory, clock, run.id)[0].revision_id == v1.id
+
+    retry = Run.new(
+        id=RunId.new(), task_id=task_id, execution_id=run.execution_id, created_at=clock.now()
+    )
+    uow.runs.add(retry)
+    # Retry lineage inheritance belongs to RetryFailedRun, which copies the
+    # exact source freeze. A bare resolver must never scan sibling Runs.
+    assert resolve_run_skills_without_claim(factory, clock, retry.id)[0].revision_id == v2.id
+
+
+def test_task_binding_replacement_rejects_unresolvable_and_duplicate_skills() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    task_id = CreateTask(factory, clock).execute(CreateTaskCommand("T", "")).task_id
+    skill = CreateSkill(factory, clock).execute(
+        key="review.empty", display_name="R", description=""
+    )
+    with pytest.raises(EntityConflict):
+        ReplaceTaskSkills(factory, clock).execute(task_id=task_id, skill_ids=[skill.id])
+    revision = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="x", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    ActivateSkillRevision(factory, clock).execute(skill_id=skill.id, revision_id=revision.id)
+    with pytest.raises(EntityConflict):
+        ReplaceTaskSkills(factory, clock).execute(task_id=task_id, skill_ids=[skill.id, skill.id])
+
+
+def test_terminal_frozen_run_materializes_idempotent_factual_usage_and_feedback() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    task_id = CreateTask(factory, clock).execute(CreateTaskCommand("T", "")).task_id
+    skill = CreateSkill(factory, clock).execute(
+        key="evidence.frozen", display_name="E", description=""
+    )
+    revision = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id, instructions="facts", source_kind=SkillRevisionSourceKind.OPERATOR
+    )
+    ActivateSkillRevision(factory, clock).execute(skill_id=skill.id, revision_id=revision.id)
+    ReplaceTaskSkills(factory, clock).execute(task_id=task_id, skill_ids=[skill.id])
+    run = Run.new(id=RunId.new(), task_id=task_id, created_at=clock.now())
+    uow.runs.add(run)
+    resolve_run_skills_without_claim(factory, clock, run.id)
+    run.start(clock.now())
+    run.succeed(clock.now())
+
+    records = MaterializeSkillUsage(factory, clock).execute(run.id)
+    assert len(records) == 1
+    assert records[0].revision_id == revision.id
+    assert records[0].outcome is SkillUsageOutcome.SUCCEEDED
+    assert records[0].tool_call_count == records[0].approval_count == 0
+    assert MaterializeSkillUsage(factory, clock).execute(run.id) == records
+
+    feedback = AddSkillRunFeedback(factory, clock).execute(
+        run_id=run.id,
+        skill_id=skill.id,
+        rating=SkillFeedbackRating.HARMFUL,
+        note="not useful",
+        created_by="operator",
+    )
+    assert feedback.revision_id == revision.id
+    assert records[0].outcome is SkillUsageOutcome.SUCCEEDED
+
+
+def test_no_claim_resolution_helper_is_not_importable_from_production_packages() -> None:
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    offenders: list[str] = []
+    for base in ("src", "apps"):
+        for path in (root / base).rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("tests"):
+                    offenders.append(f"{path.relative_to(root)}: from {node.module} import")
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.startswith("tests"):
+                            offenders.append(f"{path.relative_to(root)}: import {alias.name}")
+    assert not offenders, "production modules must never import test-only helpers:\n" + "\n".join(
+        offenders
+    )

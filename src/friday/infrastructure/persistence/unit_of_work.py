@@ -38,15 +38,31 @@ from friday.infrastructure.persistence.repositories import (
     OutboundDeliveryRepository,
     RunEventStore,
     RunRepository,
+    RunSkillBindingRepository,
+    RunSkillResolutionRepository,
     RunStepRepository,
     ScheduleDeliveryPolicyRepository,
     ScheduleFireDeliveryPlanRepository,
     ScheduleFireRepository,
     ScheduleRepository,
+    SkillCandidateEvaluationRepository,
+    SkillEvaluationCaseRepository,
+    SkillEvaluationCaseResultRepository,
+    SkillEvaluationRunRepository,
+    SkillEvaluationSuiteRepository,
+    SkillEvidenceSnapshotRepository,
+    SkillImprovementPolicyRepository,
+    SkillImprovementProposalRepository,
+    SkillImprovementWorkRepository,
+    SkillPromotionRequestRepository,
     SkillRepository,
     SkillRevisionRepository,
+    SkillRollbackRequestRepository,
+    SkillRunFeedbackRepository,
+    SkillUsageRecordRepository,
     TaskEventStore,
     TaskRepository,
+    TaskSkillBindingRepository,
     ToolInvocationRepository,
 )
 from friday.infrastructure.persistence.work_queue import SqlAlchemyRunWorkQueue
@@ -68,6 +84,22 @@ class SqlAlchemyUnitOfWork:
         self._tasks = TaskRepository(session)
         self._skills = SkillRepository(session)
         self._skill_revisions = SkillRevisionRepository(session)
+        self._task_skill_bindings = TaskSkillBindingRepository(session)
+        self._run_skill_resolutions = RunSkillResolutionRepository(session)
+        self._run_skill_bindings = RunSkillBindingRepository(session)
+        self._skill_usage_records = SkillUsageRecordRepository(session)
+        self._skill_run_feedback = SkillRunFeedbackRepository(session)
+        self._skill_evaluation_suites = SkillEvaluationSuiteRepository(session)
+        self._skill_evaluation_cases = SkillEvaluationCaseRepository(session)
+        self._skill_evaluation_runs = SkillEvaluationRunRepository(session)
+        self._skill_evaluation_case_results = SkillEvaluationCaseResultRepository(session)
+        self._skill_candidate_evaluations = SkillCandidateEvaluationRepository(session)
+        self._skill_improvement_proposals = SkillImprovementProposalRepository(session)
+        self._skill_improvement_work = SkillImprovementWorkRepository(session)
+        self._skill_evidence_snapshots = SkillEvidenceSnapshotRepository(session)
+        self._skill_improvement_policies = SkillImprovementPolicyRepository(session)
+        self._skill_promotion_requests = SkillPromotionRequestRepository(session)
+        self._skill_rollback_requests = SkillRollbackRequestRepository(session)
         self._runs = RunRepository(session)
         self._schedules = ScheduleRepository(session)
         self._conversations = ConversationRepository(session)
@@ -98,6 +130,70 @@ class SqlAlchemyUnitOfWork:
     @property
     def skill_revisions(self) -> SkillRevisionRepository:
         return self._skill_revisions
+
+    @property
+    def task_skill_bindings(self) -> TaskSkillBindingRepository:
+        return self._task_skill_bindings
+
+    @property
+    def run_skill_resolutions(self) -> RunSkillResolutionRepository:
+        return self._run_skill_resolutions
+
+    @property
+    def run_skill_bindings(self) -> RunSkillBindingRepository:
+        return self._run_skill_bindings
+
+    @property
+    def skill_usage_records(self) -> SkillUsageRecordRepository:
+        return self._skill_usage_records
+
+    @property
+    def skill_improvement_proposals(self) -> SkillImprovementProposalRepository:
+        return self._skill_improvement_proposals
+
+    @property
+    def skill_improvement_work(self) -> SkillImprovementWorkRepository:
+        return self._skill_improvement_work
+
+    @property
+    def skill_evidence_snapshots(self) -> SkillEvidenceSnapshotRepository:
+        return self._skill_evidence_snapshots
+
+    @property
+    def skill_improvement_policies(self) -> SkillImprovementPolicyRepository:
+        return self._skill_improvement_policies
+
+    @property
+    def skill_promotion_requests(self) -> SkillPromotionRequestRepository:
+        return self._skill_promotion_requests
+
+    @property
+    def skill_rollback_requests(self) -> SkillRollbackRequestRepository:
+        return self._skill_rollback_requests
+
+    @property
+    def skill_run_feedback(self) -> SkillRunFeedbackRepository:
+        return self._skill_run_feedback
+
+    @property
+    def skill_evaluation_suites(self) -> SkillEvaluationSuiteRepository:
+        return self._skill_evaluation_suites
+
+    @property
+    def skill_evaluation_cases(self) -> SkillEvaluationCaseRepository:
+        return self._skill_evaluation_cases
+
+    @property
+    def skill_evaluation_runs(self) -> SkillEvaluationRunRepository:
+        return self._skill_evaluation_runs
+
+    @property
+    def skill_evaluation_case_results(self) -> SkillEvaluationCaseResultRepository:
+        return self._skill_evaluation_case_results
+
+    @property
+    def skill_candidate_evaluations(self) -> SkillCandidateEvaluationRepository:
+        return self._skill_candidate_evaluations
 
     @property
     def runs(self) -> RunRepository:

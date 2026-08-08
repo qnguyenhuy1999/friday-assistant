@@ -19,6 +19,7 @@ from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.results import RunClaimResult, RunResult
 from friday.application.retry_policy import RetryPolicy
 from friday.application.run_lifecycle import _fail_run_event_specs, _succeed_run_event_specs
+from friday.application.skill_usage import materialize_skill_usage_in_uow
 from friday.domain.approval import TERMINAL_APPROVAL_STATUSES, ApprovalStatus
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure
@@ -88,7 +89,7 @@ class ClaimNextRun:
                     worker_id=self._worker_id,
                     claim_token=claim_token,
                     claim_generation=item.claim_generation,
-                    attempt_number=uow.runs.count_for_execution(run.execution_id),
+                    attempt_number=uow.runs.ordinal_for_execution(run.id),
                     acquired_at=now,
                     lease_expires_at=lease_expires_at,
                 )
@@ -228,8 +229,9 @@ class ApplyFailedOutcome:
 
             specs = _fail_run_event_specs(uow, run, now, failure)
             LifecycleEvents.append_run_events(uow, run, now, specs)
+            materialize_skill_usage_in_uow(uow, run.id, now)
 
-            attempt_number = uow.runs.count_for_execution(run.execution_id)
+            attempt_number = uow.runs.ordinal_for_execution(run.id)
             if self._retry_policy.is_retry_allowed(attempt_number, failure):
                 retry = Run.new(
                     id=RunId.new(),
@@ -313,6 +315,7 @@ class ApplySucceededOutcome:
                     ),
                 )
             LifecycleEvents.append_run_events(uow, run, now, specs)
+            materialize_skill_usage_in_uow(uow, run.id, now)
             uow.commit()
             return run_result(run)
 

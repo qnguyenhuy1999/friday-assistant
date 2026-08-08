@@ -13,6 +13,7 @@ from apps.api.pagination import (
     decode_cursor,
     page_from_query,
 )
+from apps.api.schemas.skills import ReplaceTaskSkillsBody, TaskSkillBindingResponse
 from apps.api.schemas.tasks import (
     CreateTaskBody,
     FailureBody,
@@ -28,16 +29,61 @@ from friday.application.commands import (
     StartRunCommand,
 )
 from friday.application.create_task import CreateTask
+from friday.application.errors import TaskNotFound
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.results import TaskResult
+from friday.application.skill_registry import ReplaceTaskSkills
 from friday.application.start_run import StartRun
 from friday.application.task_lifecycle import CancelTask, CompleteTask, FailTask, GetTask, ListTasks
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import TaskId
+from friday.domain.identifiers import SkillId, TaskId
+from friday.domain.skill import TaskSkillBinding
 
 router = APIRouter(prefix="/v1/tasks", tags=["tasks"])
 UowDependency = Annotated[UnitOfWorkFactory, Depends(get_uow_factory)]
 ClockDependency = Annotated[Clock, Depends(get_clock)]
+
+
+def _skill_binding_response(binding: TaskSkillBinding) -> TaskSkillBindingResponse:
+    return TaskSkillBindingResponse(
+        task_id=str(binding.task_id),
+        skill_id=str(binding.skill_id),
+        position=binding.position,
+        created_at=binding.created_at,
+    )
+
+
+@router.get(
+    "/{task_id}/skills",
+    response_model=list[TaskSkillBindingResponse],
+    operation_id="getTaskSkills",
+)
+def list_task_skills(task_id: UUID, uow_factory: UowDependency) -> list[TaskSkillBindingResponse]:
+    with uow_factory() as uow:
+        typed_task_id = TaskId.parse(str(task_id))
+        if uow.tasks.get(typed_task_id) is None:
+            raise TaskNotFound(typed_task_id)
+        return [
+            _skill_binding_response(x) for x in uow.task_skill_bindings.list_for_task(typed_task_id)
+        ]
+
+
+@router.put(
+    "/{task_id}/skills",
+    response_model=list[TaskSkillBindingResponse],
+    operation_id="replaceTaskSkills",
+)
+def replace_task_skills(
+    task_id: UUID,
+    body: ReplaceTaskSkillsBody,
+    uow_factory: UowDependency,
+    clock: ClockDependency,
+) -> list[TaskSkillBindingResponse]:
+    bindings = ReplaceTaskSkills(uow_factory, clock).execute(
+        task_id=TaskId.parse(str(task_id)),
+        skill_ids=[SkillId.parse(value) for value in body.skill_ids],
+    )
+    return [_skill_binding_response(x) for x in bindings]
 
 
 def _task_response(result: TaskResult) -> TaskResponse:

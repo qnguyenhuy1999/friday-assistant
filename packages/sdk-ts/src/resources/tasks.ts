@@ -4,11 +4,13 @@ import type {
   Page,
   StartRunResponse,
   Task,
+  TaskSkillBinding,
 } from "@friday/contracts";
 import {
   validateStartRun,
   validateTask,
   validateTaskPage,
+  validateTaskSkillBindings,
 } from "@friday/contracts";
 import type { FridayHttpClient } from "../http";
 export interface ListTasksParams {
@@ -38,6 +40,21 @@ export class TasksResource {
       method: "GET",
       path: `/v1/tasks/${taskId}`,
       validate: validateTask,
+    });
+  }
+  listSkills(taskId: string) {
+    return this.http.requestJson<TaskSkillBinding[]>({
+      method: "GET",
+      path: `/v1/tasks/${taskId}/skills`,
+      validate: validateTaskSkillBindings,
+    });
+  }
+  replaceSkills(taskId: string, skillIds: string[]) {
+    return this.http.requestJson<TaskSkillBinding[]>({
+      method: "PUT",
+      path: `/v1/tasks/${taskId}/skills`,
+      body: { skill_ids: skillIds },
+      validate: validateTaskSkillBindings,
     });
   }
   startRun(taskId: string) {

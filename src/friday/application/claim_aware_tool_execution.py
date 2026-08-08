@@ -311,6 +311,8 @@ class ExecuteToolAction(LifecycleEvents):
         if not consumed:
             return None
         for approval in consumed:
+            if approval.run_id is None:
+                continue
             for invocation in uow.tool_invocations.list_for_run(approval.run_id):
                 if invocation.approval_request_id != approval.id:
                     continue

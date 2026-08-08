@@ -34,6 +34,8 @@ export const approvalExample: ApprovalRequest = {
   resolver: null,
   authorization_fingerprint: null,
   consumed_at: null,
+  subject_kind: "run",
+  subject_id: "8f14e45f-ceea-467e-adde-3f4694a05678",
 };
 
 export const resolveApprovalBodyExample: ResolveApprovalBody = {

@@ -95,6 +95,7 @@ def test_run_is_created_in_canonical_queued_state(
     task = _pending_task(fake_uow)
 
     result = StartRun(uow_factory, clock).execute(StartRunCommand(task_id=task.id))
+    assert result.run_id is not None
 
     run = fake_uow.run_repo.get(result.run_id)
     assert run is not None
@@ -111,6 +112,7 @@ def test_canonical_run_created_event_is_allocated_by_orchestration(
     task = _pending_task(fake_uow)
 
     result = StartRun(uow_factory, clock).execute(StartRunCommand(task_id=task.id))
+    assert result.run_id is not None
 
     events = fake_uow.event_store.list_for_run(result.run_id)
     assert [event.type for event in events] == [RunEventType.RUN_CREATED]
@@ -148,6 +150,7 @@ def test_successive_runs_get_distinct_ids_and_per_run_sequences(
     listed_ids = {run.id for run in fake_uow.run_repo.list_for_task(task.id)}
     assert listed_ids == {first.run_id, second.run_id}
     for result in (first, second):
+        assert result.run_id is not None
         sequences = [e.sequence for e in fake_uow.event_store.list_for_run(result.run_id)]
         assert sequences == [1]
 
@@ -168,6 +171,7 @@ def test_run_is_atomically_enqueued_as_due_work(
     task = _pending_task(fake_uow)
 
     result = StartRun(uow_factory, clock).execute(StartRunCommand(task_id=task.id))
+    assert result.run_id is not None
 
     work_item = fake_uow.work_queue_repo.get(result.run_id)
     assert work_item is not None

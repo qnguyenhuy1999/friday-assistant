@@ -1,6 +1,8 @@
 """Phase 9 OpenAPI stability (spec section 16): generation succeeds,
 operation IDs are unique, expected surface paths exist, no ORM leaks in."""
 
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 from typing import Any
@@ -25,6 +27,136 @@ EXPECTED_OPERATIONS = {
     ("POST", "/v1/skills/{skill_id}/revisions/{revision_id}/activate", "activateSkillRevision"),
     ("POST", "/v1/skills/{skill_id}/disable", "disableSkill"),
     ("POST", "/v1/skills/{skill_id}/archive", "archiveSkill"),
+    ("GET", "/v1/tasks/{task_id}/skills", "getTaskSkills"),
+    ("PUT", "/v1/tasks/{task_id}/skills", "replaceTaskSkills"),
+    ("GET", "/v1/runs/{run_id}/skills", "getRunSkillsAudit"),
+    (
+        "POST",
+        "/v1/runs/{run_id}/skills/{skill_id}/feedback",
+        "addRunSkillFeedback",
+    ),
+    (
+        "GET",
+        "/v1/runs/{run_id}/skills/{skill_id}/feedback",
+        "listRunSkillFeedback",
+    ),
+    ("GET", "/v1/skills/{skill_id}/usage", "listSkillUsage"),
+    ("GET", "/v1/skills/evidence-snapshots/{snapshot_id}", "getSkillEvidenceSnapshot"),
+    (
+        "GET",
+        "/v1/skills/{skill_id}/improvement-proposals",
+        "listSkillImprovementProposals",
+    ),
+    (
+        "GET",
+        "/v1/skills/improvement-proposals/{proposal_id}",
+        "getSkillImprovementProposal",
+    ),
+    (
+        "POST",
+        "/v1/skills/improvement-proposals/{proposal_id}/cancel",
+        "cancelSkillImprovementProposal",
+    ),
+    (
+        "POST",
+        "/v1/skills/improvement-proposals/{proposal_id}/evaluate",
+        "evaluateSkillImprovementProposal",
+    ),
+    (
+        "GET",
+        "/v1/skills/improvement-proposals/{proposal_id}/evaluation",
+        "getSkillImprovementEvaluation",
+    ),
+    (
+        "POST",
+        "/v1/skills/improvement-proposals/{proposal_id}/request-promotion",
+        "requestSkillPromotion",
+    ),
+    (
+        "GET",
+        "/v1/skills/promotions/{promotion_id}",
+        "getSkillPromotionRequest",
+    ),
+    (
+        "POST",
+        "/v1/skills/promotions/{promotion_id}/approve",
+        "executeSkillPromotion",
+    ),
+    (
+        "POST",
+        "/v1/skills/promotions/{promotion_id}/reject",
+        "rejectSkillPromotion",
+    ),
+    (
+        "POST",
+        "/v1/skills/promotions/{promotion_id}/cancel",
+        "cancelSkillPromotion",
+    ),
+    (
+        "POST",
+        "/v1/skills/{skill_id}/request-rollback",
+        "requestSkillRollback",
+    ),
+    (
+        "POST",
+        "/v1/skills/rollbacks/{rollback_id}/approve",
+        "executeSkillRollback",
+    ),
+    (
+        "GET",
+        "/v1/skills/rollbacks/{rollback_id}",
+        "getSkillRollbackRequest",
+    ),
+    (
+        "POST",
+        "/v1/skills/rollbacks/{rollback_id}/reject",
+        "rejectSkillRollback",
+    ),
+    (
+        "POST",
+        "/v1/skills/rollbacks/{rollback_id}/cancel",
+        "cancelSkillRollback",
+    ),
+    (
+        "GET",
+        "/v1/skills/{skill_id}/improvement-policy",
+        "getSkillImprovementPolicy",
+    ),
+    (
+        "PUT",
+        "/v1/skills/{skill_id}/improvement-policy",
+        "putSkillImprovementPolicy",
+    ),
+    (
+        "POST",
+        "/v1/skills/{skill_id}/improvement-policy/run-now",
+        "runSkillImprovementPolicyNow",
+    ),
+    (
+        "POST",
+        "/v1/skills/{skill_id}/evaluation-suites",
+        "createSkillEvaluationSuite",
+    ),
+    (
+        "GET",
+        "/v1/skills/{skill_id}/evaluation-suites",
+        "listSkillEvaluationSuites",
+    ),
+    (
+        "GET",
+        "/v1/skills/evaluation-suites/{suite_id}",
+        "getSkillEvaluationSuite",
+    ),
+    (
+        "POST",
+        "/v1/skills/evaluation-suites/{suite_id}/runs",
+        "runSkillEvaluation",
+    ),
+    (
+        "GET",
+        "/v1/skills/evaluation-runs/{run_id}",
+        "getSkillEvaluationRun",
+    ),
     ("GET", "/v1/tasks/{task_id}", "getTask"),
     ("POST", "/v1/tasks/{task_id}/runs", "startRun"),
     ("GET", "/v1/tasks/{task_id}/schedules", "listSchedules"),

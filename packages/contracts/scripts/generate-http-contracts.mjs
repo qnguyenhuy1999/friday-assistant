@@ -18,10 +18,12 @@ const type = (node) => {
   if (node.type === "integer" || node.type === "number") return "number";
   if (node.type === "null") return "null";
   if (node.type === "array") return `Array<${type(node.items)}>`;
-  if (node.type === "object")
-    return `{ ${Object.entries(node.properties ?? {})
+  if (node.type === "object") {
+    const properties = Object.entries(node.properties ?? {})
       .map(([name, value]) => `${JSON.stringify(name)}: ${type(value)}`)
-      .join("; ")} }`;
+      .join("; ");
+    return properties ? `{ ${properties} }` : "Record<string, never>";
+  }
   return "JsonValue";
 };
 const declarations =

@@ -6,7 +6,12 @@ Re-exports the public domain surface; internal helpers are not re-exported.
 
 from __future__ import annotations
 
-from friday.domain.approval import ApprovalCategory, ApprovalRequest, ApprovalStatus
+from friday.domain.approval import (
+    ApprovalCategory,
+    ApprovalRequest,
+    ApprovalStatus,
+    ApprovalSubjectKind,
+)
 from friday.domain.artifact import Artifact, ArtifactKind
 from friday.domain.conversation import Conversation, ConversationInputMode
 from friday.domain.conversation_turn import ConversationTurn
@@ -23,12 +28,24 @@ from friday.domain.identifiers import (
     DeliveryId,
     RunEventId,
     RunId,
+    RunSkillResolutionId,
     RunStepId,
     ScheduleFireDeliveryPlanId,
     ScheduleFireId,
     ScheduleId,
+    SkillCandidateEvaluationId,
+    SkillEvaluationCaseId,
+    SkillEvaluationRunId,
+    SkillEvaluationSuiteId,
+    SkillEvidenceSnapshotId,
     SkillId,
+    SkillImprovementProposalId,
+    SkillImprovementWorkId,
+    SkillPromotionRequestId,
     SkillRevisionId,
+    SkillRollbackRequestId,
+    SkillRunFeedbackId,
+    SkillUsageRecordId,
     TaskEventId,
     TaskId,
     ToolInvocationId,
@@ -49,7 +66,47 @@ from friday.domain.schedule_fire_delivery_plan import (
     ScheduleFireDeliveryPlan,
     ScheduleFireDeliveryPlanStatus,
 )
-from friday.domain.skill import Skill, SkillRevision, SkillRevisionSourceKind, SkillStatus
+from friday.domain.skill import (
+    MAX_SKILLS_PER_TASK,
+    RunSkillBinding,
+    RunSkillResolution,
+    Skill,
+    SkillRevision,
+    SkillRevisionSourceKind,
+    SkillStatus,
+    TaskSkillBinding,
+)
+from friday.domain.skill_evaluation import (
+    CandidateComparisonResult,
+    CandidateRecommendation,
+    EvaluationRunStatus,
+    EvaluationSuiteStatus,
+    SkillCandidateEvaluation,
+    SkillEvaluationCase,
+    SkillEvaluationCaseResult,
+    SkillEvaluationRun,
+    SkillEvaluationSuite,
+)
+from friday.domain.skill_evidence_snapshot import SkillEvidenceSnapshot
+from friday.domain.skill_improvement import SkillImprovementProposal, SkillProposalStatus
+from friday.domain.skill_improvement_policy import SkillImprovementPolicy
+from friday.domain.skill_improvement_work import (
+    ACTIVE_IMPROVEMENT_WORK_STATES,
+    SkillImprovementWork,
+    SkillImprovementWorkState,
+)
+from friday.domain.skill_promotion import (
+    PromotionRequestStatus,
+    RollbackRequestStatus,
+    SkillPromotionRequest,
+    SkillRollbackRequest,
+)
+from friday.domain.skill_usage import (
+    SkillFeedbackRating,
+    SkillRunFeedback,
+    SkillUsageOutcome,
+    SkillUsageRecord,
+)
 from friday.domain.step import RunStep, RunStepStatus
 from friday.domain.task import Task, TaskStatus
 from friday.domain.task_event import TaskEvent, TaskEventType
@@ -61,6 +118,7 @@ __all__ = [
     "ApprovalRequest",
     "ApprovalRequestId",
     "ApprovalStatus",
+    "ApprovalSubjectKind",
     "Artifact",
     "ArtifactId",
     "ArtifactKind",
@@ -88,6 +146,9 @@ __all__ = [
     "RunEventType",
     "RunId",
     "RunStatus",
+    "RunSkillBinding",
+    "RunSkillResolution",
+    "RunSkillResolutionId",
     "RunStep",
     "RunStepId",
     "RunStepStatus",
@@ -114,7 +175,44 @@ __all__ = [
     "ToolInvocationId",
     "ToolInvocationStatus",
     "Skill",
+    "SkillFeedbackRating",
+    "SkillRunFeedback",
+    "SkillRunFeedbackId",
+    "SkillUsageOutcome",
+    "SkillUsageRecord",
+    "SkillImprovementWork",
+    "SkillImprovementWorkId",
+    "SkillImprovementWorkState",
+    "ACTIVE_IMPROVEMENT_WORK_STATES",
+    "SkillUsageRecordId",
+    "EvaluationRunStatus",
+    "EvaluationSuiteStatus",
+    "SkillEvaluationCase",
+    "SkillEvaluationCaseId",
+    "SkillCandidateEvaluation",
+    "SkillCandidateEvaluationId",
+    "CandidateComparisonResult",
+    "CandidateRecommendation",
+    "SkillEvaluationCaseResult",
+    "SkillEvaluationRun",
+    "SkillEvaluationRunId",
+    "SkillEvaluationSuite",
+    "SkillEvaluationSuiteId",
+    "TaskSkillBinding",
+    "MAX_SKILLS_PER_TASK",
     "SkillId",
+    "SkillImprovementProposal",
+    "SkillImprovementProposalId",
+    "SkillProposalStatus",
+    "SkillImprovementPolicy",
+    "SkillEvidenceSnapshot",
+    "SkillEvidenceSnapshotId",
+    "SkillPromotionRequest",
+    "SkillPromotionRequestId",
+    "PromotionRequestStatus",
+    "SkillRollbackRequest",
+    "SkillRollbackRequestId",
+    "RollbackRequestStatus",
     "SkillRevision",
     "SkillRevisionId",
     "SkillRevisionSourceKind",

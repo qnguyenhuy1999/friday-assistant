@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from friday.domain.approval import ApprovalCategory, ApprovalStatus
+from friday.domain.approval import ApprovalCategory, ApprovalStatus, ApprovalSubjectKind
 from friday.domain.artifact import ArtifactKind
 from friday.domain.conversation import ConversationInputMode
 from friday.domain.failure import Failure
@@ -35,7 +35,7 @@ class CreateTaskResult:
 @dataclass(frozen=True, slots=True)
 class StartRunResult:
     task_id: TaskId
-    run_id: RunId
+    run_id: RunId | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +100,7 @@ class RunStepResult:
 @dataclass(frozen=True, slots=True)
 class ApprovalRequestResult:
     approval_id: ApprovalRequestId
-    run_id: RunId
+    run_id: RunId | None
     step_id: RunStepId | None
     category: ApprovalCategory
     summary: str
@@ -115,6 +115,8 @@ class ApprovalRequestResult:
     resolver: str | None
     authorization_fingerprint: str | None
     consumed_at: datetime | None
+    subject_kind: ApprovalSubjectKind
+    subject_id: str
 
 
 @dataclass(frozen=True, slots=True)

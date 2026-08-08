@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
+from typing import cast
 
 from fastapi import FastAPI
 from starlette.testclient import TestClient
@@ -43,7 +44,7 @@ def _create_skill(client: TestClient, *, key: str) -> dict[str, object]:
         json={"key": key, "display_name": "Improvement", "description": "desc"},
     )
     assert response.status_code == 201
-    return response.json()
+    return cast(dict[str, object], response.json())
 
 
 def _create_revision(
@@ -54,7 +55,7 @@ def _create_revision(
         json={"instructions": instructions, "source_kind": "operator"},
     )
     assert response.status_code == 201
-    return response.json()
+    return cast(dict[str, object], response.json())
 
 
 def _activate(client: TestClient, skill_id: str, revision_id: str) -> None:
@@ -77,7 +78,12 @@ def _create_suite(client: TestClient, skill_id: str) -> dict[str, object]:
         },
     )
     assert response.status_code == 200
-    return response.json()
+    return cast(dict[str, object], response.json())
+
+
+def _first_case_id(suite: dict[str, object]) -> str:
+    cases = cast(list[dict[str, object]], suite["cases"])
+    return str(cases[0]["id"])
 
 
 def _run_evaluation(
@@ -93,7 +99,7 @@ def _run_evaluation(
         json={"revision_id": revision_id, "outputs": {case_id: output}},
     )
     assert response.status_code == 200
-    return response.json()
+    return cast(dict[str, object], response.json())
 
 
 def _seed_snapshot(app: FastAPI, skill_id: str, base_revision_id: str) -> SkillEvidenceSnapshot:
@@ -253,7 +259,7 @@ def test_proposal_evaluate_get_comparison_and_promote_flow(app: FastAPI) -> None
         base = _create_revision(client, str(skill["id"]), instructions="base")
         _activate(client, str(skill["id"]), str(base["id"]))
         suite = _create_suite(client, str(skill["id"]))
-        case_id = str(suite["cases"][0]["id"])
+        case_id = _first_case_id(suite)
         baseline = _run_evaluation(
             client, str(suite["id"]), revision_id=str(base["id"]), case_id=case_id, output="bad"
         )
@@ -304,7 +310,7 @@ def test_promotion_reject_and_cancel(app: FastAPI) -> None:
         base = _create_revision(client, str(skill["id"]), instructions="base")
         _activate(client, str(skill["id"]), str(base["id"]))
         suite = _create_suite(client, str(skill["id"]))
-        case_id = str(suite["cases"][0]["id"])
+        case_id = _first_case_id(suite)
         baseline = _run_evaluation(
             client, str(suite["id"]), revision_id=str(base["id"]), case_id=case_id, output="bad"
         )
@@ -330,7 +336,7 @@ def test_promotion_reject_and_cancel(app: FastAPI) -> None:
         base_b = _create_revision(client, str(skill_b["id"]), instructions="base")
         _activate(client, str(skill_b["id"]), str(base_b["id"]))
         suite_b = _create_suite(client, str(skill_b["id"]))
-        case_id_b = str(suite_b["cases"][0]["id"])
+        case_id_b = _first_case_id(suite_b)
         baseline_b = _run_evaluation(
             client,
             str(suite_b["id"]),
@@ -456,7 +462,7 @@ def test_evaluation_suite_list_get_run_and_404s(app: FastAPI) -> None:
         skill = _create_skill(client, key="improve.suite")
         base = _create_revision(client, str(skill["id"]), instructions="base")
         suite = _create_suite(client, str(skill["id"]))
-        case_id = str(suite["cases"][0]["id"])
+        case_id = _first_case_id(suite)
         run = _run_evaluation(
             client, str(suite["id"]), revision_id=str(base["id"]), case_id=case_id, output="good"
         )

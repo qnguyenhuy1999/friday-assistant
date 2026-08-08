@@ -220,7 +220,7 @@ def _runtime_fingerprint(runtime_metadata: JsonValue) -> str:
     ).hexdigest()
 
 
-def _deterministic_runtime_metadata() -> JsonValue:
+def _deterministic_runtime_metadata() -> dict[str, JsonValue]:
     return {
         "runtime_config_version": RUNTIME_CONFIG_VERSION,
         "model": None,

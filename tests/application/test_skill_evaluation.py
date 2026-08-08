@@ -23,10 +23,14 @@ from friday.application.skill_registry import (
 )
 from friday.domain import (
     EvaluationSuiteStatus,
+    JsonValue,
     SkillEvaluationCase,
     SkillEvaluationCaseId,
+    SkillEvaluationRun,
     SkillEvaluationSuite,
     SkillEvaluationSuiteId,
+    SkillId,
+    SkillRevisionId,
     SkillRevisionSourceKind,
 )
 from friday.domain.skill_evaluation import CANONICAL_BRAIN_EVALUATOR_VERSION
@@ -34,7 +38,7 @@ from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUn
 
 
 def _suite_and_case(
-    uow: FakeUnitOfWork, clock: FakeClock, skill_id: object
+    uow: FakeUnitOfWork, clock: FakeClock, skill_id: SkillId
 ) -> tuple[SkillEvaluationSuite, SkillEvaluationCase]:
     suite = SkillEvaluationSuite(
         id=SkillEvaluationSuiteId.new(),
@@ -203,13 +207,13 @@ def test_candidate_comparison_requires_identical_frozen_evaluation_configuration
 def _run_with_metadata(
     factory: CountingUnitOfWorkFactory,
     clock: FakeClock,
-    suite_id: object,
-    case_id: object,
-    revision_id: object,
+    suite_id: SkillEvaluationSuiteId,
+    case_id: SkillEvaluationCaseId,
+    revision_id: SkillRevisionId,
     *,
-    runtime_metadata: dict[str, object] | None = None,
-    call_usage: dict[str, object] | None = None,
-) -> object:
+    runtime_metadata: JsonValue = None,
+    call_usage: JsonValue = None,
+) -> SkillEvaluationRun:
     return RunSkillEvaluation(factory, clock, DeterministicEvaluatorRegistry()).execute(
         suite_id=suite_id,
         revision_id=revision_id,
@@ -361,7 +365,7 @@ def test_unknown_caller_controlled_runtime_metadata_keys_are_rejected() -> None:
         skill_id=skill.id, instructions="base", source_kind=SkillRevisionSourceKind.OPERATOR
     )
     suite, case = _suite_and_case(uow, clock, skill.id)
-    tampered_metadata = {
+    tampered_metadata: dict[str, JsonValue] = {
         **_deterministic_runtime_metadata(),
         "usage": {"input_tokens": 999999},
     }
@@ -381,7 +385,7 @@ def test_unknown_caller_controlled_runtime_metadata_extra_key_is_rejected() -> N
         skill_id=skill.id, instructions="base", source_kind=SkillRevisionSourceKind.OPERATOR
     )
     suite, case = _suite_and_case(uow, clock, skill.id)
-    tampered_metadata = {
+    tampered_metadata: dict[str, JsonValue] = {
         **_deterministic_runtime_metadata(),
         "adapter_metadata": {"secret": "leak"},
     }

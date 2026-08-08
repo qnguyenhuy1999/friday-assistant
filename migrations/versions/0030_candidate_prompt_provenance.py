@@ -29,7 +29,44 @@ _SQLITE_TRIGGERS = (
 )
 
 
+def _count(sql: str) -> int:
+    return int(op.get_bind().scalar(sa.text(sql)) or 0)
+
+
+def _fail_if(sql: str, message: str) -> None:
+    if _count(sql):
+        raise RuntimeError(message)
+
+
+def _preflight_upgrade() -> None:
+    """Refuse the 0029 -> 0030 upgrade before any DDL when proposals exist.
+
+    The pre-0030 candidate generator could receive non-persisted caller
+    controlled summary inputs, so an existing proposal cannot be backfilled
+    with a truthful candidate prompt version or sha256.  Fabricating either
+    would break provenance, so the upgrade stops with the database untouched.
+    """
+    _fail_if(
+        "SELECT count(*) FROM skill_improvement_proposals",
+        "0030 cannot upgrade proposals without persisted candidate prompt provenance",
+    )
+
+
+def _preflight_downgrade() -> None:
+    """Refuse the 0030 -> 0029 downgrade before any DDL when proposals exist.
+
+    The candidate prompt provenance columns are 0030-only.  Dropping them while
+    proposals still exist would destroy persisted provenance, so the downgrade
+    stops with the database untouched.
+    """
+    _fail_if(
+        "SELECT count(*) FROM skill_improvement_proposals",
+        "0030 cannot downgrade proposals while candidate prompt provenance is persisted",
+    )
+
+
 def upgrade() -> None:
+    _preflight_upgrade()
     bind = op.get_bind()
     trigger_sql: dict[str, str] = {}
     if bind.dialect.name == "sqlite":
@@ -52,6 +89,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    _preflight_downgrade()
     bind = op.get_bind()
     trigger_sql: dict[str, str] = {}
     if bind.dialect.name == "sqlite":

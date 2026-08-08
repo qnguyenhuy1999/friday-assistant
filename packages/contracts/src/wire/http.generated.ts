@@ -216,6 +216,61 @@ export interface RunResult {
   details: JsonValue;
 }
 
+export interface Agent {
+  id: string;
+  key: string;
+  display_name: string;
+  description: string;
+  status: "active" | "disabled" | "archived";
+  active_revision_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentRevision {
+  id: string;
+  agent_id: string;
+  version: number;
+  instructions: string;
+  runtime_kind: string;
+  runtime_config: JsonValue;
+  content_sha256: string;
+  source_kind: "operator" | "imported";
+  created_at: string;
+}
+
+export interface TaskAgentBinding {
+  task_id: string;
+  agent_id: string;
+  created_at: string;
+}
+
+export interface RunAgentResolution {
+  run_id: string;
+  resolved: boolean;
+  resolved_at: string | null;
+  agent_id: string | null;
+  revision_id: string | null;
+}
+
+export interface DelegationRequest {
+  id: string;
+  parent_run_id: string;
+  parent_run_step_id: string | null;
+  target_agent_id: string;
+  objective: string;
+  input_payload: JsonValue;
+  expected_output_contract: string;
+  authorization_fingerprint: string;
+  status: "requested" | "dispatched" | "succeeded" | "failed" | "cancelled";
+  child_task_id: string | null;
+  child_run_id: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  failure_code: string | null;
+}
+
 export interface Skill {
   id: string;
   key: string;
@@ -452,6 +507,7 @@ export type ArtifactKind = Artifact["kind"];
 export type RunEventType = RunEvent["type"];
 export type TaskEventType = TaskEvent["type"];
 
+export type AgentPage = Page<Agent>;
 export type SkillPage = Page<Skill>;
 export type TaskPage = Page<Task>;
 export type RunPage = Page<Run>;
@@ -1091,6 +1147,199 @@ const schema = {
           type: ["string", "null"],
         },
         details: {},
+      },
+    },
+    Agent: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "key",
+        "display_name",
+        "description",
+        "status",
+        "active_revision_id",
+        "created_at",
+        "updated_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        key: {
+          type: "string",
+        },
+        display_name: {
+          type: "string",
+        },
+        description: {
+          type: "string",
+        },
+        status: {
+          enum: ["active", "disabled", "archived"],
+        },
+        active_revision_id: {
+          type: ["string", "null"],
+        },
+        created_at: {
+          type: "string",
+        },
+        updated_at: {
+          type: "string",
+        },
+      },
+    },
+    AgentRevision: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "agent_id",
+        "version",
+        "instructions",
+        "runtime_kind",
+        "runtime_config",
+        "content_sha256",
+        "source_kind",
+        "created_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        agent_id: {
+          type: "string",
+        },
+        version: {
+          type: "integer",
+        },
+        instructions: {
+          type: "string",
+        },
+        runtime_kind: {
+          type: "string",
+        },
+        runtime_config: {},
+        content_sha256: {
+          type: "string",
+        },
+        source_kind: {
+          enum: ["operator", "imported"],
+        },
+        created_at: {
+          type: "string",
+        },
+      },
+    },
+    TaskAgentBinding: {
+      type: "object",
+      additionalProperties: false,
+      required: ["task_id", "agent_id", "created_at"],
+      properties: {
+        task_id: {
+          type: "string",
+        },
+        agent_id: {
+          type: "string",
+        },
+        created_at: {
+          type: "string",
+        },
+      },
+    },
+    RunAgentResolution: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "run_id",
+        "resolved",
+        "resolved_at",
+        "agent_id",
+        "revision_id",
+      ],
+      properties: {
+        run_id: {
+          type: "string",
+        },
+        resolved: {
+          type: "boolean",
+        },
+        resolved_at: {
+          type: ["string", "null"],
+        },
+        agent_id: {
+          type: ["string", "null"],
+        },
+        revision_id: {
+          type: ["string", "null"],
+        },
+      },
+    },
+    DelegationRequest: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "parent_run_id",
+        "parent_run_step_id",
+        "target_agent_id",
+        "objective",
+        "input_payload",
+        "expected_output_contract",
+        "authorization_fingerprint",
+        "status",
+        "child_task_id",
+        "child_run_id",
+        "created_at",
+        "started_at",
+        "completed_at",
+        "failure_code",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        parent_run_id: {
+          type: "string",
+        },
+        parent_run_step_id: {
+          type: ["string", "null"],
+        },
+        target_agent_id: {
+          type: "string",
+        },
+        objective: {
+          type: "string",
+        },
+        input_payload: {},
+        expected_output_contract: {
+          type: "string",
+        },
+        authorization_fingerprint: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        status: {
+          enum: ["requested", "dispatched", "succeeded", "failed", "cancelled"],
+        },
+        child_task_id: {
+          type: ["string", "null"],
+        },
+        child_run_id: {
+          type: ["string", "null"],
+        },
+        created_at: {
+          type: "string",
+        },
+        started_at: {
+          type: ["string", "null"],
+        },
+        completed_at: {
+          type: ["string", "null"],
+        },
+        failure_code: {
+          type: ["string", "null"],
+        },
       },
     },
     Skill: {
@@ -1969,6 +2218,56 @@ const schema = {
     conversationTurn: {
       $ref: "#/definitions/ConversationTurn",
     },
+    agent: {
+      $ref: "#/definitions/Agent",
+    },
+    agentPage: {
+      type: "object",
+      additionalProperties: false,
+      required: ["items", "next_cursor"],
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/Agent",
+          },
+        },
+        next_cursor: {
+          type: ["string", "null"],
+        },
+      },
+    },
+    agentRevision: {
+      $ref: "#/definitions/AgentRevision",
+    },
+    agentRevisions: {
+      type: "array",
+      items: {
+        $ref: "#/definitions/AgentRevision",
+      },
+    },
+    taskAgentBinding: {
+      anyOf: [
+        {
+          $ref: "#/definitions/TaskAgentBinding",
+        },
+        {
+          type: "null",
+        },
+      ],
+    },
+    runAgentResolution: {
+      $ref: "#/definitions/RunAgentResolution",
+    },
+    delegationRequest: {
+      $ref: "#/definitions/DelegationRequest",
+    },
+    delegationRequests: {
+      type: "array",
+      items: {
+        $ref: "#/definitions/DelegationRequest",
+      },
+    },
     skill: {
       $ref: "#/definitions/Skill",
     },
@@ -2290,6 +2589,22 @@ export const validateConversation: WireValidator = (value, path) =>
   assertWire("conversation", value, path);
 export const validateConversationTurn: WireValidator = (value, path) =>
   assertWire("conversationTurn", value, path);
+export const validateAgent: WireValidator = (value, path) =>
+  assertWire("agent", value, path);
+export const validateAgentPage: WireValidator = (value, path) =>
+  assertWire("agentPage", value, path);
+export const validateAgentRevision: WireValidator = (value, path) =>
+  assertWire("agentRevision", value, path);
+export const validateAgentRevisions: WireValidator = (value, path) =>
+  assertWire("agentRevisions", value, path);
+export const validateTaskAgentBinding: WireValidator = (value, path) =>
+  assertWire("taskAgentBinding", value, path);
+export const validateRunAgentResolution: WireValidator = (value, path) =>
+  assertWire("runAgentResolution", value, path);
+export const validateDelegationRequest: WireValidator = (value, path) =>
+  assertWire("delegationRequest", value, path);
+export const validateDelegationRequests: WireValidator = (value, path) =>
+  assertWire("delegationRequests", value, path);
 export const validateSkill: WireValidator = (value, path) =>
   assertWire("skill", value, path);
 export const validateSkillRevision: WireValidator = (value, path) =>

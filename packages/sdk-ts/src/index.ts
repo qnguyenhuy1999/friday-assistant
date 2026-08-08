@@ -33,3 +33,5 @@ export type {
   ListSchedulesParams,
 } from "./resources/schedules";
 export { SkillsResource } from "./resources/skills";
+export { AgentsResource } from "./resources/agents";
+export { DelegationsResource } from "./resources/delegations";

@@ -665,6 +665,133 @@ class SkillEvidenceSnapshotRow(Base):
     created_at: Mapped[datetime]
 
 
+class AgentRow(Base):
+    __tablename__ = "agents"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'disabled', 'archived')", name="ck_agents_status"),
+        # The durable ownership fence for the active pointer: (agents.id,
+        # active_revision_id) must name a revision that belongs to this same
+        # agent. NULL active_revision_id (no activation yet) skips the check.
+        ForeignKeyConstraint(
+            ["id", "active_revision_id"],
+            ["agent_revisions.agent_id", "agent_revisions.id"],
+            name="fk_agents_active_revision_ownership",
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(unique=True)
+    display_name: Mapped[str]
+    description: Mapped[str]
+    status: Mapped[str]
+    active_revision_id: Mapped[str | None]
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+
+
+class AgentRevisionRow(Base):
+    __tablename__ = "agent_revisions"
+    __table_args__ = (
+        UniqueConstraint("agent_id", "version", name="uq_agent_revisions_agent_version"),
+        # (agent_id, id) backs the agents.active_revision_id composite FK.
+        UniqueConstraint("agent_id", "id", name="uq_agent_revisions_agent_id"),
+        CheckConstraint("version > 0", name="ck_agent_revisions_version"),
+        CheckConstraint(
+            "length(content_sha256) = 64 AND content_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_agent_revisions_sha256",
+        ),
+        CheckConstraint(
+            "source_kind IN ('operator', 'imported')", name="ck_agent_revisions_source_kind"
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
+    version: Mapped[int]
+    instructions: Mapped[str]
+    runtime_kind: Mapped[str]
+    runtime_config: Mapped[object] = mapped_column(JSON)
+    content_sha256: Mapped[str]
+    source_kind: Mapped[str]
+    created_at: Mapped[datetime]
+
+
+class TaskAgentBindingRow(Base):
+    __tablename__ = "task_agent_bindings"
+
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"))
+    created_at: Mapped[datetime]
+
+
+class RunAgentResolutionRow(Base):
+    __tablename__ = "run_agent_resolutions"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_run_agent_resolutions_run_id"),
+        ForeignKeyConstraint(
+            ["agent_id", "revision_id"],
+            ["agent_revisions.agent_id", "agent_revisions.id"],
+            name="fk_run_agent_resolutions_revision_ownership",
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"))
+    revision_id: Mapped[str] = mapped_column(ForeignKey("agent_revisions.id"))
+    resolved_at: Mapped[datetime]
+
+
+class DelegationRequestRow(Base):
+    __tablename__ = "delegation_requests"
+    __table_args__ = (
+        Index("ix_delegation_requests_parent_run_id", "parent_run_id"),
+        CheckConstraint(
+            "status IN ('requested', 'dispatched', 'succeeded', 'failed', 'cancelled')",
+            name="ck_delegation_requests_status",
+        ),
+        CheckConstraint(
+            "length(authorization_fingerprint) = 64 AND "
+            "authorization_fingerprint NOT GLOB '*[^0-9a-f]*'",
+            name="ck_delegation_requests_fingerprint",
+        ),
+        CheckConstraint(
+            "(status = 'failed' AND failure_code IS NOT NULL) OR "
+            "(status != 'failed' AND failure_code IS NULL)",
+            name="ck_delegation_requests_failure_shape",
+        ),
+        CheckConstraint(
+            "length(objective) BETWEEN 1 AND 4000",
+            name="ck_delegation_requests_objective_length",
+        ),
+        CheckConstraint(
+            "length(expected_output_contract) BETWEEN 1 AND 4000",
+            name="ck_delegation_requests_output_contract_length",
+        ),
+        UniqueConstraint("authorization_fingerprint", name="uq_delegation_requests_fingerprint"),
+        # NULL parent_run_step_id (no step scoping) skips the composite FK
+        # check; a non-NULL value must name a step belonging to this exact
+        # parent run, not merely any existing run_steps.id.
+        ForeignKeyConstraint(
+            ["parent_run_id", "parent_run_step_id"],
+            ["run_steps.run_id", "run_steps.id"],
+            name="fk_delegation_requests_step_ownership",
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    parent_run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    parent_run_step_id: Mapped[str | None]
+    target_agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"))
+    objective: Mapped[str]
+    input_payload: Mapped[object] = mapped_column(JSON)
+    expected_output_contract: Mapped[str]
+    authorization_fingerprint: Mapped[str]
+    status: Mapped[str]
+    child_task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id"))
+    child_run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"))
+    created_at: Mapped[datetime]
+    started_at: Mapped[datetime | None]
+    completed_at: Mapped[datetime | None]
+    failure_code: Mapped[str | None]
+
+
 class TaskRow(Base):
     __tablename__ = "tasks"
 
@@ -906,6 +1033,8 @@ class RunStepRow(Base):
     __table_args__ = (
         Index("ix_run_steps_run_id", "run_id"),
         UniqueConstraint("run_id", "position", name="uq_run_steps_run_id_position"),
+        # (run_id, id) backs delegation_requests' composite step-ownership FK.
+        UniqueConstraint("run_id", "id", name="uq_run_steps_run_id_id"),
     )
 
     id: Mapped[str] = mapped_column(primary_key=True)

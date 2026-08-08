@@ -14,8 +14,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from friday.application.agent_registry import ResolveRunAgent
 from friday.application.ports import Clock
 from friday.application.skill_registry import ResolveRunSkills
+from friday.domain.agent import RunAgentResolution
 from friday.domain.identifiers import RunId
 from friday.domain.skill import RunSkillBinding
 from tests.application.fakes import (
@@ -52,5 +54,18 @@ def resolve_run_skills_without_claim(
     assert isinstance(uow, FakeUnitOfWork)
     uow.work_queue_repo = _AlwaysClaimedWorkQueue()
     return ResolveRunSkills(factory, clock).execute(
+        run_id, _TEST_WORKER, _TEST_TOKEN, _TEST_GENERATION
+    )
+
+
+def resolve_run_agent_without_claim(
+    factory: CountingUnitOfWorkFactory, clock: Clock, run_id: RunId
+) -> RunAgentResolution | None:
+    """Resolve a run's Agent identity in the in-memory fake without a real
+    worker claim, mirroring `resolve_run_skills_without_claim`."""
+    uow = factory.uow
+    assert isinstance(uow, FakeUnitOfWork)
+    uow.work_queue_repo = _AlwaysClaimedWorkQueue()
+    return ResolveRunAgent(factory, clock).execute(
         run_id, _TEST_WORKER, _TEST_TOKEN, _TEST_GENERATION
     )

@@ -16,9 +16,16 @@ from friday.application.lifecycle_events import LifecycleEvents, run_result
 from friday.application.ports import UnitOfWork
 from friday.application.results import RunResult
 from friday.application.skill_usage import materialize_skill_usage_in_uow
+from friday.domain.agent import RunAgentResolution
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure
-from friday.domain.identifiers import RunId, RunSkillResolutionId, RunStepId, TaskId
+from friday.domain.identifiers import (
+    RunAgentResolutionId,
+    RunId,
+    RunSkillResolutionId,
+    RunStepId,
+    TaskId,
+)
 from friday.domain.json_value import JsonValue
 from friday.domain.run import TERMINAL_RUN_STATUSES, Run, RunStatus
 from friday.domain.skill import RunSkillBinding, RunSkillResolution
@@ -287,6 +294,17 @@ class RetryFailedRun(LifecycleEvents):
                         )
                         for binding in uow.run_skill_bindings.list_for_run(source.id)
                     ]
+                )
+            source_agent_resolution = uow.run_agent_resolutions.get(source.id)
+            if source_agent_resolution is not None:
+                uow.run_agent_resolutions.add(
+                    RunAgentResolution(
+                        RunAgentResolutionId.new(),
+                        retry.id,
+                        source_agent_resolution.agent_id,
+                        source_agent_resolution.revision_id,
+                        source_agent_resolution.resolved_at,
+                    )
                 )
             uow.work_queue.enqueue(retry.id, available_at=now, enqueued_at=now)
             self.append_run_events(

@@ -411,6 +411,133 @@
         "details": {}
       }
     },
+    "Agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "key",
+        "display_name",
+        "description",
+        "status",
+        "active_revision_id",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "key": { "type": "string" },
+        "display_name": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "enum": ["active", "disabled", "archived"] },
+        "active_revision_id": { "type": ["string", "null"] },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      }
+    },
+    "AgentRevision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "agent_id",
+        "version",
+        "instructions",
+        "runtime_kind",
+        "runtime_config",
+        "content_sha256",
+        "source_kind",
+        "created_at"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "agent_id": { "type": "string" },
+        "version": { "type": "integer" },
+        "instructions": { "type": "string" },
+        "runtime_kind": { "type": "string" },
+        "runtime_config": {},
+        "content_sha256": { "type": "string" },
+        "source_kind": { "enum": ["operator", "imported"] },
+        "created_at": { "type": "string" }
+      }
+    },
+    "TaskAgentBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "agent_id", "created_at"],
+      "properties": {
+        "task_id": { "type": "string" },
+        "agent_id": { "type": "string" },
+        "created_at": { "type": "string" }
+      }
+    },
+    "RunAgentResolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "resolved",
+        "resolved_at",
+        "agent_id",
+        "revision_id"
+      ],
+      "properties": {
+        "run_id": { "type": "string" },
+        "resolved": { "type": "boolean" },
+        "resolved_at": { "type": ["string", "null"] },
+        "agent_id": { "type": ["string", "null"] },
+        "revision_id": { "type": ["string", "null"] }
+      }
+    },
+    "DelegationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "parent_run_id",
+        "parent_run_step_id",
+        "target_agent_id",
+        "objective",
+        "input_payload",
+        "expected_output_contract",
+        "authorization_fingerprint",
+        "status",
+        "child_task_id",
+        "child_run_id",
+        "created_at",
+        "started_at",
+        "completed_at",
+        "failure_code"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "parent_run_id": { "type": "string" },
+        "parent_run_step_id": { "type": ["string", "null"] },
+        "target_agent_id": { "type": "string" },
+        "objective": { "type": "string" },
+        "input_payload": {},
+        "expected_output_contract": { "type": "string" },
+        "authorization_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "status": {
+          "enum": [
+            "requested",
+            "dispatched",
+            "succeeded",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "child_task_id": { "type": ["string", "null"] },
+        "child_run_id": { "type": ["string", "null"] },
+        "created_at": { "type": "string" },
+        "started_at": { "type": ["string", "null"] },
+        "completed_at": { "type": ["string", "null"] },
+        "failure_code": { "type": ["string", "null"] }
+      }
+    },
     "Skill": {
       "type": "object",
       "additionalProperties": false,
@@ -965,6 +1092,36 @@
     },
     "conversation": { "$ref": "#/definitions/Conversation" },
     "conversationTurn": { "$ref": "#/definitions/ConversationTurn" },
+    "agent": { "$ref": "#/definitions/Agent" },
+    "agentPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Agent" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "agentRevision": { "$ref": "#/definitions/AgentRevision" },
+    "agentRevisions": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/AgentRevision" }
+    },
+    "taskAgentBinding": {
+      "anyOf": [
+        { "$ref": "#/definitions/TaskAgentBinding" },
+        { "type": "null" }
+      ]
+    },
+    "runAgentResolution": { "$ref": "#/definitions/RunAgentResolution" },
+    "delegationRequest": { "$ref": "#/definitions/DelegationRequest" },
+    "delegationRequests": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/DelegationRequest" }
+    },
     "skill": { "$ref": "#/definitions/Skill" },
     "skillRevision": { "$ref": "#/definitions/SkillRevision" },
     "skillRevisions": {

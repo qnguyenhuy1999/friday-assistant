@@ -8,10 +8,13 @@ code raises and catches only these.
 from __future__ import annotations
 
 from friday.domain.identifiers import (
+    AgentId,
+    AgentRevisionId,
     ApprovalRequestId,
     ArtifactId,
     ConversationId,
     ConversationTurnId,
+    DelegationRequestId,
     RunId,
     RunStepId,
     ScheduleId,
@@ -126,6 +129,41 @@ class SkillRollbackRequestNotFound(ApplicationError):
     def __init__(self, request_id: object) -> None:
         self.request_id = request_id
         super().__init__(f"Skill rollback request not found: {request_id}")
+
+
+class AgentNotFound(ApplicationError):
+    def __init__(self, agent_id: AgentId) -> None:
+        self.agent_id = agent_id
+        super().__init__(f"Agent not found: {agent_id}")
+
+
+class AgentRevisionNotFound(ApplicationError):
+    def __init__(self, revision_id: AgentRevisionId) -> None:
+        self.revision_id = revision_id
+        super().__init__(f"Agent revision not found: {revision_id}")
+
+
+class AgentIntegrityFailed(ApplicationError):
+    """Persisted Agent revision content no longer matches its durable digest."""
+
+    def __init__(self) -> None:
+        super().__init__("agent_integrity_failed")
+
+
+class DelegationRequestNotFound(ApplicationError):
+    def __init__(self, delegation_id: DelegationRequestId) -> None:
+        self.delegation_id = delegation_id
+        super().__init__(f"Delegation request not found: {delegation_id}")
+
+
+class UnknownBrainRuntimeKind(ApplicationError):
+    """An AgentRevision named a runtime_kind with no registered code-owned
+    adapter factory. Fails closed: unknown kinds never fall back to a
+    default runtime."""
+
+    def __init__(self, runtime_kind: str) -> None:
+        self.runtime_kind = runtime_kind
+        super().__init__(f"Unknown brain runtime kind: {runtime_kind}")
 
 
 class SkillIntegrityFailed(ApplicationError):

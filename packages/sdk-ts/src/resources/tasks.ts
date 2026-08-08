@@ -2,13 +2,16 @@ import type {
   CreateTaskBody,
   Failure,
   Page,
+  PutTaskAgentBody,
   StartRunResponse,
   Task,
+  TaskAgentBinding,
   TaskSkillBinding,
 } from "@friday/contracts";
 import {
   validateStartRun,
   validateTask,
+  validateTaskAgentBinding,
   validateTaskPage,
   validateTaskSkillBindings,
 } from "@friday/contracts";
@@ -55,6 +58,21 @@ export class TasksResource {
       path: `/v1/tasks/${taskId}/skills`,
       body: { skill_ids: skillIds },
       validate: validateTaskSkillBindings,
+    });
+  }
+  getAgent(taskId: string) {
+    return this.http.requestJson<TaskAgentBinding | null>({
+      method: "GET",
+      path: `/v1/tasks/${taskId}/agent`,
+      validate: validateTaskAgentBinding,
+    });
+  }
+  putAgent(taskId: string, input: PutTaskAgentBody) {
+    return this.http.requestJson<TaskAgentBinding | null>({
+      method: "PUT",
+      path: `/v1/tasks/${taskId}/agent`,
+      body: input,
+      validate: validateTaskAgentBinding,
     });
   }
   startRun(taskId: string) {

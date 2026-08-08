@@ -16,12 +16,15 @@ from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from friday.application.errors import (
+    AgentNotFound,
+    AgentRevisionNotFound,
     ApplicationError,
     ApprovalNotFound,
     ArtifactNotFound,
     ConcurrencyConflict,
     ConversationNotFound,
     ConversationTurnNotFound,
+    DelegationRequestNotFound,
     EntityConflict,
     RunNotFound,
     RunStepNotFound,
@@ -37,6 +40,7 @@ from friday.application.errors import (
     TaskNotFound,
     ToolInvocationNotFound,
     TransactionFailure,
+    UnknownBrainRuntimeKind,
 )
 from friday.domain.errors import DomainValidationError
 
@@ -77,11 +81,18 @@ _NOT_FOUND_TYPES: dict[type[ApplicationError], str] = {
     SkillImprovementProposalNotFound: "skill_improvement_proposal_not_found",
     SkillPromotionRequestNotFound: "skill_promotion_request_not_found",
     SkillRollbackRequestNotFound: "skill_rollback_request_not_found",
+    AgentNotFound: "agent_not_found",
+    AgentRevisionNotFound: "agent_revision_not_found",
+    DelegationRequestNotFound: "delegation_request_not_found",
 }
 
 _CONFLICT_TYPES: dict[type[ApplicationError], str] = {
     EntityConflict: "entity_conflict",
     ConcurrencyConflict: "concurrency_conflict",
+}
+
+_UNPROCESSABLE_TYPES: dict[type[ApplicationError], str] = {
+    UnknownBrainRuntimeKind: "unknown_brain_runtime_kind",
 }
 
 
@@ -100,6 +111,12 @@ def _map_application_error(exc: ApplicationError) -> JSONResponse:
         if isinstance(exc, error_cls):
             return JSONResponse(
                 status_code=status.HTTP_409_CONFLICT,
+                content=_error_body(error_type, str(exc)),
+            )
+    for error_cls, error_type in _UNPROCESSABLE_TYPES.items():
+        if isinstance(exc, error_cls):
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 content=_error_body(error_type, str(exc)),
             )
     if isinstance(exc, TransactionFailure):

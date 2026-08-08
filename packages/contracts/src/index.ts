@@ -4,6 +4,14 @@ export * from "./wire/pagination";
 export type { CreateTaskBody } from "./wire/task";
 export type { CreateStepBody } from "./wire/step";
 export type {
+  AgentRevisionSourceKind,
+  AgentStatus,
+  CreateAgentBody,
+  CreateAgentRevisionBody,
+  PutTaskAgentBody,
+} from "./wire/agent";
+export type { CreateDelegationRequestBody } from "./wire/delegation";
+export type {
   CreateSkillBody,
   CreateSkillRevisionBody,
   CreateEvaluationSuiteBody,
@@ -31,6 +39,9 @@ export type {
   SubmitConversationTurnBody,
 } from "./wire/conversation";
 export type {
+  Agent,
+  AgentPage,
+  AgentRevision,
   ApprovalCategory,
   ApprovalRequest,
   ApprovalStatus,
@@ -38,8 +49,10 @@ export type {
   ArtifactKind,
   Conversation,
   ConversationTurn,
+  DelegationRequest,
   Failure,
   Run,
+  RunAgentResolution,
   RunResult,
   RunEvent,
   RunEventType,
@@ -67,6 +80,7 @@ export type {
   SkillRollback,
   SkillImprovementPolicy,
   StartRunResponse,
+  TaskAgentBinding,
   Task,
   TaskEvent,
   TaskEventType,
@@ -77,6 +91,14 @@ export type {
 export type { CandidateEvaluation as SkillCandidateEvaluation } from "./wire/http.generated";
 export {
   WireFormatError,
+  validateAgent,
+  validateAgentPage,
+  validateAgentRevision,
+  validateAgentRevisions,
+  validateTaskAgentBinding,
+  validateRunAgentResolution,
+  validateDelegationRequest,
+  validateDelegationRequests,
   validateRunEvent,
   validateTaskEvent,
   validateRunPage,

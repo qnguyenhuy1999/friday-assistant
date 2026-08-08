@@ -11,7 +11,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -308,6 +308,7 @@ class SkillEvaluationRunRow(Base):
     target_content_sha256: Mapped[str]
     runtime_metadata: Mapped[object] = mapped_column(JSON)
     call_usage: Mapped[object | None] = mapped_column(JSON, nullable=True)
+    case_results: Mapped[list[SkillEvaluationCaseResultRow]] = relationship(back_populates="run")
 
 
 class SkillEvaluationCaseResultRow(Base):
@@ -332,6 +333,7 @@ class SkillEvaluationCaseResultRow(Base):
     reason_code: Mapped[str | None]
     bounded_details: Mapped[str]
     output_sha256: Mapped[str]
+    run: Mapped[SkillEvaluationRunRow] = relationship(back_populates="case_results")
 
 
 class SkillImprovementProposalRow(Base):

@@ -17,7 +17,6 @@ from friday.application.skill_registry import (
     CreateSkill,
     CreateSkillRevision,
     ReplaceTaskSkills,
-    ResolveRunSkills,
 )
 from friday.application.skill_usage import MaterializeSkillUsage
 from friday.application.worker_maintenance import EvaluateDueSkillImprovementPolicies
@@ -34,6 +33,7 @@ from friday.domain import (
 from friday.domain.identifiers import RunId
 from friday.domain.run import Run
 from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
+from tests.application.resolve_helpers import resolve_run_skills_without_claim
 
 
 class _CandidateGenerator:
@@ -76,7 +76,7 @@ def test_phase20_safe_loop_e2e_freezes_evidence_reviews_promotes_and_rolls_back(
 
     run_a = Run.new(id=RunId.new(), task_id=task_id, created_at=clock.now())
     uow.runs.add(run_a)
-    assert ResolveRunSkills(factory, clock).execute(run_a.id)[0].revision_id == v1.id
+    assert resolve_run_skills_without_claim(factory, clock, run_a.id)[0].revision_id == v1.id
     run_a.start(clock.now())
     run_a.succeed(clock.now())
     assert MaterializeSkillUsage(factory, clock).execute(run_a.id)[0].revision_id == v1.id
@@ -149,11 +149,11 @@ def test_phase20_safe_loop_e2e_freezes_evidence_reviews_promotes_and_rolls_back(
     assert promoted.promoted_revision_id is not None
     v2 = uow.skill_revision_repo.get(promoted.promoted_revision_id)
     assert v2 is not None and v2.version == 2
-    assert ResolveRunSkills(factory, clock).execute(run_a.id)[0].revision_id == v1.id
+    assert resolve_run_skills_without_claim(factory, clock, run_a.id)[0].revision_id == v1.id
 
     run_b = Run.new(id=RunId.new(), task_id=task_id, created_at=clock.now())
     uow.runs.add(run_b)
-    assert ResolveRunSkills(factory, clock).execute(run_b.id)[0].revision_id == v2.id
+    assert resolve_run_skills_without_claim(factory, clock, run_b.id)[0].revision_id == v2.id
 
     rollback = RequestSkillRollback(factory, clock).execute(
         skill_id=skill.id, target_revision_id=v1.id, reason="restore reviewed baseline"
@@ -166,5 +166,5 @@ def test_phase20_safe_loop_e2e_freezes_evidence_reviews_promotes_and_rolls_back(
     assert rollback_result.status.value == "completed"
     run_c = Run.new(id=RunId.new(), task_id=task_id, created_at=clock.now())
     uow.runs.add(run_c)
-    assert ResolveRunSkills(factory, clock).execute(run_c.id)[0].revision_id == v1.id
+    assert resolve_run_skills_without_claim(factory, clock, run_c.id)[0].revision_id == v1.id
     assert uow.skill_revisions.list_for_skill(skill.id) == [v1, v2]

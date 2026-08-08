@@ -41,9 +41,15 @@ from friday.application.skill_registry import (
     ResolveRunSkills,
 )
 from friday.application.worker_coordination import ClaimNextRun
-from friday.domain.identifiers import RunId, SkillRevisionId
+from friday.domain.identifiers import RunId, RunSkillResolutionId, SkillRevisionId
 from friday.domain.run import Run
-from friday.domain.skill import RunSkillBinding, SkillRevision, SkillRevisionSourceKind, SkillStatus
+from friday.domain.skill import (
+    RunSkillBinding,
+    RunSkillResolution,
+    SkillRevision,
+    SkillRevisionSourceKind,
+    SkillStatus,
+)
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.repositories import (
     SkillRevisionRepository,
@@ -311,13 +317,159 @@ def test_real_sqlite_stale_claim_cannot_freeze_skill_resolution(tmp_path: Path) 
     try:
         clock = Clock()
         factory, run_id, claim = _claimed_run(engine, clock, with_skill=True)
-        with pytest.raises(ClaimLost, match="stale or expired"):
+        with pytest.raises(ClaimLost, match="exact active worker claim"):
             ResolveRunSkills(factory, clock).execute(
                 run_id, claim.worker_id, "wrong-token", claim.claim_generation
             )
         with factory() as uow:
             assert uow.run_skill_resolutions.get(run_id) is None
             assert uow.run_skill_bindings.list_for_run(run_id) == []
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_missing_claim_arguments_are_rejected(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory, run_id, claim = _claimed_run(engine, clock, with_skill=True)
+        with pytest.raises(TypeError):
+            ResolveRunSkills(factory, clock).execute(run_id)  # type: ignore[call-arg]
+        with pytest.raises(TypeError):
+            ResolveRunSkills(factory, clock).execute(  # type: ignore[call-arg]
+                run_id, claim.worker_id
+            )
+        with pytest.raises(TypeError):
+            ResolveRunSkills(factory, clock).execute(  # type: ignore[call-arg]
+                run_id, claim.worker_id, claim.claim_token
+            )
+        with factory() as uow:
+            assert uow.run_skill_resolutions.get(run_id) is None
+            assert uow.run_skill_bindings.list_for_run(run_id) == []
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_run_without_queue_row_fails_closed_with_claim_lost(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory = create_unit_of_work_factory(create_session_factory(engine))
+        task_id = CreateTask(factory, clock).execute(CreateTaskCommand("NoQueue", "")).task_id
+        run = Run.new(id=RunId.new(), task_id=task_id, created_at=clock.now())
+        with factory() as uow:
+            uow.runs.add(run)
+            uow.commit()
+        with pytest.raises(ClaimLost, match="exact active worker claim"):
+            ResolveRunSkills(factory, clock).execute(run.id, "resolver-a", "token", 1)
+        with factory() as uow:
+            assert uow.run_skill_resolutions.get(run.id) is None
+            assert uow.run_skill_bindings.list_for_run(run.id) == []
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_wrong_owner_token_or_generation_is_rejected(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory, run_id, claim = _claimed_run(engine, clock, with_skill=True)
+        attempts = [
+            ("intruder", claim.claim_token, claim.claim_generation),
+            (claim.worker_id, "wrong-token", claim.claim_generation),
+            (claim.worker_id, claim.claim_token, claim.claim_generation + 1),
+        ]
+        for worker_id, claim_token, claim_generation in attempts:
+            with pytest.raises(ClaimLost, match="exact active worker claim"):
+                ResolveRunSkills(factory, clock).execute(
+                    run_id, worker_id, claim_token, claim_generation
+                )
+        with factory() as uow:
+            assert uow.run_skill_resolutions.get(run_id) is None
+            assert uow.run_skill_bindings.list_for_run(run_id) == []
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_expired_lease_is_rejected(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory, run_id, claim = _claimed_run(engine, clock, with_skill=True)
+        with engine.begin() as connection:
+            connection.execute(
+                text("UPDATE run_work_items SET lease_expires_at = :past WHERE run_id = :rid"),
+                {"past": "2026-01-02 02:00:00.000000", "rid": str(run_id)},
+            )
+        with pytest.raises(ClaimLost, match="exact active worker claim"):
+            ResolveRunSkills(factory, clock).execute(
+                run_id, claim.worker_id, claim.claim_token, claim.claim_generation
+            )
+        with factory() as uow:
+            assert uow.run_skill_resolutions.get(run_id) is None
+            assert uow.run_skill_bindings.list_for_run(run_id) == []
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_queue_row_deleted_after_initial_read_cannot_publish(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory, run_id, claim = _claimed_run(engine, clock, with_skill=True)
+        # The initial claim read succeeds...
+        with factory() as uow:
+            assert uow.work_queue.is_claim_active(
+                run_id, claim.worker_id, claim.claim_token, claim.claim_generation, clock.now()
+            )
+        # ...then the queue row disappears before publication.  The atomic
+        # claim-fenced INSERT re-reads the queue row, so nothing is published.
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM run_work_items WHERE run_id = :rid"), {"rid": str(run_id)}
+            )
+        with factory() as uow:
+            resolution = RunSkillResolution(RunSkillResolutionId.new(), run_id, clock.now())
+            assert (
+                uow.run_skill_resolutions.add_if_claimed(
+                    resolution,
+                    claim.worker_id,
+                    claim.claim_token,
+                    claim.claim_generation,
+                    clock.now(),
+                )
+                is False
+            )
+            assert uow.run_skill_resolutions.get(run_id) is None
+        with pytest.raises(ClaimLost, match="exact active worker claim"):
+            ResolveRunSkills(factory, clock).execute(
+                run_id, claim.worker_id, claim.claim_token, claim.claim_generation
+            )
+        with factory() as uow:
+            assert uow.run_skill_resolutions.get(run_id) is None
+            assert uow.run_skill_bindings.list_for_run(run_id) == []
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_valid_exact_claim_freeze_is_idempotent(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory, run_id, claim = _claimed_run(engine, clock, with_skill=True)
+        first = ResolveRunSkills(factory, clock).execute(
+            run_id, claim.worker_id, claim.claim_token, claim.claim_generation
+        )
+        assert [binding.position for binding in first] == [1]
+        second = ResolveRunSkills(factory, clock).execute(
+            run_id, claim.worker_id, claim.claim_token, claim.claim_generation
+        )
+        assert [binding.revision_id for binding in second] == [
+            binding.revision_id for binding in first
+        ]
+        with factory() as uow:
+            assert uow.run_skill_resolutions.get(run_id) is not None
+            assert len(uow.run_skill_bindings.list_for_run(run_id)) == 1
     finally:
         engine.dispose()
 

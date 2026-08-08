@@ -291,6 +291,13 @@ class RunSkillResolutionRepository:
         return run_skill_resolution_from_row(row) if row else None
 
     def add(self, resolution: RunSkillResolution) -> None:
+        """Unguarded marker insert for retry-inheritance copies only.
+
+        ``RetryFailedRun`` copies an already-frozen source marker onto a
+        brand-new retry that has no claim yet.  This is not resolution
+        publication: fresh resolution of a run must go through
+        ``add_if_claimed``, the sole claim-fenced publication primitive.
+        """
         self._session.add(run_skill_resolution_to_row(resolution))
 
     def add_if_claimed(

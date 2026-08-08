@@ -182,52 +182,29 @@ class ResolveRunSkills:
     def execute(
         self,
         run_id: RunId,
-        worker_id: str | None = None,
-        claim_token: str | None = None,
-        claim_generation: int | None = None,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
     ) -> list[RunSkillBinding]:
         """Resolve once under the exact active worker claim.
 
-        The optional claim arguments retain compatibility with the small
-        in-memory application fakes used by the pre-Phase-20 unit suite.  A
-        real queued Run must always provide all three; the processor does so.
+        The claim fencing triple is required.  A caller without an exact active
+        queue claim cannot publish a resolution and cannot use this production
+        use case as a read-through resolver for an already-frozen one.  Missing,
+        mismatched, or expired queue state fails closed with ``ClaimLost``.
         Resolution never scans an execution lineage: retries copy only their
         exact source marker/bindings in ``RetryFailedRun``.
         """
-
-        supplied_claim = any(
-            value is not None for value in (worker_id, claim_token, claim_generation)
-        )
-        if supplied_claim and (
-            worker_id is None or claim_token is None or claim_generation is None
-        ):
-            raise ClaimLost("skill resolution requires an exact worker claim")
 
         try:
             with self._uow_factory() as uow:
                 run = uow.runs.get(run_id)
                 if run is None:
                     raise RunNotFound(run_id)
-                # A production resolution repository exposes the conditional
-                # insert below.  In that implementation every resolution is
-                # claim-fenced, including a Run whose queue row is missing.
-                # The deliberately smaller in-memory test repository retains
-                # its legacy no-claim path for pure domain tests.
-                add_if_claimed = getattr(uow.run_skill_resolutions, "add_if_claimed", None)
-                if (
-                    not supplied_claim
-                    and callable(add_if_claimed)
-                    and uow.work_queue.get(run.id) is not None
+                if not uow.work_queue.is_claim_active(
+                    run.id, worker_id, claim_token, claim_generation, self._clock.now()
                 ):
-                    raise ClaimLost("skill resolution requires an active worker claim")
-                if supplied_claim:
-                    assert worker_id is not None
-                    assert claim_token is not None
-                    assert claim_generation is not None
-                    if not uow.work_queue.is_claim_active(
-                        run.id, worker_id, claim_token, claim_generation, self._clock.now()
-                    ):
-                        raise ClaimLost("skill resolution claim is stale or expired")
+                    raise ClaimLost("skill resolution requires an exact active worker claim")
                 existing = uow.run_skill_resolutions.get(run.id)
                 if existing is not None:
                     return uow.run_skill_bindings.list_for_run(run.id)
@@ -250,40 +227,40 @@ class ResolveRunSkills:
                 resolution = RunSkillResolution(
                     RunSkillResolutionId.new(), run.id, self._clock.now()
                 )
-                if supplied_claim and callable(add_if_claimed):
-                    assert worker_id is not None
-                    assert claim_token is not None
-                    assert claim_generation is not None
-                    if not add_if_claimed(
-                        resolution,
-                        worker_id,
-                        claim_token,
-                        claim_generation,
-                        self._clock.now(),
-                    ):
-                        if uow.run_skill_resolutions.get(run.id) is not None:
-                            raise EntityConflict("another resolver won the freeze race")
-                        raise ClaimLost("skill resolution claim is stale or expired")
-                else:
-                    uow.run_skill_resolutions.add(resolution)
+                # The atomic conditional INSERT is the sole publication
+                # boundary: it re-reads the queue row under the exact claim so
+                # a claim that lapsed after the read above can never publish
+                # the freeze marker, and a missing queue row inserts nothing.
+                if not uow.run_skill_resolutions.add_if_claimed(
+                    resolution,
+                    worker_id,
+                    claim_token,
+                    claim_generation,
+                    self._clock.now(),
+                ):
+                    if uow.run_skill_resolutions.get(run.id) is not None:
+                        raise EntityConflict("another resolver won the freeze race")
+                    raise ClaimLost("skill resolution claim is stale or expired")
                 # Marker and every binding share this transaction.  An empty
                 # list is intentional and is still a durable resolved state.
                 uow.run_skill_bindings.add_all(bindings)
-                if supplied_claim:
-                    assert worker_id is not None
-                    assert claim_token is not None
-                    assert claim_generation is not None
-                    if not uow.work_queue.is_claim_active(
-                        run.id, worker_id, claim_token, claim_generation, self._clock.now()
-                    ):
-                        raise ClaimLost("skill resolution claim expired before commit")
+                if not uow.work_queue.is_claim_active(
+                    run.id, worker_id, claim_token, claim_generation, self._clock.now()
+                ):
+                    raise ClaimLost("skill resolution claim expired before commit")
                 uow.commit()
                 return bindings
         except EntityConflict:
             # Two valid resolvers may race on the unique resolution marker.
             # The loser rolls back and reloads the winner; ordinary uniqueness
-            # is not a Run failure and can never expose partial bindings.
+            # is not a Run failure and can never expose partial bindings.  The
+            # winner is readable only while the current caller still holds the
+            # exact active claim.
             with self._uow_factory() as uow:
+                if not uow.work_queue.is_claim_active(
+                    run_id, worker_id, claim_token, claim_generation, self._clock.now()
+                ):
+                    raise ClaimLost("skill resolution claim is stale or expired") from None
                 winner = uow.run_skill_resolutions.get(run_id)
                 if winner is not None:
                     return uow.run_skill_bindings.list_for_run(run_id)

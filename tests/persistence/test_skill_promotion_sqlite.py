@@ -15,7 +15,12 @@ from alembic.config import Config
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import IntegrityError
 
-from friday.application.skill_promotion import ExecuteSkillPromotion
+from friday.application.errors import EntityConflict
+from friday.application.skill_promotion import (
+    CancelSkillPromotion,
+    ExecuteSkillPromotion,
+    RejectSkillPromotion,
+)
 from friday.domain.identifiers import SkillPromotionRequestId
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
@@ -47,6 +52,7 @@ PROMOTION_ID = "00000000-0000-0000-0000-000000000701"
 OTHER_PROMOTION_ID = "00000000-0000-0000-0000-000000000702"
 APPROVAL_ID = "00000000-0000-0000-0000-000000000801"
 OTHER_APPROVAL_ID = "00000000-0000-0000-0000-000000000802"
+NEXT_PROPOSAL_ID = "00000000-0000-0000-0000-000000000403"
 
 BASE_INSTRUCTIONS = "reviewed base instructions"
 CANDIDATE_INSTRUCTIONS = "approved candidate instructions"
@@ -54,6 +60,8 @@ OTHER_CANDIDATE_INSTRUCTIONS = "other candidate instructions"
 BASE_SHA256 = hashlib.sha256(BASE_INSTRUCTIONS.encode("utf-8")).hexdigest()
 CANDIDATE_SHA256 = hashlib.sha256(CANDIDATE_INSTRUCTIONS.encode("utf-8")).hexdigest()
 OTHER_CANDIDATE_SHA256 = hashlib.sha256(OTHER_CANDIDATE_INSTRUCTIONS.encode("utf-8")).hexdigest()
+NEXT_CANDIDATE_INSTRUCTIONS = "next candidate instructions"
+NEXT_CANDIDATE_SHA256 = hashlib.sha256(NEXT_CANDIDATE_INSTRUCTIONS.encode("utf-8")).hexdigest()
 EVIDENCE = {
     "version": 1,
     "entries": [{"id": "manual:e", "kind": "manual", "payload": {"id": "manual:e"}}],
@@ -511,6 +519,65 @@ def _insert_generated_revision(
     )
 
 
+def _insert_next_open_proposal(connection: Connection) -> None:
+    connection.execute(
+        text(
+            "INSERT INTO skill_improvement_proposals ("
+            "id, skill_id, base_revision_id, status, trigger_kind, evidence_snapshot_hash, "
+            "proposed_instructions, proposed_content_sha256, rationale, generator_version, "
+            "candidate_prompt_version, candidate_prompt_sha256, created_at, evidence_snapshot_id"
+            ") VALUES ("
+            ":id, :skill_id, :base_revision_id, 'ready_for_evaluation', 'manual', "
+            ":evidence_hash, :instructions, :content_sha256, 'next', 'next-generator', "
+            ":prompt_version, :prompt_sha256, :at, :snapshot_id"
+            ")"
+        ),
+        {
+            "id": NEXT_PROPOSAL_ID,
+            "skill_id": SKILL_ID,
+            "base_revision_id": BASE_REVISION_ID,
+            "evidence_hash": EVIDENCE_SHA256,
+            "instructions": NEXT_CANDIDATE_INSTRUCTIONS,
+            "content_sha256": NEXT_CANDIDATE_SHA256,
+            "prompt_version": "candidate-prompt-v1",
+            "prompt_sha256": hashlib.sha256(b"next-prompt").hexdigest(),
+            "at": AT,
+            "snapshot_id": SNAPSHOT_ID,
+        },
+    )
+
+
+def _assert_terminal_branch_releases_proposal_slot(
+    engine: Engine,
+    *,
+    expected_promotion_status: str,
+    expected_proposal_status: str,
+    expected_approval_status: str,
+) -> None:
+    with engine.begin() as connection:
+        row = (
+            connection.execute(
+                text(
+                    "SELECT p.status AS promotion_status, pr.status AS proposal_status, "
+                    "a.status AS approval_status "
+                    "FROM skill_promotion_requests p "
+                    "JOIN skill_improvement_proposals pr ON pr.id = p.proposal_id "
+                    "JOIN approval_requests a ON a.id = p.approval_request_id "
+                    "WHERE p.id = :promotion_id"
+                ),
+                {"promotion_id": PROMOTION_ID},
+            )
+            .mappings()
+            .one()
+        )
+        assert dict(row) == {
+            "promotion_status": expected_promotion_status,
+            "proposal_status": expected_proposal_status,
+            "approval_status": expected_approval_status,
+        }
+        _insert_next_open_proposal(connection)
+
+
 def _alter_requested_input(connection: Connection, path: str, value: object) -> None:
     connection.execute(
         text(
@@ -635,6 +702,88 @@ def test_raw_sql_generated_revision_rejects_every_target_substitution(
                 )
                 == 0
             )
+    finally:
+        engine.dispose()
+
+
+def test_sqlite_rejected_promotion_closes_proposal_and_releases_partial_unique_slot(
+    tmp_path: Path,
+) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        with engine.begin() as connection:
+            _seed_valid_promotion(connection)
+            connection.execute(
+                text(
+                    "UPDATE approval_requests SET status = 'pending', resolved_at = NULL, "
+                    "resolver = NULL WHERE id = :approval_id"
+                ),
+                {"approval_id": APPROVAL_ID},
+            )
+        RejectSkillPromotion(
+            create_unit_of_work_factory(create_session_factory(engine)), Clock()
+        ).execute(SkillPromotionRequestId.parse(PROMOTION_ID), "reviewer")
+        _assert_terminal_branch_releases_proposal_slot(
+            engine,
+            expected_promotion_status="rejected",
+            expected_proposal_status="rejected",
+            expected_approval_status="rejected",
+        )
+    finally:
+        engine.dispose()
+
+
+def test_sqlite_stale_promotion_supersedes_proposal_and_releases_partial_unique_slot(
+    tmp_path: Path,
+) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        with engine.begin() as connection:
+            _seed_valid_promotion(connection)
+            connection.execute(
+                text(
+                    "UPDATE skill_promotion_requests SET target_version = 99 "
+                    "WHERE id = :promotion_id"
+                ),
+                {"promotion_id": PROMOTION_ID},
+            )
+        with pytest.raises(EntityConflict, match="stale"):
+            ExecuteSkillPromotion(
+                create_unit_of_work_factory(create_session_factory(engine)), Clock()
+            ).execute(SkillPromotionRequestId.parse(PROMOTION_ID), "operator")
+        _assert_terminal_branch_releases_proposal_slot(
+            engine,
+            expected_promotion_status="stale",
+            expected_proposal_status="superseded",
+            expected_approval_status="approved",
+        )
+    finally:
+        engine.dispose()
+
+
+def test_sqlite_cancelled_promotion_closes_proposal_and_releases_partial_unique_slot(
+    tmp_path: Path,
+) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        with engine.begin() as connection:
+            _seed_valid_promotion(connection)
+            connection.execute(
+                text(
+                    "UPDATE approval_requests SET status = 'pending', resolved_at = NULL, "
+                    "resolver = NULL WHERE id = :approval_id"
+                ),
+                {"approval_id": APPROVAL_ID},
+            )
+        CancelSkillPromotion(
+            create_unit_of_work_factory(create_session_factory(engine)), Clock()
+        ).execute(SkillPromotionRequestId.parse(PROMOTION_ID))
+        _assert_terminal_branch_releases_proposal_slot(
+            engine,
+            expected_promotion_status="cancelled",
+            expected_proposal_status="cancelled",
+            expected_approval_status="cancelled",
+        )
     finally:
         engine.dispose()
 

@@ -393,6 +393,7 @@ def _runtime_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Runtim
         max_turns_per_claim=4,
         max_tool_calls_per_claim=4,
         max_context_chars=4_000,
+        max_skill_context_chars=2_000,
         max_response_bytes=100_000,
         max_yield_seconds=60,
         max_processing_seconds=30.0,

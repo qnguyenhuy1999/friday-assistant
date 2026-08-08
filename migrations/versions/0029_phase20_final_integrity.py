@@ -775,7 +775,59 @@ def _column_exists(table: str, column: str) -> bool:
     return column in {item["name"] for item in sa.inspect(op.get_bind()).get_columns(table)}
 
 
+def _preflight_downgrade_compatibility() -> None:
+    """Abort the 0029 -> 0028 downgrade before any DDL when final-state rows
+    cannot be represented losslessly by revision 0028.
+
+    Downgrade drops 0029-only columns, indexes and tables.  Silently dropping
+    rows that live only in those structures destroys provenance, so refuse the
+    downgrade while any of them are populated.  Every check is a read-only
+    count; nothing is deleted or rewritten here.
+    """
+    _fail_if(
+        "SELECT count(*) FROM skill_revisions "
+        "WHERE source_kind = 'generated' OR promotion_request_id IS NOT NULL",
+        "0029 downgrade aborted: generated or promotion-bound skill revisions "
+        "would lose their canonical approval provenance",
+    )
+    _fail_if(
+        "SELECT count(*) FROM skill_promotion_requests",
+        "0029 downgrade aborted: skill promotion requests would lose their canonical approval link",
+    )
+    _fail_if(
+        "SELECT count(*) FROM skill_rollback_requests",
+        "0029 downgrade aborted: skill rollback requests would lose their canonical approval link",
+    )
+    _fail_if(
+        "SELECT count(*) FROM approval_requests "
+        "WHERE subject_kind IN ('skill_promotion', 'skill_rollback')",
+        "0029 downgrade aborted: skill promotion/rollback approvals would lose "
+        "their subject identity",
+    )
+    _fail_if(
+        "SELECT count(*) FROM approval_requests "
+        "WHERE id IN (SELECT approval_request_id FROM skill_promotion_requests) "
+        "OR id IN (SELECT approval_request_id FROM skill_rollback_requests)",
+        "0029 downgrade aborted: approvals referenced by promotion/rollback "
+        "requests would lose their canonical link",
+    )
+    _fail_if(
+        "SELECT count(*) FROM skill_improvement_work_items",
+        "0029 downgrade aborted: skill improvement work items would be dropped",
+    )
+    _fail_if(
+        "SELECT count(*) FROM skill_evaluation_runs",
+        "0029 downgrade aborted: evaluation runs would lose their 0029-only "
+        "runtime configuration and target provenance",
+    )
+    _fail_if(
+        "SELECT count(*) FROM skill_candidate_evaluations",
+        "0029 downgrade aborted: candidate evaluations would lose their comparison report",
+    )
+
+
 def downgrade() -> None:
+    _preflight_downgrade_compatibility()
     bind = op.get_bind()
     if bind.dialect.name == "sqlite":
         for trigger in (

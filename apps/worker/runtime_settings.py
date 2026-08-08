@@ -87,12 +87,7 @@ class RuntimeSettings:
         if self.max_yield_seconds < 0:
             raise ValueError("max_yield_seconds must be >= 0")
         if self.max_skill_context_chars >= self.max_context_chars:
-            if self.max_context_chars <= 1:
-                raise ValueError("max_skill_context_chars must be below max_context_chars")
-            # Existing deployments commonly configured only a small total
-            # context budget. Preserve that valid configuration while keeping
-            # the effective all-or-nothing Skill budget strictly below it.
-            object.__setattr__(self, "max_skill_context_chars", self.max_context_chars - 1)
+            raise ValueError("max_skill_context_chars must be below max_context_chars")
         if self.tool_max_timeout_seconds < self.tool_timeout_seconds:
             raise ValueError("tool_max_timeout_seconds must be >= tool_timeout_seconds")
 

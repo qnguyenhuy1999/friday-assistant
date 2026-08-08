@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
+from typing import Any, cast
 
 import pytest
 
@@ -17,14 +19,17 @@ from friday.application.skill_improvement import (
     CreateSkillImprovementProposal,
 )
 from friday.application.skill_promotion import (
+    CancelSkillPromotion,
     ExecuteSkillPromotion,
     ExecuteSkillRollback,
+    RejectSkillPromotion,
     RequestSkillPromotion,
     RequestSkillRollback,
     _promotion_fingerprint,
 )
 from friday.application.skill_registry import CreateSkill, CreateSkillRevision
 from friday.domain import (
+    ApprovalStatus,
     EvaluationSuiteStatus,
     PromotionRequestStatus,
     RollbackRequestStatus,
@@ -32,6 +37,7 @@ from friday.domain import (
     SkillEvaluationCaseId,
     SkillEvaluationSuite,
     SkillEvaluationSuiteId,
+    SkillProposalStatus,
     SkillRevisionSourceKind,
 )
 from friday.domain.approval import ApprovalSubjectKind
@@ -39,7 +45,70 @@ from friday.domain.errors import DomainValidationError
 from friday.domain.identifiers import ApprovalRequestId, SkillRevisionId
 from friday.domain.skill import Skill
 from friday.domain.skill_improvement import SkillImprovementProposal
-from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
+from tests.application.fakes import (
+    CountingUnitOfWorkFactory,
+    FakeClock,
+    FakeSkillImprovementProposalRepository,
+    FakeUnitOfWork,
+)
+
+
+class _FailingProposalRepository(FakeSkillImprovementProposalRepository):
+    fail_on_save = False
+
+    def save(self, proposal: SkillImprovementProposal) -> None:
+        if self.fail_on_save:
+            raise RuntimeError("proposal save failed")
+        super().save(proposal)
+
+
+class _TransactionalFailingUnitOfWork(FakeUnitOfWork):
+    """A focused fake that models rollback for the terminal promotion writes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.skill_improvement_proposal_repo = _FailingProposalRepository()
+        self._snapshot: tuple[object, ...] | None = None
+        self._committed = False
+
+    def __enter__(self) -> _TransactionalFailingUnitOfWork:
+        self._snapshot = tuple(
+            deepcopy(repository.items)
+            for repository in (
+                self.skill_promotion_request_repo,
+                self.skill_improvement_proposal_repo,
+                self.approval_repo,
+            )
+        )
+        self._committed = False
+        self.closed = False
+        return self
+
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, traceback: object
+    ) -> None:
+        if exc_type is not None and not self._committed:
+            self.rollback()
+        self.closed = True
+
+    def commit(self) -> None:
+        super().commit()
+        self._committed = True
+
+    def rollback(self) -> None:
+        if self._snapshot is not None:
+            repositories: tuple[Any, ...] = (
+                self.skill_promotion_request_repo,
+                self.skill_improvement_proposal_repo,
+                self.approval_repo,
+            )
+            for repository, items in zip(
+                repositories,
+                self._snapshot,
+                strict=True,
+            ):
+                repository.items = cast(Any, items)
+        self.rollback_count += 1
 
 
 def _promoted_skill_setup(
@@ -109,6 +178,33 @@ def _approve(
     ApproveRequest(factory, clock).execute(ApproveRequestCommand(approval_id, "operator"))
 
 
+def _create_next_proposal(
+    factory: CountingUnitOfWorkFactory,
+    clock: FakeClock,
+    skill: Skill,
+    base_revision_id: SkillRevisionId,
+) -> SkillImprovementProposal:
+    snapshot = CreateSkillEvidenceSnapshot(factory, clock).execute(
+        skill_id=skill.id,
+        base_revision_id=base_revision_id,
+        evidence={"items": [{"id": "next-evidence"}]},
+    )
+    return CreateSkillImprovementProposal(factory, clock).execute(
+        skill_id=skill.id,
+        base_revision_id=base_revision_id,
+        trigger_kind="manual",
+        evidence_snapshot_id=snapshot.id,
+        evidence_snapshot_hash=snapshot.content_sha256,
+        generator_version="brain-candidate-generator-v2",
+        candidate_prompt_version="candidate-prompt-v1",
+        candidate_prompt_sha256="a" * 64,
+        raw_candidate=(
+            '{"version":1,"proposed_instructions":"better-next",'
+            '"rationale":"r","addressed_evidence_ids":["next-evidence"]}'
+        ),
+    )
+
+
 def test_exact_approved_promotion_creates_and_activates_one_generated_revision() -> None:
     uow, clock = FakeUnitOfWork(), FakeClock()
     factory = CountingUnitOfWorkFactory(uow)
@@ -131,6 +227,155 @@ def test_exact_approved_promotion_creates_and_activates_one_generated_revision()
     assert promoted is not None and promoted.version == 2
     stored_skill = uow.skill_repo.get(request.skill_id)
     assert stored_skill is not None and stored_skill.active_revision_id == promoted.id
+    stored_proposal = uow.skill_improvement_proposals.get(request.proposal_id)
+    assert stored_proposal is not None and stored_proposal.status is SkillProposalStatus.PROMOTED
+
+
+def test_rejected_pending_promotion_closes_proposal_and_releases_open_slot() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill, proposal = _promoted_skill_setup(uow, factory, clock)
+
+    request = RequestSkillPromotion(factory, clock).execute(proposal.id)
+    rejected = RejectSkillPromotion(factory, clock).execute(request.id, "reviewer")
+
+    assert rejected.status is PromotionRequestStatus.REJECTED
+    stored_proposal = uow.skill_improvement_proposals.get(proposal.id)
+    assert stored_proposal is not None and stored_proposal.status is SkillProposalStatus.REJECTED
+    assert request.approval_request_id is not None
+    approval = uow.approvals.get(request.approval_request_id)
+    assert approval is not None and approval.status is ApprovalStatus.REJECTED
+    next_proposal = _create_next_proposal(factory, clock, skill, proposal.base_revision_id)
+    assert next_proposal.status is SkillProposalStatus.READY_FOR_EVALUATION
+
+
+def test_stale_promotion_closes_proposal_as_superseded_and_releases_open_slot() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill, proposal = _promoted_skill_setup(uow, factory, clock)
+
+    request = RequestSkillPromotion(factory, clock).execute(proposal.id)
+    assert request.approval_request_id is not None
+    _approve(factory, clock, request.approval_request_id)
+    uow.skill_promotion_requests.save(replace(request, target_revision_id=SkillRevisionId.new()))
+
+    with pytest.raises(EntityConflict, match="stale"):
+        ExecuteSkillPromotion(factory, clock).execute(request.id, "operator")
+
+    stored_request = uow.skill_promotion_requests.get(request.id)
+    stored_proposal = uow.skill_improvement_proposals.get(proposal.id)
+    assert stored_request is not None and stored_request.status is PromotionRequestStatus.STALE
+    assert stored_proposal is not None and stored_proposal.status is SkillProposalStatus.SUPERSEDED
+    assert request.approval_request_id is not None
+    approval = uow.approvals.get(request.approval_request_id)
+    assert approval is not None and approval.status is ApprovalStatus.APPROVED
+    assert not approval.is_consumed
+    next_proposal = _create_next_proposal(factory, clock, skill, proposal.base_revision_id)
+    assert next_proposal.status is SkillProposalStatus.READY_FOR_EVALUATION
+
+
+def test_cancelled_pending_promotion_closes_proposal_and_releases_open_slot() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill, proposal = _promoted_skill_setup(uow, factory, clock)
+
+    request = RequestSkillPromotion(factory, clock).execute(proposal.id)
+    cancelled = CancelSkillPromotion(factory, clock).execute(request.id)
+
+    assert cancelled.status is PromotionRequestStatus.CANCELLED
+    stored_proposal = uow.skill_improvement_proposals.get(proposal.id)
+    assert stored_proposal is not None and stored_proposal.status is SkillProposalStatus.CANCELLED
+    assert request.approval_request_id is not None
+    approval = uow.approvals.get(request.approval_request_id)
+    assert approval is not None and approval.status is ApprovalStatus.CANCELLED
+    next_proposal = _create_next_proposal(factory, clock, skill, proposal.base_revision_id)
+    assert next_proposal.status is SkillProposalStatus.READY_FOR_EVALUATION
+
+
+def test_failure_between_terminal_promotion_writes_rolls_back_both_rows() -> None:
+    uow, clock = _TransactionalFailingUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    _, proposal = _promoted_skill_setup(uow, factory, clock)
+    request = RequestSkillPromotion(factory, clock).execute(proposal.id)
+    assert request.approval_request_id is not None
+    approval = uow.approvals.get(request.approval_request_id)
+    assert approval is not None
+    approval_before = deepcopy(approval)
+    proposal_before = uow.skill_improvement_proposals.get(proposal.id)
+    assert proposal_before is not None
+    commits_before = uow.commit_count
+    rollbacks_before = uow.rollback_count
+    cast(_FailingProposalRepository, uow.skill_improvement_proposal_repo).fail_on_save = True
+
+    with pytest.raises(RuntimeError, match="proposal save failed"):
+        RejectSkillPromotion(factory, clock).execute(request.id, "reviewer")
+
+    assert uow.skill_promotion_requests.get(request.id) == request
+    assert uow.skill_improvement_proposals.get(proposal.id) == proposal_before
+    assert uow.approvals.get(approval.id) == approval_before
+    assert uow.commit_count == commits_before
+    assert uow.rollback_count == rollbacks_before + 1
+
+
+def test_repeated_rejected_promotion_command_is_rejected_without_changes() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    _, proposal = _promoted_skill_setup(uow, factory, clock)
+    request = RequestSkillPromotion(factory, clock).execute(proposal.id)
+    rejected = RejectSkillPromotion(factory, clock).execute(request.id, "reviewer")
+    stored_proposal = uow.skill_improvement_proposals.get(proposal.id)
+    assert stored_proposal is not None
+    assert request.approval_request_id is not None
+    approval = uow.approvals.get(request.approval_request_id)
+    assert approval is not None
+
+    with pytest.raises(EntityConflict, match="not pending"):
+        RejectSkillPromotion(factory, clock).execute(request.id, "another-reviewer")
+
+    assert uow.skill_promotion_requests.get(request.id) == rejected
+    assert uow.skill_improvement_proposals.get(proposal.id) == stored_proposal
+    assert uow.approvals.get(approval.id) == approval
+
+
+def test_repeated_promoted_promotion_command_is_rejected_without_changes() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    _, proposal = _promoted_skill_setup(uow, factory, clock)
+    request = RequestSkillPromotion(factory, clock).execute(proposal.id)
+    assert request.approval_request_id is not None
+    _approve(factory, clock, request.approval_request_id)
+    completed = ExecuteSkillPromotion(factory, clock).execute(request.id, "operator")
+    stored_proposal = uow.skill_improvement_proposals.get(proposal.id)
+    assert stored_proposal is not None
+    stored_skill = uow.skill_repo.get(request.skill_id)
+    assert stored_skill is not None
+
+    with pytest.raises(EntityConflict, match="not pending"):
+        ExecuteSkillPromotion(factory, clock).execute(request.id, "operator")
+
+    assert uow.skill_promotion_requests.get(request.id) == completed
+    assert uow.skill_improvement_proposals.get(proposal.id) == stored_proposal
+    assert uow.skill_repo.get(request.skill_id) == stored_skill
+
+
+def test_repeated_cancelled_promotion_command_is_rejected_without_changes() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    _, proposal = _promoted_skill_setup(uow, factory, clock)
+    request = RequestSkillPromotion(factory, clock).execute(proposal.id)
+    cancelled = CancelSkillPromotion(factory, clock).execute(request.id)
+    stored_proposal = uow.skill_improvement_proposals.get(proposal.id)
+    assert stored_proposal is not None
+    assert request.approval_request_id is not None
+    approval = uow.approvals.get(request.approval_request_id)
+    assert approval is not None
+
+    with pytest.raises(EntityConflict, match="not pending"):
+        CancelSkillPromotion(factory, clock).execute(request.id)
+
+    assert uow.skill_promotion_requests.get(request.id) == cancelled
+    assert uow.skill_improvement_proposals.get(proposal.id) == stored_proposal
+    assert uow.approvals.get(approval.id) == approval
 
 
 def test_promoted_request_rejects_a_different_promoted_revision_identity() -> None:

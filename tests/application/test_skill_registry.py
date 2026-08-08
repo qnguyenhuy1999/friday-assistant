@@ -14,7 +14,6 @@ from friday.application.skill_registry import (
     CreateSkillRevision,
     GetSkill,
     ReplaceTaskSkills,
-    ResolveRunSkills,
 )
 from friday.application.skill_usage import AddSkillRunFeedback, MaterializeSkillUsage
 from friday.domain.errors import DomainValidationError
@@ -23,6 +22,7 @@ from friday.domain.run import Run
 from friday.domain.skill import SkillRevisionSourceKind, SkillStatus
 from friday.domain.skill_usage import SkillFeedbackRating, SkillUsageOutcome
 from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
+from tests.application.resolve_helpers import resolve_run_skills_without_claim
 
 
 def test_revision_lifecycle_is_explicit_and_immutable() -> None:
@@ -129,7 +129,7 @@ def test_task_bindings_freeze_active_revision_and_new_retry_resolves_current_sta
     run = Run.new(id=RunId.new(), task_id=task_id, created_at=clock.now())
     uow.runs.add(run)
 
-    frozen = ResolveRunSkills(factory, clock).execute(run.id)
+    frozen = resolve_run_skills_without_claim(factory, clock, run.id)
     assert [(x.skill_id, x.revision_id, x.position) for x in frozen] == [(skill.id, v1.id, 1)]
     assert uow.run_skill_resolutions.get(run.id) is not None
 
@@ -137,7 +137,7 @@ def test_task_bindings_freeze_active_revision_and_new_retry_resolves_current_sta
         skill_id=skill.id, instructions="use v2", source_kind=SkillRevisionSourceKind.OPERATOR
     )
     ActivateSkillRevision(factory, clock).execute(skill_id=skill.id, revision_id=v2.id)
-    assert ResolveRunSkills(factory, clock).execute(run.id)[0].revision_id == v1.id
+    assert resolve_run_skills_without_claim(factory, clock, run.id)[0].revision_id == v1.id
 
     retry = Run.new(
         id=RunId.new(), task_id=task_id, execution_id=run.execution_id, created_at=clock.now()
@@ -145,7 +145,7 @@ def test_task_bindings_freeze_active_revision_and_new_retry_resolves_current_sta
     uow.runs.add(retry)
     # Retry lineage inheritance belongs to RetryFailedRun, which copies the
     # exact source freeze. A bare resolver must never scan sibling Runs.
-    assert ResolveRunSkills(factory, clock).execute(retry.id)[0].revision_id == v2.id
+    assert resolve_run_skills_without_claim(factory, clock, retry.id)[0].revision_id == v2.id
 
 
 def test_task_binding_replacement_rejects_unresolvable_and_duplicate_skills() -> None:
@@ -179,7 +179,7 @@ def test_terminal_frozen_run_materializes_idempotent_factual_usage_and_feedback(
     ReplaceTaskSkills(factory, clock).execute(task_id=task_id, skill_ids=[skill.id])
     run = Run.new(id=RunId.new(), task_id=task_id, created_at=clock.now())
     uow.runs.add(run)
-    ResolveRunSkills(factory, clock).execute(run.id)
+    resolve_run_skills_without_claim(factory, clock, run.id)
     run.start(clock.now())
     run.succeed(clock.now())
 
@@ -199,3 +199,24 @@ def test_terminal_frozen_run_materializes_idempotent_factual_usage_and_feedback(
     )
     assert feedback.revision_id == revision.id
     assert records[0].outcome is SkillUsageOutcome.SUCCEEDED
+
+
+def test_no_claim_resolution_helper_is_not_importable_from_production_packages() -> None:
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    offenders: list[str] = []
+    for base in ("src", "apps"):
+        for path in (root / base).rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("tests"):
+                    offenders.append(f"{path.relative_to(root)}: from {node.module} import")
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.startswith("tests"):
+                            offenders.append(f"{path.relative_to(root)}: import {alias.name}")
+    assert not offenders, "production modules must never import test-only helpers:\n" + "\n".join(
+        offenders
+    )

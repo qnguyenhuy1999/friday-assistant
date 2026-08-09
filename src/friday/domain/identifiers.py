@@ -155,3 +155,19 @@ class SkillEvidenceSnapshotId(_Id):
 
 class SkillImprovementWorkId(_Id):
     pass
+
+
+class AgentId(_Id):
+    pass
+
+
+class AgentRevisionId(_Id):
+    pass
+
+
+class RunAgentResolutionId(_Id):
+    pass
+
+
+class DelegationRequestId(_Id):
+    pass

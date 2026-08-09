@@ -18,12 +18,16 @@ from friday.application.memory.ports import (
     MemoryRetrievalRecordRepository,
 )
 from friday.application.ports import (
+    AgentRepository,
+    AgentRevisionRepository,
     ApprovalRepository,
     ArtifactRepository,
     ConversationRepository,
     ConversationTurnRepository,
+    DelegationRequestRepository,
     DeliveryAttemptRepository,
     OutboundDeliveryRepository,
+    RunAgentResolutionRepository,
     RunEventStore,
     RunRepository,
     RunStepRepository,
@@ -35,15 +39,18 @@ from friday.application.ports import (
     ScheduleRepository,
     SkillRepository,
     SkillRevisionRepository,
+    TaskAgentBindingRepository,
     TaskEventStore,
     TaskRepository,
     ToolInvocationRepository,
     validate_delivery_attempt_history_limit,
 )
+from friday.domain.agent import Agent, AgentRevision, RunAgentResolution, TaskAgentBinding
 from friday.domain.approval import ApprovalRequest, ApprovalStatus
 from friday.domain.artifact import Artifact
 from friday.domain.conversation import Conversation
 from friday.domain.conversation_turn import ConversationTurn
+from friday.domain.delegation import DelegationRequest
 from friday.domain.delivery_attempt import (
     DeliveryAttempt,
     DeliveryAttemptOutcome,
@@ -51,10 +58,13 @@ from friday.domain.delivery_attempt import (
 )
 from friday.domain.event import RunEvent, RunEventType
 from friday.domain.identifiers import (
+    AgentId,
+    AgentRevisionId,
     ApprovalRequestId,
     ArtifactId,
     ConversationId,
     ConversationTurnId,
+    DelegationRequestId,
     DeliveryAttemptId,
     DeliveryId,
     RunId,
@@ -1330,6 +1340,100 @@ class FakeMemoryRetrievalRecordRepository:
         self.added.append(record)
 
 
+class FakeAgentRepository:
+    def __init__(self) -> None:
+        self.items: dict[AgentId, Agent] = {}
+
+    def add(self, agent: Agent) -> None:
+        self.items[agent.id] = agent
+
+    def get(self, agent_id: AgentId) -> Agent | None:
+        return self.items.get(agent_id)
+
+    def get_by_key(self, key: str) -> Agent | None:
+        return next((x for x in self.items.values() if x.key == key), None)
+
+    def save(self, agent: Agent) -> None:
+        self.items[agent.id] = agent
+
+    def list(self, limit: int) -> list[Agent]:
+        return list(self.items.values())[:limit]
+
+
+class FakeAgentRevisionRepository:
+    def __init__(self) -> None:
+        self.items: dict[AgentRevisionId, AgentRevision] = {}
+
+    def add(self, value: AgentRevision) -> None:
+        self.items[value.id] = value
+
+    def get(self, value: AgentRevisionId) -> AgentRevision | None:
+        return self.items.get(value)
+
+    def list_for_agent(self, agent_id: AgentId) -> list[AgentRevision]:
+        return sorted(
+            (x for x in self.items.values() if x.agent_id == agent_id), key=lambda x: x.version
+        )
+
+    def next_version(self, agent_id: AgentId) -> int:
+        return len(self.list_for_agent(agent_id)) + 1
+
+
+class FakeTaskAgentBindingRepository:
+    def __init__(self) -> None:
+        self.items: dict[TaskId, TaskAgentBinding] = {}
+
+    def get(self, task_id: TaskId) -> TaskAgentBinding | None:
+        return self.items.get(task_id)
+
+    def replace(self, task_id: TaskId, binding: TaskAgentBinding | None) -> None:
+        if binding is None:
+            self.items.pop(task_id, None)
+        else:
+            self.items[task_id] = binding
+
+
+class FakeRunAgentResolutionRepository:
+    def __init__(self) -> None:
+        self.items: dict[RunId, RunAgentResolution] = {}
+
+    def get(self, run_id: RunId) -> RunAgentResolution | None:
+        return self.items.get(run_id)
+
+    def add(self, resolution: RunAgentResolution) -> None:
+        self.items[resolution.run_id] = resolution
+
+    def add_if_claimed(
+        self,
+        resolution: RunAgentResolution,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        if resolution.run_id in self.items:
+            return False
+        self.add(resolution)
+        return True
+
+
+class FakeDelegationRequestRepository:
+    def __init__(self) -> None:
+        self.items: dict[DelegationRequestId, DelegationRequest] = {}
+
+    def add(self, request: DelegationRequest) -> None:
+        self.items[request.id] = request
+
+    def get(self, delegation_id: DelegationRequestId) -> DelegationRequest | None:
+        return self.items.get(delegation_id)
+
+    def list_for_run(self, run_id: RunId) -> list[DelegationRequest]:
+        return sorted(
+            (x for x in self.items.values() if x.parent_run_id == run_id),
+            key=lambda x: x.created_at,
+        )
+
+
 class FakeSkillRepository:
     def __init__(self) -> None:
         self.items: dict[SkillId, Skill] = {}
@@ -1660,6 +1764,11 @@ class FakeSkillRollbackRequestRepository:
 class FakeUnitOfWork:
     def __init__(self) -> None:
         self.task_repo = FakeTaskRepository()
+        self.agent_repo = FakeAgentRepository()
+        self.agent_revision_repo = FakeAgentRevisionRepository()
+        self.task_agent_binding_repo = FakeTaskAgentBindingRepository()
+        self.run_agent_resolution_repo = FakeRunAgentResolutionRepository()
+        self.delegation_request_repo = FakeDelegationRequestRepository()
         self.skill_repo = FakeSkillRepository()
         self.skill_revision_repo = FakeSkillRevisionRepository()
         self.task_skill_binding_repo = FakeTaskSkillBindingRepository()
@@ -1706,6 +1815,26 @@ class FakeUnitOfWork:
     @property
     def tasks(self) -> TaskRepository:
         return self.task_repo
+
+    @property
+    def agents(self) -> AgentRepository:
+        return self.agent_repo
+
+    @property
+    def agent_revisions(self) -> AgentRevisionRepository:
+        return self.agent_revision_repo
+
+    @property
+    def task_agent_bindings(self) -> TaskAgentBindingRepository:
+        return self.task_agent_binding_repo
+
+    @property
+    def run_agent_resolutions(self) -> RunAgentResolutionRepository:
+        return self.run_agent_resolution_repo
+
+    @property
+    def delegation_requests(self) -> DelegationRequestRepository:
+        return self.delegation_request_repo
 
     @property
     def skills(self) -> SkillRepository:

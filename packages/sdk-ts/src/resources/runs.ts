@@ -1,9 +1,15 @@
 import {
   validateRun,
+  validateRunAgentResolution,
   validateRunPage,
+  validateDelegationRequest,
+  validateDelegationRequests,
+  type CreateDelegationRequestBody,
+  type DelegationRequest,
   type Failure,
   type Page,
   type Run,
+  type RunAgentResolution,
   type RunResult,
   type RunSkillBinding,
   type SkillFeedback,
@@ -75,6 +81,28 @@ export class RunsResource {
       method: "GET",
       path: `/v1/runs/${runId}/skills/${skillId}/feedback`,
       validate: validateSkillFeedback,
+    });
+  }
+  getAgent(runId: string) {
+    return this.http.requestJson<RunAgentResolution>({
+      method: "GET",
+      path: `/v1/runs/${runId}/agent`,
+      validate: validateRunAgentResolution,
+    });
+  }
+  createDelegation(runId: string, input: CreateDelegationRequestBody) {
+    return this.http.requestJson<DelegationRequest>({
+      method: "POST",
+      path: `/v1/runs/${runId}/delegations`,
+      body: input,
+      validate: validateDelegationRequest,
+    });
+  }
+  listDelegations(runId: string) {
+    return this.http.requestJson<DelegationRequest[]>({
+      method: "GET",
+      path: `/v1/runs/${runId}/delegations`,
+      validate: validateDelegationRequests,
     });
   }
   listForTask(id: string, p: ListRunsParams = {}) {

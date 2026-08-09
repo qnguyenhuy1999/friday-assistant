@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { FridayClient } from "./client";
 import {
+  AgentsResource,
   ApprovalsResource,
   ArtifactsResource,
+  DelegationsResource,
   EventsResource,
   HealthResource,
   RunsResource,
@@ -24,6 +26,8 @@ describe("FridayClient", () => {
     expect(friday.events).toBeInstanceOf(EventsResource);
     expect(friday.health).toBeInstanceOf(HealthResource);
     expect(friday.skills).toBeInstanceOf(SkillsResource);
+    expect(friday.agents).toBeInstanceOf(AgentsResource);
+    expect(friday.delegations).toBeInstanceOf(DelegationsResource);
   });
 
   it("routes every resource through the one configured base URL", async () => {

@@ -218,6 +218,24 @@ EXPECTED_OPERATIONS = {
     ("POST", "/v1/tool-invocations/{invocation_id}/fail", "markToolInvocationFailed"),
     ("POST", "/v1/tool-invocations/{invocation_id}/cancel", "cancelToolInvocation"),
     ("GET", "/v1/artifacts/{artifact_id}", "getArtifact"),
+    ("POST", "/v1/agents", "createAgent"),
+    ("GET", "/v1/agents", "listAgents"),
+    ("GET", "/v1/agents/{agent_id}", "getAgent"),
+    ("POST", "/v1/agents/{agent_id}/revisions", "createAgentRevision"),
+    ("GET", "/v1/agents/{agent_id}/revisions", "listAgentRevisions"),
+    (
+        "POST",
+        "/v1/agents/{agent_id}/revisions/{revision_id}/activate",
+        "activateAgentRevision",
+    ),
+    ("POST", "/v1/agents/{agent_id}/disable", "disableAgent"),
+    ("POST", "/v1/agents/{agent_id}/archive", "archiveAgent"),
+    ("GET", "/v1/tasks/{task_id}/agent", "getTaskAgent"),
+    ("PUT", "/v1/tasks/{task_id}/agent", "putTaskAgent"),
+    ("GET", "/v1/runs/{run_id}/agent", "getRunAgent"),
+    ("POST", "/v1/runs/{run_id}/delegations", "createDelegationRequest"),
+    ("GET", "/v1/runs/{run_id}/delegations", "listDelegationRequestsForRun"),
+    ("GET", "/v1/delegations/{delegation_id}", "getDelegationRequest"),
 }
 
 

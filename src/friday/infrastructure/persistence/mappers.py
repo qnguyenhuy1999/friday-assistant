@@ -15,7 +15,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from friday.application.errors import SkillIntegrityFailed
+from friday.application.errors import AgentIntegrityFailed, SkillIntegrityFailed
 from friday.application.memory.models import (
     IndexSnapshot,
     IndexState,
@@ -25,6 +25,12 @@ from friday.application.memory.models import (
 )
 from friday.application.ports import RunWorkItemView
 from friday.domain import (
+    Agent,
+    AgentId,
+    AgentRevision,
+    AgentRevisionId,
+    AgentRevisionSourceKind,
+    AgentStatus,
     ApprovalCategory,
     ApprovalRequest,
     ApprovalRequestId,
@@ -40,6 +46,9 @@ from friday.domain import (
     ConversationInputMode,
     ConversationTurn,
     ConversationTurnId,
+    DelegationRequest,
+    DelegationRequestId,
+    DelegationStatus,
     DeliveryAttempt,
     DeliveryAttemptId,
     DeliveryAttemptOutcome,
@@ -50,6 +59,8 @@ from friday.domain import (
     FailureCause,
     OutboundDelivery,
     Run,
+    RunAgentResolution,
+    RunAgentResolutionId,
     RunEvent,
     RunEventId,
     RunEventType,
@@ -99,6 +110,7 @@ from friday.domain import (
     SkillUsageRecord,
     SkillUsageRecordId,
     Task,
+    TaskAgentBinding,
     TaskEvent,
     TaskEventId,
     TaskEventType,
@@ -118,15 +130,19 @@ from friday.domain.skill import Skill, SkillRevision, SkillRevisionSourceKind, S
 from friday.domain.skill_promotion import PromotionRequestStatus, RollbackRequestStatus
 from friday.domain.tool_provenance import ToolProvenance
 from friday.infrastructure.persistence.models import (
+    AgentRevisionRow,
+    AgentRow,
     ApprovalRequestRow,
     ArtifactRow,
     ConversationRow,
     ConversationTurnRow,
+    DelegationRequestRow,
     DeliveryAttemptRow,
     MemoryIndexSnapshotRow,
     MemoryRetrievalItemRow,
     MemoryRetrievalRecordRow,
     OutboundDeliveryRow,
+    RunAgentResolutionRow,
     RunEventRow,
     RunRow,
     RunSkillBindingRow,
@@ -152,6 +168,7 @@ from friday.infrastructure.persistence.models import (
     SkillRow,
     SkillRunFeedbackRow,
     SkillUsageRecordRow,
+    TaskAgentBindingRow,
     TaskEventRow,
     TaskRow,
     TaskSkillBindingRow,
@@ -741,6 +758,149 @@ def skill_evidence_snapshot_from_row(row: SkillEvidenceSnapshotRow) -> SkillEvid
 
 def _failure_to_dict(failure: Failure | None) -> dict[str, Any] | None:
     return asdict(failure) if failure is not None else None
+
+
+def agent_to_row(value: Agent) -> AgentRow:
+    return AgentRow(
+        id=str(value.id),
+        key=value.key,
+        display_name=value.display_name,
+        description=value.description,
+        status=value.status.value,
+        active_revision_id=str(value.active_revision_id) if value.active_revision_id else None,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+    )
+
+
+def agent_from_row(row: AgentRow) -> Agent:
+    return Agent(
+        _id=AgentId.parse(row.id),
+        _key=row.key,
+        _display_name=row.display_name,
+        _description=row.description,
+        _status=AgentStatus(row.status),
+        _active_revision_id=AgentRevisionId.parse(row.active_revision_id)
+        if row.active_revision_id
+        else None,
+        _created_at=read_back_utc(row.created_at),
+        _updated_at=read_back_utc(row.updated_at),
+    )
+
+
+def agent_revision_to_row(value: AgentRevision) -> AgentRevisionRow:
+    return AgentRevisionRow(
+        id=str(value.id),
+        agent_id=str(value.agent_id),
+        version=value.version,
+        instructions=value.instructions,
+        runtime_kind=value.runtime_kind,
+        runtime_config=value.runtime_config,
+        content_sha256=value.content_sha256,
+        source_kind=value.source_kind.value,
+        created_at=value.created_at,
+    )
+
+
+def agent_revision_from_row(row: AgentRevisionRow) -> AgentRevision:
+    expected = hashlib.sha256(
+        json.dumps(
+            {
+                "instructions": row.instructions,
+                "runtime_kind": row.runtime_kind,
+                "runtime_config": row.runtime_config,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if expected != row.content_sha256:
+        raise AgentIntegrityFailed()
+    return AgentRevision(
+        AgentRevisionId.parse(row.id),
+        AgentId.parse(row.agent_id),
+        row.version,
+        row.instructions,
+        row.runtime_kind,
+        cast(JsonValue, row.runtime_config),
+        row.content_sha256,
+        AgentRevisionSourceKind(row.source_kind),
+        read_back_utc(row.created_at),
+    )
+
+
+def task_agent_binding_to_row(value: TaskAgentBinding) -> TaskAgentBindingRow:
+    return TaskAgentBindingRow(
+        task_id=str(value.task_id), agent_id=str(value.agent_id), created_at=value.created_at
+    )
+
+
+def task_agent_binding_from_row(row: TaskAgentBindingRow) -> TaskAgentBinding:
+    return TaskAgentBinding(
+        TaskId.parse(row.task_id), AgentId.parse(row.agent_id), read_back_utc(row.created_at)
+    )
+
+
+def run_agent_resolution_to_row(value: RunAgentResolution) -> RunAgentResolutionRow:
+    return RunAgentResolutionRow(
+        id=str(value.id),
+        run_id=str(value.run_id),
+        agent_id=str(value.agent_id),
+        revision_id=str(value.revision_id),
+        resolved_at=value.resolved_at,
+    )
+
+
+def run_agent_resolution_from_row(row: RunAgentResolutionRow) -> RunAgentResolution:
+    return RunAgentResolution(
+        RunAgentResolutionId.parse(row.id),
+        RunId.parse(row.run_id),
+        AgentId.parse(row.agent_id),
+        AgentRevisionId.parse(row.revision_id),
+        read_back_utc(row.resolved_at),
+    )
+
+
+def delegation_request_to_row(value: DelegationRequest) -> DelegationRequestRow:
+    return DelegationRequestRow(
+        id=str(value.id),
+        parent_run_id=str(value.parent_run_id),
+        parent_run_step_id=str(value.parent_run_step_id) if value.parent_run_step_id else None,
+        target_agent_id=str(value.target_agent_id),
+        objective=value.objective,
+        input_payload=value.input_payload,
+        expected_output_contract=value.expected_output_contract,
+        authorization_fingerprint=value.authorization_fingerprint,
+        status=value.status.value,
+        child_task_id=str(value.child_task_id) if value.child_task_id else None,
+        child_run_id=str(value.child_run_id) if value.child_run_id else None,
+        created_at=value.created_at,
+        started_at=value.started_at,
+        completed_at=value.completed_at,
+        failure_code=value.failure_code,
+    )
+
+
+def delegation_request_from_row(row: DelegationRequestRow) -> DelegationRequest:
+    return DelegationRequest(
+        id=DelegationRequestId.parse(row.id),
+        parent_run_id=RunId.parse(row.parent_run_id),
+        target_agent_id=AgentId.parse(row.target_agent_id),
+        objective=row.objective,
+        input_payload=cast(JsonValue, row.input_payload),
+        expected_output_contract=row.expected_output_contract,
+        authorization_fingerprint=row.authorization_fingerprint,
+        status=DelegationStatus(row.status),
+        created_at=read_back_utc(row.created_at),
+        parent_run_step_id=RunStepId.parse(row.parent_run_step_id)
+        if row.parent_run_step_id
+        else None,
+        child_task_id=TaskId.parse(row.child_task_id) if row.child_task_id else None,
+        child_run_id=RunId.parse(row.child_run_id) if row.child_run_id else None,
+        started_at=read_back_utc(row.started_at) if row.started_at else None,
+        completed_at=read_back_utc(row.completed_at) if row.completed_at else None,
+        failure_code=row.failure_code,
+    )
 
 
 def read_back_utc(value: datetime) -> datetime:

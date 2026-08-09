@@ -68,6 +68,11 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "skill_improvement_policies",
             "skill_evidence_snapshots",
             "skill_improvement_work_items",
+            "agents",
+            "agent_revisions",
+            "task_agent_bindings",
+            "run_agent_resolutions",
+            "delegation_requests",
             "alembic_version",
         }
         assert "execution_id" in {column["name"] for column in inspector.get_columns("runs")}

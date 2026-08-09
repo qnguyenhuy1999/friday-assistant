@@ -13,6 +13,7 @@ from apps.api.pagination import (
     decode_cursor,
     page_from_query,
 )
+from apps.api.schemas.agents import PutTaskAgentBody, TaskAgentBindingResponse
 from apps.api.schemas.skills import ReplaceTaskSkillsBody, TaskSkillBindingResponse
 from apps.api.schemas.tasks import (
     CreateTaskBody,
@@ -21,6 +22,7 @@ from apps.api.schemas.tasks import (
     TaskPageResponse,
     TaskResponse,
 )
+from friday.application.agent_registry import ReplaceTaskAgent
 from friday.application.commands import (
     CancelTaskCommand,
     CompleteTaskCommand,
@@ -35,8 +37,9 @@ from friday.application.results import TaskResult
 from friday.application.skill_registry import ReplaceTaskSkills
 from friday.application.start_run import StartRun
 from friday.application.task_lifecycle import CancelTask, CompleteTask, FailTask, GetTask, ListTasks
+from friday.domain.agent import TaskAgentBinding
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import SkillId, TaskId
+from friday.domain.identifiers import AgentId, SkillId, TaskId
 from friday.domain.skill import TaskSkillBinding
 
 router = APIRouter(prefix="/v1/tasks", tags=["tasks"])
@@ -84,6 +87,46 @@ def replace_task_skills(
         skill_ids=[SkillId.parse(value) for value in body.skill_ids],
     )
     return [_skill_binding_response(x) for x in bindings]
+
+
+def _agent_binding_response(binding: TaskAgentBinding) -> TaskAgentBindingResponse:
+    return TaskAgentBindingResponse(
+        task_id=str(binding.task_id),
+        agent_id=str(binding.agent_id),
+        created_at=binding.created_at,
+    )
+
+
+@router.get(
+    "/{task_id}/agent",
+    response_model=TaskAgentBindingResponse | None,
+    operation_id="getTaskAgent",
+)
+def get_task_agent(task_id: UUID, uow_factory: UowDependency) -> TaskAgentBindingResponse | None:
+    with uow_factory() as uow:
+        typed_task_id = TaskId.parse(str(task_id))
+        if uow.tasks.get(typed_task_id) is None:
+            raise TaskNotFound(typed_task_id)
+        binding = uow.task_agent_bindings.get(typed_task_id)
+        return _agent_binding_response(binding) if binding is not None else None
+
+
+@router.put(
+    "/{task_id}/agent",
+    response_model=TaskAgentBindingResponse | None,
+    operation_id="putTaskAgent",
+)
+def put_task_agent(
+    task_id: UUID,
+    body: PutTaskAgentBody,
+    uow_factory: UowDependency,
+    clock: ClockDependency,
+) -> TaskAgentBindingResponse | None:
+    binding = ReplaceTaskAgent(uow_factory, clock).execute(
+        task_id=TaskId.parse(str(task_id)),
+        agent_id=AgentId.parse(body.agent_id) if body.agent_id else None,
+    )
+    return _agent_binding_response(binding) if binding is not None else None
 
 
 def _task_response(result: TaskResult) -> TaskResponse:

@@ -28,14 +28,18 @@ from friday.application.errors import (
 )
 from friday.application.ports import UnitOfWork, UnitOfWorkFactory
 from friday.infrastructure.persistence.repositories import (
+    AgentRepository,
+    AgentRevisionRepository,
     ApprovalRepository,
     ArtifactRepository,
     ConversationRepository,
     ConversationTurnRepository,
+    DelegationRequestRepository,
     DeliveryAttemptRepository,
     MemoryIndexSnapshotRepository,
     MemoryRetrievalRecordRepository,
     OutboundDeliveryRepository,
+    RunAgentResolutionRepository,
     RunEventStore,
     RunRepository,
     RunSkillBindingRepository,
@@ -60,6 +64,7 @@ from friday.infrastructure.persistence.repositories import (
     SkillRollbackRequestRepository,
     SkillRunFeedbackRepository,
     SkillUsageRecordRepository,
+    TaskAgentBindingRepository,
     TaskEventStore,
     TaskRepository,
     TaskSkillBindingRepository,
@@ -82,6 +87,11 @@ class SqlAlchemyUnitOfWork:
     def __init__(self, session: Session) -> None:
         self._session = session
         self._tasks = TaskRepository(session)
+        self._agents = AgentRepository(session)
+        self._agent_revisions = AgentRevisionRepository(session)
+        self._task_agent_bindings = TaskAgentBindingRepository(session)
+        self._run_agent_resolutions = RunAgentResolutionRepository(session)
+        self._delegation_requests = DelegationRequestRepository(session)
         self._skills = SkillRepository(session)
         self._skill_revisions = SkillRevisionRepository(session)
         self._task_skill_bindings = TaskSkillBindingRepository(session)
@@ -122,6 +132,26 @@ class SqlAlchemyUnitOfWork:
     @property
     def tasks(self) -> TaskRepository:
         return self._tasks
+
+    @property
+    def agents(self) -> AgentRepository:
+        return self._agents
+
+    @property
+    def agent_revisions(self) -> AgentRevisionRepository:
+        return self._agent_revisions
+
+    @property
+    def task_agent_bindings(self) -> TaskAgentBindingRepository:
+        return self._task_agent_bindings
+
+    @property
+    def run_agent_resolutions(self) -> RunAgentResolutionRepository:
+        return self._run_agent_resolutions
+
+    @property
+    def delegation_requests(self) -> DelegationRequestRepository:
+        return self._delegation_requests
 
     @property
     def skills(self) -> SkillRepository:

@@ -74,4 +74,20 @@ describe("TasksResource", () => {
       body: failure,
     });
   });
+
+  it("reads and replaces a task's agent binding", async () => {
+    const { http, request } = client();
+    const tasks = new TasksResource(http);
+    await tasks.getAgent("t-1");
+    await tasks.putAgent("t-1", { agent_id: "a-1" });
+    expect(request).toHaveBeenNthCalledWith(1, {
+      method: "GET",
+      path: "/v1/tasks/t-1/agent",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, {
+      method: "PUT",
+      path: "/v1/tasks/t-1/agent",
+      body: { agent_id: "a-1" },
+    });
+  });
 });

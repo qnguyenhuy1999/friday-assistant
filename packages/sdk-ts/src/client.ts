@@ -1,7 +1,9 @@
 import { FridayHttpClient } from "./http";
+import { AgentsResource } from "./resources/agents";
 import { ApprovalsResource } from "./resources/approvals";
 import { ArtifactsResource } from "./resources/artifacts";
 import { ConversationsResource } from "./resources/conversations";
+import { DelegationsResource } from "./resources/delegations";
 import { EventsResource } from "./resources/events";
 import { HealthResource } from "./resources/health";
 import { RunsResource } from "./resources/runs";
@@ -27,6 +29,8 @@ export class FridayClient {
   readonly schedules;
   readonly conversations;
   readonly skills;
+  readonly agents;
+  readonly delegations;
   constructor(options: FridayClientOptions) {
     const http = new FridayHttpClient(options);
     this.tasks = new TasksResource(http);
@@ -40,5 +44,7 @@ export class FridayClient {
     this.schedules = new SchedulesResource(http);
     this.conversations = new ConversationsResource(http);
     this.skills = new SkillsResource(http);
+    this.agents = new AgentsResource(http);
+    this.delegations = new DelegationsResource(http);
   }
 }

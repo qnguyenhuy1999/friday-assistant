@@ -13,6 +13,9 @@ from apps.api.pagination import (
     decode_cursor,
     page_from_query,
 )
+from apps.api.routes.delegations import delegation_response
+from apps.api.schemas.agents import RunAgentResolutionResponse
+from apps.api.schemas.delegations import CreateDelegationRequestBody, DelegationRequestResponse
 from apps.api.schemas.runs import RunPageResponse, RunResponse, RunResultResponse
 from apps.api.schemas.skills import (
     AddSkillFeedbackBody,
@@ -28,6 +31,7 @@ from friday.application.commands import (
     RetryFailedRunCommand,
     StartQueuedRunCommand,
 )
+from friday.application.delegation import CreateDelegationRequest, ListDelegationsForRun
 from friday.application.errors import RunNotFound, SkillNotFound, SkillRevisionNotFound
 from friday.application.list_events import GetRunResult
 from friday.application.ports import Clock, UnitOfWorkFactory
@@ -45,7 +49,7 @@ from friday.application.run_lifecycle import (
 )
 from friday.application.skill_usage import AddSkillRunFeedback
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import RunId, SkillId, TaskId
+from friday.domain.identifiers import AgentId, RunId, RunStepId, SkillId, TaskId
 from friday.domain.skill_usage import SkillFeedbackRating
 
 router = APIRouter(prefix="/v1", tags=["runs"])
@@ -152,6 +156,61 @@ def list_skill_feedback(
             )
             for x in uow.skill_run_feedback.list_for_run_skill(typed_run_id, typed_skill_id)
         ]
+
+
+@router.get(
+    "/runs/{run_id}/agent",
+    response_model=RunAgentResolutionResponse,
+    operation_id="getRunAgent",
+)
+def get_run_agent(run_id: UUID, uow_factory: UowDependency) -> RunAgentResolutionResponse:
+    with uow_factory() as uow:
+        typed_run_id = RunId.parse(str(run_id))
+        if uow.runs.get(typed_run_id) is None:
+            raise RunNotFound(typed_run_id)
+        resolution = uow.run_agent_resolutions.get(typed_run_id)
+        return RunAgentResolutionResponse(
+            run_id=str(typed_run_id),
+            resolved=resolution is not None,
+            resolved_at=resolution.resolved_at if resolution is not None else None,
+            agent_id=str(resolution.agent_id) if resolution is not None else None,
+            revision_id=str(resolution.revision_id) if resolution is not None else None,
+        )
+
+
+@router.post(
+    "/runs/{run_id}/delegations",
+    response_model=DelegationRequestResponse,
+    status_code=201,
+    operation_id="createDelegationRequest",
+)
+def create_delegation(
+    run_id: UUID,
+    body: CreateDelegationRequestBody,
+    uow_factory: UowDependency,
+    clock: ClockDependency,
+) -> DelegationRequestResponse:
+    request = CreateDelegationRequest(uow_factory, clock).execute(
+        parent_run_id=RunId.parse(str(run_id)),
+        target_agent_id=AgentId.parse(body.target_agent_id),
+        objective=body.objective,
+        input_payload=body.input_payload,
+        expected_output_contract=body.expected_output_contract,
+        parent_run_step_id=RunStepId.parse(body.parent_run_step_id)
+        if body.parent_run_step_id
+        else None,
+    )
+    return delegation_response(request)
+
+
+@router.get(
+    "/runs/{run_id}/delegations",
+    response_model=list[DelegationRequestResponse],
+    operation_id="listDelegationRequestsForRun",
+)
+def list_delegations(run_id: UUID, uow_factory: UowDependency) -> list[DelegationRequestResponse]:
+    requests = ListDelegationsForRun(uow_factory).execute(RunId.parse(str(run_id)))
+    return [delegation_response(x) for x in requests]
 
 
 def _run_response(result: RunResult) -> RunResponse:

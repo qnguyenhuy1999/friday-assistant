@@ -6,6 +6,14 @@ Re-exports the public domain surface; internal helpers are not re-exported.
 
 from __future__ import annotations
 
+from friday.domain.agent import (
+    Agent,
+    AgentRevision,
+    AgentRevisionSourceKind,
+    AgentStatus,
+    RunAgentResolution,
+    TaskAgentBinding,
+)
 from friday.domain.approval import (
     ApprovalCategory,
     ApprovalRequest,
@@ -15,17 +23,27 @@ from friday.domain.approval import (
 from friday.domain.artifact import Artifact, ArtifactKind
 from friday.domain.conversation import Conversation, ConversationInputMode
 from friday.domain.conversation_turn import ConversationTurn
+from friday.domain.delegation import (
+    TERMINAL_DELEGATION_STATUSES,
+    DelegationRequest,
+    DelegationStatus,
+    compute_delegation_fingerprint,
+)
 from friday.domain.delivery_attempt import DeliveryAttempt, DeliveryAttemptOutcome
 from friday.domain.errors import DomainError, DomainValidationError, InvalidStateTransition
 from friday.domain.event import RunEvent, RunEventType
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.identifiers import (
+    AgentId,
+    AgentRevisionId,
     ApprovalRequestId,
     ArtifactId,
     ConversationId,
     ConversationTurnId,
+    DelegationRequestId,
     DeliveryAttemptId,
     DeliveryId,
+    RunAgentResolutionId,
     RunEventId,
     RunId,
     RunSkillResolutionId,
@@ -114,6 +132,20 @@ from friday.domain.time import ensure_utc
 from friday.domain.tool import ToolInvocation, ToolInvocationStatus
 
 __all__ = [
+    "Agent",
+    "AgentId",
+    "AgentRevision",
+    "AgentRevisionId",
+    "AgentRevisionSourceKind",
+    "AgentStatus",
+    "RunAgentResolution",
+    "RunAgentResolutionId",
+    "TaskAgentBinding",
+    "DelegationRequest",
+    "DelegationRequestId",
+    "DelegationStatus",
+    "TERMINAL_DELEGATION_STATUSES",
+    "compute_delegation_fingerprint",
     "ApprovalCategory",
     "ApprovalRequest",
     "ApprovalRequestId",

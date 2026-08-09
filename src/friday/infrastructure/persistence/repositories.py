@@ -14,6 +14,10 @@ from sqlalchemy.orm import Session
 from friday.application.memory.models import IndexSnapshot, IndexState, MemoryRetrievalRecord
 from friday.application.ports import validate_delivery_attempt_history_limit
 from friday.domain import (
+    Agent,
+    AgentId,
+    AgentRevision,
+    AgentRevisionId,
     ApprovalRequest,
     ApprovalRequestId,
     ApprovalStatus,
@@ -23,6 +27,8 @@ from friday.domain import (
     ConversationId,
     ConversationTurn,
     ConversationTurnId,
+    DelegationRequest,
+    DelegationRequestId,
     DeliveryAttempt,
     DeliveryAttemptId,
     DeliveryAttemptOutcome,
@@ -30,6 +36,7 @@ from friday.domain import (
     DeliveryStatus,
     OutboundDelivery,
     Run,
+    RunAgentResolution,
     RunEvent,
     RunEventType,
     RunId,
@@ -67,6 +74,7 @@ from friday.domain import (
     SkillRunFeedback,
     SkillUsageRecord,
     Task,
+    TaskAgentBinding,
     TaskEvent,
     TaskId,
     TaskSkillBinding,
@@ -79,6 +87,10 @@ from friday.domain.schedule import ScheduleStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
 from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
 from friday.infrastructure.persistence.mappers import (
+    agent_from_row,
+    agent_revision_from_row,
+    agent_revision_to_row,
+    agent_to_row,
     approval_from_row,
     approval_to_row,
     artifact_from_row,
@@ -87,6 +99,8 @@ from friday.infrastructure.persistence.mappers import (
     conversation_to_row,
     conversation_turn_from_row,
     conversation_turn_to_row,
+    delegation_request_from_row,
+    delegation_request_to_row,
     delivery_attempt_from_row,
     index_snapshot_from_row,
     index_snapshot_to_row,
@@ -97,6 +111,8 @@ from friday.infrastructure.persistence.mappers import (
     outbound_delivery_from_row,
     outbound_delivery_to_row,
     read_back_utc,
+    run_agent_resolution_from_row,
+    run_agent_resolution_to_row,
     run_event_from_row,
     run_event_to_row,
     run_from_row,
@@ -145,6 +161,8 @@ from friday.infrastructure.persistence.mappers import (
     skill_to_row,
     skill_usage_record_from_row,
     skill_usage_record_to_row,
+    task_agent_binding_from_row,
+    task_agent_binding_to_row,
     task_event_from_row,
     task_event_to_row,
     task_from_row,
@@ -155,15 +173,19 @@ from friday.infrastructure.persistence.mappers import (
     tool_invocation_to_row,
 )
 from friday.infrastructure.persistence.models import (
+    AgentRevisionRow,
+    AgentRow,
     ApprovalRequestRow,
     ArtifactRow,
     ConversationRow,
     ConversationTurnRow,
+    DelegationRequestRow,
     DeliveryAttemptRow,
     MemoryIndexSnapshotRow,
     MemoryRetrievalItemRow,
     MemoryRetrievalRecordRow,
     OutboundDeliveryRow,
+    RunAgentResolutionRow,
     RunEventRow,
     RunEventSequenceCounterRow,
     RunRow,
@@ -189,12 +211,174 @@ from friday.infrastructure.persistence.models import (
     SkillRow,
     SkillRunFeedbackRow,
     SkillUsageRecordRow,
+    TaskAgentBindingRow,
     TaskEventRow,
     TaskEventSequenceCounterRow,
     TaskRow,
     TaskSkillBindingRow,
     ToolInvocationRow,
 )
+
+
+class AgentRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, agent: Agent) -> None:
+        self._session.add(agent_to_row(agent))
+
+    def get(self, agent_id: AgentId) -> Agent | None:
+        row = self._session.get(AgentRow, str(agent_id))
+        return agent_from_row(row) if row else None
+
+    def get_by_key(self, key: str) -> Agent | None:
+        row = self._session.scalar(select(AgentRow).where(AgentRow.key == key))
+        return agent_from_row(row) if row else None
+
+    def save(self, agent: Agent) -> None:
+        self._session.merge(agent_to_row(agent))
+
+    def list(self, limit: int) -> list[Agent]:
+        return [
+            agent_from_row(row)
+            for row in self._session.execute(
+                select(AgentRow).order_by(AgentRow.created_at, AgentRow.id).limit(limit)
+            ).scalars()
+        ]
+
+
+class AgentRevisionRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, revision: AgentRevision) -> None:
+        self._session.add(agent_revision_to_row(revision))
+
+    def get(self, revision_id: AgentRevisionId) -> AgentRevision | None:
+        row = self._session.get(AgentRevisionRow, str(revision_id))
+        return agent_revision_from_row(row) if row else None
+
+    def list_for_agent(self, agent_id: AgentId) -> list[AgentRevision]:
+        return [
+            agent_revision_from_row(row)
+            for row in self._session.execute(
+                select(AgentRevisionRow)
+                .where(AgentRevisionRow.agent_id == str(agent_id))
+                .order_by(AgentRevisionRow.version)
+            ).scalars()
+        ]
+
+    def next_version(self, agent_id: AgentId) -> int:
+        return (
+            int(
+                self._session.scalar(
+                    select(func.coalesce(func.max(AgentRevisionRow.version), 0)).where(
+                        AgentRevisionRow.agent_id == str(agent_id)
+                    )
+                )
+                or 0
+            )
+            + 1
+        )
+
+
+class TaskAgentBindingRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get(self, task_id: TaskId) -> TaskAgentBinding | None:
+        row = self._session.get(TaskAgentBindingRow, str(task_id))
+        return task_agent_binding_from_row(row) if row else None
+
+    def replace(self, task_id: TaskId, binding: TaskAgentBinding | None) -> None:
+        self._session.query(TaskAgentBindingRow).filter(
+            TaskAgentBindingRow.task_id == str(task_id)
+        ).delete()
+        if binding is not None:
+            self._session.add(task_agent_binding_to_row(binding))
+
+
+class RunAgentResolutionRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get(self, run_id: RunId) -> RunAgentResolution | None:
+        row = self._session.scalar(
+            select(RunAgentResolutionRow).where(RunAgentResolutionRow.run_id == str(run_id))
+        )
+        return run_agent_resolution_from_row(row) if row else None
+
+    def add(self, resolution: RunAgentResolution) -> None:
+        """Unguarded marker insert for retry-inheritance copies only.
+
+        ``RetryFailedRun`` copies an already-frozen source marker onto a
+        brand-new retry that has no claim yet.  This is not resolution
+        publication: fresh resolution of a run must go through
+        ``add_if_claimed``, the sole claim-fenced publication primitive.
+        """
+        self._session.add(run_agent_resolution_to_row(resolution))
+
+    def add_if_claimed(
+        self,
+        resolution: RunAgentResolution,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        """Insert the freeze marker only while the exact lease is current.
+
+        The conditional INSERT is the authority boundary: a worker that lost
+        its claim cannot publish a resolution even if it read the claim just
+        before expiry. Mirrors RunSkillResolutionRepository.add_if_claimed.
+        """
+        from friday.infrastructure.persistence.models import RunWorkItemRow
+
+        statement = (
+            insert(RunAgentResolutionRow)
+            .from_select(
+                ["id", "run_id", "agent_id", "revision_id", "resolved_at"],
+                select(
+                    literal(str(resolution.id)),
+                    literal(str(resolution.run_id)),
+                    literal(str(resolution.agent_id)),
+                    literal(str(resolution.revision_id)),
+                    literal(resolution.resolved_at),
+                ).where(
+                    RunWorkItemRow.run_id == str(resolution.run_id),
+                    RunWorkItemRow.claimed_by == worker_id,
+                    RunWorkItemRow.claim_token == claim_token,
+                    RunWorkItemRow.claim_generation == claim_generation,
+                    RunWorkItemRow.lease_expires_at.is_not(None),
+                    RunWorkItemRow.lease_expires_at > now,
+                ),
+            )
+            .on_conflict_do_nothing(index_elements=["run_id"])
+        )
+        result = cast(CursorResult[Any], self._session.execute(statement))
+        return bool(result.rowcount)
+
+
+class DelegationRequestRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, request: DelegationRequest) -> None:
+        self._session.add(delegation_request_to_row(request))
+
+    def get(self, delegation_id: DelegationRequestId) -> DelegationRequest | None:
+        row = self._session.get(DelegationRequestRow, str(delegation_id))
+        return delegation_request_from_row(row) if row else None
+
+    def list_for_run(self, run_id: RunId) -> list[DelegationRequest]:
+        return [
+            delegation_request_from_row(row)
+            for row in self._session.execute(
+                select(DelegationRequestRow)
+                .where(DelegationRequestRow.parent_run_id == str(run_id))
+                .order_by(DelegationRequestRow.created_at, DelegationRequestRow.id)
+            ).scalars()
+        ]
 
 
 class SkillRepository:

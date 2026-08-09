@@ -22,17 +22,22 @@ from friday.application.memory.ports import (
     MemoryIndexSnapshotRepository,
     MemoryRetrievalRecordRepository,
 )
+from friday.domain.agent import Agent, AgentRevision, RunAgentResolution, TaskAgentBinding
 from friday.domain.approval import ApprovalRequest
 from friday.domain.artifact import Artifact
 from friday.domain.conversation import Conversation
 from friday.domain.conversation_turn import ConversationTurn
+from friday.domain.delegation import DelegationRequest
 from friday.domain.delivery_attempt import DeliveryAttempt, DeliveryAttemptOutcome
 from friday.domain.event import RunEvent, RunEventType
 from friday.domain.identifiers import (
+    AgentId,
+    AgentRevisionId,
     ApprovalRequestId,
     ArtifactId,
     ConversationId,
     ConversationTurnId,
+    DelegationRequestId,
     DeliveryAttemptId,
     DeliveryId,
     RunId,
@@ -188,6 +193,46 @@ class TaskRepository(Protocol):
     def list_page(
         self, limit: int, after_created_at: datetime | None, after_id: str | None
     ) -> builtins.list[Task]: ...
+
+
+class AgentRepository(Protocol):
+    def add(self, agent: Agent) -> None: ...
+    def get(self, agent_id: AgentId) -> Agent | None: ...
+    def get_by_key(self, key: str) -> Agent | None: ...
+    def save(self, agent: Agent) -> None: ...
+    def list(self, limit: int) -> list[Agent]: ...
+
+
+class AgentRevisionRepository(Protocol):
+    def add(self, revision: AgentRevision) -> None: ...
+    def get(self, revision_id: AgentRevisionId) -> AgentRevision | None: ...
+    def list_for_agent(self, agent_id: AgentId) -> list[AgentRevision]: ...
+    def next_version(self, agent_id: AgentId) -> int: ...
+
+
+class TaskAgentBindingRepository(Protocol):
+    def get(self, task_id: TaskId) -> TaskAgentBinding | None: ...
+    def replace(self, task_id: TaskId, binding: TaskAgentBinding | None) -> None: ...
+
+
+class RunAgentResolutionRepository(Protocol):
+    def get(self, run_id: RunId) -> RunAgentResolution | None: ...
+    def add(self, resolution: RunAgentResolution) -> None: ...
+
+    def add_if_claimed(
+        self,
+        resolution: RunAgentResolution,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool: ...
+
+
+class DelegationRequestRepository(Protocol):
+    def add(self, request: DelegationRequest) -> None: ...
+    def get(self, delegation_id: DelegationRequestId) -> DelegationRequest | None: ...
+    def list_for_run(self, run_id: RunId) -> list[DelegationRequest]: ...
 
 
 class SkillRepository(Protocol):
@@ -721,6 +766,16 @@ class UnitOfWork(Protocol):
 
     @property
     def tasks(self) -> TaskRepository: ...
+    @property
+    def agents(self) -> AgentRepository: ...
+    @property
+    def agent_revisions(self) -> AgentRevisionRepository: ...
+    @property
+    def task_agent_bindings(self) -> TaskAgentBindingRepository: ...
+    @property
+    def run_agent_resolutions(self) -> RunAgentResolutionRepository: ...
+    @property
+    def delegation_requests(self) -> DelegationRequestRepository: ...
     @property
     def skills(self) -> SkillRepository: ...
     @property

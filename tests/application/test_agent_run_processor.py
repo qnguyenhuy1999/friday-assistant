@@ -11,6 +11,7 @@ import pytest
 
 from friday.application.agent_run_processor import AgentRunProcessor, RuntimeLimits
 from friday.application.brain_runtime import BrainRequest, BrainResponse
+from friday.application.brain_runtime_registry import BrainRuntimeRegistry
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
 from friday.application.errors import (
     BrainProtocolError,
@@ -58,6 +59,12 @@ WRITE = InvokeToolAction(
     tool="workspace.write_text", tool_input={"path": "b.txt", "content": "x"}, reason="save"
 )
 FINISH = FinishAction(summary="all done")
+
+
+def _runtime_registry() -> BrainRuntimeRegistry:
+    registry = BrainRuntimeRegistry()
+    registry.register("claude_cli", lambda: None)  # type: ignore[arg-type,return-value]
+    return registry
 
 
 class ScriptedBrain:
@@ -130,6 +137,7 @@ class Harness:
             uow_factory=self.factory,
             clock=self.clock,
             brain=self.brain,
+            runtime_registry=_runtime_registry(),
             gateway=self.gateway,
             verify_claim=VerifyRunClaim(self.factory, self.clock),
             request_tool_approval=RequestToolApproval(self.factory, self.clock),

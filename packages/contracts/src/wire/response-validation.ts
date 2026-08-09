@@ -1,6 +1,14 @@
 /** HTTP response validators are generated from schemas/v1/http/responses.json. */
 export {
   WireFormatError,
+  validateAgent,
+  validateAgentPage,
+  validateAgentRevision,
+  validateAgentRevisions,
+  validateTaskAgentBinding,
+  validateRunAgentResolution,
+  validateDelegationRequest,
+  validateDelegationRequests,
   validateRunEvent,
   validateTaskEvent,
   validateRunPage,

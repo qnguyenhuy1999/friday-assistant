@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   WireFormatError,
+  validateDelegationRequest,
+  validateDelegationRequests,
   validateRun,
+  validateRunAgentResolution,
   validateRunPage,
 } from "@friday/contracts";
 import { FridayHttpClient } from "../http";
@@ -115,6 +118,38 @@ describe("RunsResource", () => {
       path: "/v1/runs/r-1/fail",
       body: failure,
       validate: validateRun,
+    });
+  });
+
+  it("maps agent resolution and delegation operations", async () => {
+    const { http, request } = client();
+    const runs = new RunsResource(http);
+    await runs.getAgent("r-1");
+    await runs.createDelegation("r-1", {
+      target_agent_id: "a-1",
+      objective: "do x",
+      expected_output_contract: "json contract",
+    });
+    await runs.listDelegations("r-1");
+    expect(request).toHaveBeenNthCalledWith(1, {
+      method: "GET",
+      path: "/v1/runs/r-1/agent",
+      validate: validateRunAgentResolution,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, {
+      method: "POST",
+      path: "/v1/runs/r-1/delegations",
+      body: {
+        target_agent_id: "a-1",
+        objective: "do x",
+        expected_output_contract: "json contract",
+      },
+      validate: validateDelegationRequest,
+    });
+    expect(request).toHaveBeenNthCalledWith(3, {
+      method: "GET",
+      path: "/v1/runs/r-1/delegations",
+      validate: validateDelegationRequests,
     });
   });
 });

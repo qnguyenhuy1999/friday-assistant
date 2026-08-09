@@ -14,6 +14,7 @@ from fastapi import Request
 from sqlalchemy import text
 
 from apps.api.settings import ApiSettings
+from friday.application.brain_runtime_registry import BrainRuntimeRegistry
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.infrastructure.persistence.health import is_database_reachable
 
@@ -21,6 +22,11 @@ from friday.infrastructure.persistence.health import is_database_reachable
 def get_uow_factory(request: Request) -> UnitOfWorkFactory:
     factory: UnitOfWorkFactory = request.app.state.uow_factory
     return factory
+
+
+def get_brain_runtime_registry(request: Request) -> BrainRuntimeRegistry:
+    registry: BrainRuntimeRegistry = request.app.state.brain_runtime_registry
+    return registry
 
 
 def get_clock(request: Request) -> Clock:

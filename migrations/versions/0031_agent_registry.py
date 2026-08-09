@@ -83,6 +83,19 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # These tables are Phase-21 durable state.  Dropping them would silently
+    # destroy identity, revision, binding, or frozen-resolution provenance.
+    # Keep every check before the first DDL so a rejected downgrade is atomic.
+    bind = op.get_bind()
+    for table in (
+        "agents",
+        "agent_revisions",
+        "task_agent_bindings",
+        "run_agent_resolutions",
+    ):
+        if bind.scalar(sa.text(f"SELECT count(*) FROM {table}")):
+            raise RuntimeError(f"0031 cannot downgrade while {table} contains durable state")
+
     op.drop_table("run_agent_resolutions")
     op.drop_table("task_agent_bindings")
     with op.batch_alter_table("agents") as batch:

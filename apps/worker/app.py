@@ -21,6 +21,7 @@ from apps.worker.settings import WorkerSettings
 from apps.worker.worker_loop import WorkerLoop
 from friday.application.agent_run_processor import AgentRunProcessor, RuntimeLimits
 from friday.application.brain_runtime import BrainRuntime
+from friday.application.brain_runtime_registry import DEFAULT_RUNTIME_KIND, BrainRuntimeRegistry
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
 from friday.application.conversation_context import ConversationContextAssembler
 from friday.application.delivery_lifecycle import (
@@ -438,10 +439,16 @@ def _compose_worker(
     gateway = CompositeToolGateway(*gateways)
 
     runtime_brain = brain or ClaudeCliBrainRuntime(claude_settings)
+    brain_runtime_registry = BrainRuntimeRegistry()
+    # Step 1 uses this registry for validation/preparation only.  The
+    # existing Claude runtime remains the processor's actual brain; Agent
+    # identity does not select an adapter yet.
+    brain_runtime_registry.register(DEFAULT_RUNTIME_KIND, lambda: runtime_brain)
     processor = AgentRunProcessor(
         uow_factory=uow_factory,
         clock=clock,
         brain=runtime_brain,
+        runtime_registry=brain_runtime_registry,
         gateway=gateway,
         verify_claim=VerifyRunClaim(uow_factory, clock),
         request_tool_approval=RequestToolApproval(uow_factory, clock),

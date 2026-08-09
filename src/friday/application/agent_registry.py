@@ -24,6 +24,7 @@ from friday.domain import (
     TaskAgentBinding,
     TaskId,
 )
+from friday.domain.errors import InvalidStateTransition
 from friday.domain.json_value import JsonValue
 
 
@@ -71,6 +72,9 @@ class CreateAgentRevision:
     ) -> AgentRevision:
         if not self._runtime_registry.is_registered(runtime_kind):
             raise UnknownBrainRuntimeKind(runtime_kind)
+        runtime_config = self._runtime_registry.validate_runtime_config(
+            runtime_kind, runtime_config
+        )
         with self._uow_factory() as uow:
             agent = uow.agents.get(agent_id)
             if agent is None:
@@ -104,7 +108,10 @@ class ActivateAgentRevision:
             revision = uow.agent_revisions.get(revision_id)
             if revision is None:
                 raise AgentRevisionNotFound(revision_id)
-            agent.activate(revision, self._clock.now())
+            try:
+                agent.activate(revision, self._clock.now())
+            except InvalidStateTransition as exc:
+                raise EntityConflict(str(exc)) from exc
             uow.agents.save(agent)
             uow.commit()
             return agent
@@ -188,8 +195,14 @@ class ResolveRunAgent:
     — Friday's existing default Claude-based behavior applies, and no fake
     Agent identity is ever fabricated for it."""
 
-    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
+    def __init__(
+        self,
+        uow_factory: UnitOfWorkFactory,
+        clock: Clock,
+        runtime_registry: BrainRuntimeRegistry,
+    ) -> None:
         self._uow_factory, self._clock = uow_factory, clock
+        self._runtime_registry = runtime_registry
 
     def execute(
         self,
@@ -223,11 +236,25 @@ class ResolveRunAgent:
                 ):
                     raise EntityConflict("bound agent is no longer resolvable")
 
+                # Load the exact pointer, not merely the pointer value.  The
+                # repository mapper verifies the persisted SHA-256 before
+                # returning this immutable revision.
+                revision = uow.agent_revisions.get(agent.active_revision_id)
+                if revision is None:
+                    raise EntityConflict("active agent revision does not exist")
+                if revision.agent_id != agent.id:
+                    raise EntityConflict("active agent revision ownership mismatch")
+                if not self._runtime_registry.is_registered(revision.runtime_kind):
+                    raise UnknownBrainRuntimeKind(revision.runtime_kind)
+                self._runtime_registry.validate_runtime_config(
+                    revision.runtime_kind, revision.runtime_config
+                )
+
                 resolution = RunAgentResolution(
                     RunAgentResolutionId.new(),
                     run.id,
                     agent.id,
-                    agent.active_revision_id,
+                    revision.id,
                     self._clock.now(),
                 )
                 # The atomic conditional INSERT is the sole publication

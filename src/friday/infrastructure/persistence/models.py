@@ -774,6 +774,15 @@ class DelegationRequestRow(Base):
             ["run_steps.run_id", "run_steps.id"],
             name="fk_delegation_requests_step_ownership",
         ),
+        CheckConstraint(
+            "child_run_id IS NULL OR child_task_id IS NOT NULL",
+            name="ck_delegation_requests_child_run_task_shape",
+        ),
+        ForeignKeyConstraint(
+            ["child_run_id", "child_task_id"],
+            ["runs.id", "runs.task_id"],
+            name="fk_delegation_requests_child_run_task_ownership",
+        ),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
     parent_run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))

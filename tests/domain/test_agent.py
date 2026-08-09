@@ -43,7 +43,7 @@ def _new_revision(agent: Agent, *, version: int = 1) -> AgentRevision:
         version=version,
         instructions="be helpful",
         runtime_kind="claude_cli",
-        runtime_config={"max_turns": 4},
+        runtime_config={},
         source_kind=AgentRevisionSourceKind.OPERATOR,
         created_at=T0,
     )
@@ -77,7 +77,7 @@ def test_revision_content_sha256_is_recomputed_and_checked() -> None:
             {
                 "instructions": "be helpful",
                 "runtime_kind": "claude_cli",
-                "runtime_config": {"max_turns": 4},
+                "runtime_config": {},
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -164,6 +164,7 @@ def test_activate_sets_pointer_and_updated_at() -> None:
     revision = _new_revision(agent)
     agent.activate(revision, T1)
     assert agent.active_revision_id == revision.id
+    assert agent.status is AgentStatus.ACTIVE
     assert agent.updated_at == T1
 
 

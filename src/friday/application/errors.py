@@ -166,6 +166,14 @@ class UnknownBrainRuntimeKind(ApplicationError):
         super().__init__(f"Unknown brain runtime kind: {runtime_kind}")
 
 
+class InvalidBrainRuntimeConfig(ApplicationError):
+    """A runtime configuration failed its code-owned positive schema."""
+
+    def __init__(self, runtime_kind: str) -> None:
+        self.runtime_kind = runtime_kind
+        super().__init__(f"Invalid brain runtime configuration: {runtime_kind}")
+
+
 class SkillIntegrityFailed(ApplicationError):
     """Persisted Skill instructions no longer match their durable digest."""
 

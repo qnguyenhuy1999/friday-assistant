@@ -62,10 +62,19 @@ def upgrade() -> None:
             name="ck_delegation_requests_output_contract_length",
         ),
         sa.UniqueConstraint("authorization_fingerprint", name="uq_delegation_requests_fingerprint"),
+        sa.CheckConstraint(
+            "child_run_id IS NULL OR child_task_id IS NOT NULL",
+            name="ck_delegation_requests_child_run_task_shape",
+        ),
         sa.ForeignKeyConstraint(
             ["parent_run_id", "parent_run_step_id"],
             ["run_steps.run_id", "run_steps.id"],
             name="fk_delegation_requests_step_ownership",
+        ),
+        sa.ForeignKeyConstraint(
+            ["child_run_id", "child_task_id"],
+            ["runs.id", "runs.task_id"],
+            name="fk_delegation_requests_child_run_task_ownership",
         ),
     )
     op.create_index(
@@ -74,6 +83,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The delegation table is the only durable state introduced by 0032.
+    # Refuse before the index/table or 0032's run_steps uniqueness is touched.
+    if op.get_bind().scalar(sa.text("SELECT count(*) FROM delegation_requests")):
+        raise RuntimeError("0032 cannot downgrade while delegation_requests contains durable state")
+
     op.drop_index("ix_delegation_requests_parent_run_id", table_name="delegation_requests")
     op.drop_table("delegation_requests")
     with op.batch_alter_table("run_steps") as batch:

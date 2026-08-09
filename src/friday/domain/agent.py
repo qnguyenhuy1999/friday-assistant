@@ -254,7 +254,8 @@ class Agent:
             raise InvalidStateTransition("Agent", self._status.value, "activate")
         if revision.agent_id != self.id:
             raise DomainValidationError("Agent revision does not belong to agent")
-        self._active_revision_id, self._updated_at = revision.id, ensure_utc(at)
+        self._active_revision_id = revision.id
+        self._status, self._updated_at = AgentStatus.ACTIVE, ensure_utc(at)
 
     def disable(self, at: datetime) -> None:
         if self._status is AgentStatus.ARCHIVED:

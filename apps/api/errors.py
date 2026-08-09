@@ -26,6 +26,7 @@ from friday.application.errors import (
     ConversationTurnNotFound,
     DelegationRequestNotFound,
     EntityConflict,
+    InvalidBrainRuntimeConfig,
     RunNotFound,
     RunStepNotFound,
     ScheduleNotFound,
@@ -93,6 +94,7 @@ _CONFLICT_TYPES: dict[type[ApplicationError], str] = {
 
 _UNPROCESSABLE_TYPES: dict[type[ApplicationError], str] = {
     UnknownBrainRuntimeKind: "unknown_brain_runtime_kind",
+    InvalidBrainRuntimeConfig: "invalid_brain_runtime_config",
 }
 
 

@@ -6,6 +6,8 @@ tests/persistence/test_skill_registry_sqlite.py's proof style exactly.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -32,7 +34,12 @@ from friday.application.commands import (
     StartRunCommand,
 )
 from friday.application.create_task import CreateTask
-from friday.application.errors import ClaimLost
+from friday.application.errors import (
+    AgentIntegrityFailed,
+    ClaimLost,
+    InvalidBrainRuntimeConfig,
+    UnknownBrainRuntimeKind,
+)
 from friday.application.lifecycle import FailRun, RetryFailedRun, StartQueuedRun
 from friday.application.ports import UnitOfWorkFactory
 from friday.application.results import RunClaimResult
@@ -40,7 +47,7 @@ from friday.application.start_run import StartRun
 from friday.application.worker_coordination import ClaimNextRun
 from friday.domain.agent import AgentRevisionSourceKind, AgentStatus, RunAgentResolution
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import RunId
+from friday.domain.identifiers import AgentRevisionId, RunId
 from friday.domain.run import Run
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
@@ -104,6 +111,31 @@ def _try_set_active(engine: Engine, agent_id: str, revision_id: str) -> None:
             text("UPDATE agents SET active_revision_id = :revision_id WHERE id = :agent_id"),
             {"agent_id": agent_id, "revision_id": revision_id},
         )
+
+
+def _revision_digest(instructions: str, runtime_kind: str, runtime_config: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "instructions": instructions,
+                "runtime_kind": runtime_kind,
+                "runtime_config": runtime_config,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _active_revision_id(factory: UnitOfWorkFactory, run_id: RunId) -> AgentRevisionId:
+    with factory() as uow:
+        run = uow.runs.get(run_id)
+        assert run is not None
+        binding = uow.task_agent_bindings.get(run.task_id)
+        assert binding is not None
+        agent = uow.agents.get(binding.agent_id)
+        assert agent is not None and agent.active_revision_id is not None
+        return agent.active_revision_id
 
 
 def test_active_pointer_to_nonexistent_revision_is_rejected(tmp_path: Path) -> None:
@@ -247,7 +279,7 @@ def test_real_sqlite_concurrent_resolution_converges_to_one_freeze(tmp_path: Pat
         factory, run_id, claim = _claimed_run(engine, clock, with_agent=True)
 
         def resolve() -> RunAgentResolution | None:
-            return ResolveRunAgent(factory, clock).execute(
+            return ResolveRunAgent(factory, clock, _registry()).execute(
                 run_id, claim.worker_id, claim.claim_token, claim.claim_generation
             )
 
@@ -267,9 +299,126 @@ def test_real_sqlite_stale_claim_cannot_freeze_agent_resolution(tmp_path: Path) 
         clock = Clock()
         factory, run_id, claim = _claimed_run(engine, clock, with_agent=True)
         with pytest.raises(ClaimLost, match="exact active worker claim"):
-            ResolveRunAgent(factory, clock).execute(
+            ResolveRunAgent(factory, clock, _registry()).execute(
                 run_id, claim.worker_id, "wrong-token", claim.claim_generation
             )
+        with factory() as uow:
+            assert uow.run_agent_resolutions.get(run_id) is None
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_corrupted_active_revision_fails_before_marker(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory, run_id, claim = _claimed_run(engine, clock, with_agent=True)
+        revision_id = _active_revision_id(factory, run_id)
+        with engine.begin() as connection:
+            connection.execute(
+                text("UPDATE agent_revisions SET instructions = 'corrupted' WHERE id = :id"),
+                {"id": str(revision_id)},
+            )
+
+        with pytest.raises(AgentIntegrityFailed):
+            ResolveRunAgent(factory, clock, _registry()).execute(
+                run_id, claim.worker_id, claim.claim_token, claim.claim_generation
+            )
+        with factory() as uow:
+            assert uow.run_agent_resolutions.get(run_id) is None
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_unknown_active_runtime_fails_before_marker(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory, run_id, claim = _claimed_run(engine, clock, with_agent=True)
+        revision_id = _active_revision_id(factory, run_id)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE agent_revisions SET runtime_kind = :kind, content_sha256 = :sha "
+                    "WHERE id = :id"
+                ),
+                {
+                    "id": str(revision_id),
+                    "kind": "unsupported_runtime",
+                    "sha": _revision_digest(
+                        "Use the frozen instruction.", "unsupported_runtime", {}
+                    ),
+                },
+            )
+
+        with pytest.raises(UnknownBrainRuntimeKind):
+            ResolveRunAgent(factory, clock, _registry()).execute(
+                run_id, claim.worker_id, claim.claim_token, claim.claim_generation
+            )
+        with factory() as uow:
+            assert uow.run_agent_resolutions.get(run_id) is None
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_invalid_persisted_runtime_config_fails_before_marker(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory, run_id, claim = _claimed_run(engine, clock, with_agent=True)
+        revision_id = _active_revision_id(factory, run_id)
+        invalid_config = {"command": "unsafe"}
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE agent_revisions SET runtime_config = :config, content_sha256 = :sha "
+                    "WHERE id = :id"
+                ),
+                {
+                    "id": str(revision_id),
+                    "config": json.dumps(invalid_config, separators=(",", ":")),
+                    "sha": _revision_digest(
+                        "Use the frozen instruction.", "claude_cli", invalid_config
+                    ),
+                },
+            )
+
+        with pytest.raises(InvalidBrainRuntimeConfig):
+            ResolveRunAgent(factory, clock, _registry()).execute(
+                run_id, claim.worker_id, claim.claim_token, claim.claim_generation
+            )
+        with factory() as uow:
+            assert uow.run_agent_resolutions.get(run_id) is None
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_valid_claude_revision_resolves_normally(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory, run_id, claim = _claimed_run(engine, clock, with_agent=True)
+        resolution = ResolveRunAgent(factory, clock, _registry()).execute(
+            run_id, claim.worker_id, claim.claim_token, claim.claim_generation
+        )
+        assert resolution is not None
+        with factory() as uow:
+            assert uow.run_agent_resolutions.get(run_id) == resolution
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_agentless_run_remains_unresolved(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        clock = Clock()
+        factory, run_id, claim = _claimed_run(engine, clock, with_agent=False)
+        assert (
+            ResolveRunAgent(factory, clock, _registry()).execute(
+                run_id, claim.worker_id, claim.claim_token, claim.claim_generation
+            )
+            is None
+        )
         with factory() as uow:
             assert uow.run_agent_resolutions.get(run_id) is None
     finally:
@@ -287,7 +436,7 @@ def test_real_sqlite_run_without_queue_row_fails_closed_with_claim_lost(tmp_path
             uow.runs.add(run)
             uow.commit()
         with pytest.raises(ClaimLost, match="exact active worker claim"):
-            ResolveRunAgent(factory, clock).execute(run.id, "resolver-a", "token", 1)
+            ResolveRunAgent(factory, clock, _registry()).execute(run.id, "resolver-a", "token", 1)
         with factory() as uow:
             assert uow.run_agent_resolutions.get(run.id) is None
     finally:
@@ -306,7 +455,7 @@ def test_real_sqlite_wrong_owner_token_or_generation_is_rejected(tmp_path: Path)
         ]
         for worker_id, claim_token, claim_generation in attempts:
             with pytest.raises(ClaimLost, match="exact active worker claim"):
-                ResolveRunAgent(factory, clock).execute(
+                ResolveRunAgent(factory, clock, _registry()).execute(
                     run_id, worker_id, claim_token, claim_generation
                 )
         with factory() as uow:
@@ -320,7 +469,7 @@ def test_real_sqlite_retry_copies_only_exact_source_resolution(tmp_path: Path) -
     try:
         clock = Clock()
         factory, run_id, claim = _claimed_run(engine, clock, with_agent=True)
-        resolution = ResolveRunAgent(factory, clock).execute(
+        resolution = ResolveRunAgent(factory, clock, _registry()).execute(
             run_id, claim.worker_id, claim.claim_token, claim.claim_generation
         )
         assert resolution is not None
@@ -343,7 +492,7 @@ def test_real_sqlite_already_resolved_run_unaffected_by_later_activation(tmp_pat
     try:
         clock = Clock()
         factory, run_id, claim = _claimed_run(engine, clock, with_agent=True)
-        resolution = ResolveRunAgent(factory, clock).execute(
+        resolution = ResolveRunAgent(factory, clock, _registry()).execute(
             run_id, claim.worker_id, claim.claim_token, claim.claim_generation
         )
         assert resolution is not None
@@ -379,7 +528,7 @@ def test_real_sqlite_task_binding_change_only_affects_future_unresolved_runs(
     try:
         clock = Clock()
         factory, run_id, claim = _claimed_run(engine, clock, with_agent=True)
-        resolution = ResolveRunAgent(factory, clock).execute(
+        resolution = ResolveRunAgent(factory, clock, _registry()).execute(
             run_id, claim.worker_id, claim.claim_token, claim.claim_generation
         )
         assert resolution is not None

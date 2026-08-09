@@ -7,6 +7,7 @@ from friday.application.agent_registry import (
     ArchiveAgent,
     CreateAgent,
     CreateAgentRevision,
+    DisableAgent,
     GetAgent,
     ReplaceTaskAgent,
     ResolveRunAgent,
@@ -18,11 +19,13 @@ from friday.application.errors import (
     AgentNotFound,
     ClaimLost,
     EntityConflict,
+    InvalidBrainRuntimeConfig,
     UnknownBrainRuntimeKind,
 )
-from friday.domain.agent import AgentRevisionSourceKind
+from friday.domain.agent import AgentRevisionSourceKind, AgentStatus
 from friday.domain.errors import DomainValidationError
 from friday.domain.identifiers import AgentId, RunId
+from friday.domain.json_value import JsonValue
 from friday.domain.run import Run
 from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
 from tests.application.resolve_helpers import resolve_run_agent_without_claim
@@ -44,6 +47,46 @@ def test_create_agent_revision_rejects_unregistered_runtime_kind() -> None:
             instructions="be helpful",
             runtime_kind="totally_unknown",
             runtime_config={},
+            source_kind=AgentRevisionSourceKind.OPERATOR,
+        )
+    assert uow.agent_revision_repo.items == {}
+
+
+@pytest.mark.parametrize(
+    "runtime_config",
+    [
+        {"model": "unsafe-to-persist"},
+        {"command": "rm -rf /"},
+        {"env": {"API_KEY": "secret"}},
+    ],
+)
+def test_create_agent_revision_rejects_runtime_authority_configuration(
+    runtime_config: JsonValue,
+) -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    agent = CreateAgent(factory, clock).execute(key="coder", display_name="Coder", description="")
+    with pytest.raises(InvalidBrainRuntimeConfig):
+        CreateAgentRevision(factory, clock, _registry()).execute(
+            agent_id=agent.id,
+            instructions="be helpful",
+            runtime_kind="claude_cli",
+            runtime_config=runtime_config,
+            source_kind=AgentRevisionSourceKind.OPERATOR,
+        )
+    assert uow.agent_revision_repo.items == {}
+
+
+def test_create_agent_revision_rejects_overly_complex_runtime_config() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    agent = CreateAgent(factory, clock).execute(key="coder", display_name="Coder", description="")
+    with pytest.raises(InvalidBrainRuntimeConfig):
+        CreateAgentRevision(factory, clock, _registry()).execute(
+            agent_id=agent.id,
+            instructions="be helpful",
+            runtime_kind="claude_cli",
+            runtime_config={"nested": [[[[["too deep"]]]]]},
             source_kind=AgentRevisionSourceKind.OPERATOR,
         )
     assert uow.agent_revision_repo.items == {}
@@ -75,6 +118,25 @@ def test_revision_lifecycle_is_explicit_and_immutable() -> None:
     ActivateAgentRevision(factory, clock).execute(agent_id=agent.id, revision_id=two.id)
     assert agent.active_revision_id == two.id
     assert uow.agent_revision_repo.get(one.id) == one
+
+
+def test_disabled_agent_can_be_reactivated_with_a_valid_revision() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    agent = CreateAgent(factory, clock).execute(key="coder", display_name="Coder", description="")
+    revision = CreateAgentRevision(factory, clock, _registry()).execute(
+        agent_id=agent.id,
+        instructions="be helpful",
+        runtime_kind="claude_cli",
+        runtime_config={},
+        source_kind=AgentRevisionSourceKind.OPERATOR,
+    )
+    DisableAgent(factory, clock).execute(agent.id)
+    reactivated = ActivateAgentRevision(factory, clock).execute(
+        agent_id=agent.id, revision_id=revision.id
+    )
+    assert reactivated.status is AgentStatus.ACTIVE
+    assert reactivated.active_revision_id == revision.id
 
 
 def test_cross_agent_activation_fails_closed() -> None:
@@ -190,5 +252,5 @@ def test_resolve_run_agent_requires_exact_active_claim() -> None:
     uow.run_repo.add(run)
 
     with pytest.raises(ClaimLost):
-        ResolveRunAgent(factory, clock).execute(run.id, "worker", "token", 1)
+        ResolveRunAgent(factory, clock, _registry()).execute(run.id, "worker", "token", 1)
     assert uow.run_agent_resolution_repo.get(run.id) is None

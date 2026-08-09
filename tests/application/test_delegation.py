@@ -7,8 +7,13 @@ from friday.application.agent_registry import (
     CreateAgent,
     CreateAgentRevision,
 )
+from friday.application.approval_workflow import ApproveRequest, RequestApproval
 from friday.application.brain_runtime_registry import BrainRuntimeRegistry
-from friday.application.commands import CreateTaskCommand
+from friday.application.commands import (
+    ApproveRequestCommand,
+    CreateTaskCommand,
+    RequestApprovalCommand,
+)
 from friday.application.create_task import CreateTask
 from friday.application.delegation import (
     CreateDelegationRequest,
@@ -23,6 +28,7 @@ from friday.application.errors import (
     RunStepNotFound,
 )
 from friday.domain.agent import AgentRevisionSourceKind
+from friday.domain.approval import ApprovalCategory, ApprovalSubjectKind
 from friday.domain.identifiers import AgentId, DelegationRequestId, RunId, RunStepId
 from friday.domain.run import Run
 from friday.domain.step import RunStep
@@ -68,6 +74,72 @@ def test_create_delegation_request_persists_and_validates_parent() -> None:
     fetched = GetDelegationRequest(factory).execute(request.id)
     assert fetched == request
     assert ListDelegationsForRun(factory).execute(run.id) == [request]
+
+
+def test_creating_delegation_request_has_no_child_or_execution_side_effects() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    agent, run = _setup(uow, clock, factory)
+    before = (
+        len(uow.task_repo.items),
+        len(uow.run_repo.items),
+        len(uow.approval_repo.items),
+        len(uow.tool_repo.items),
+    )
+
+    request = CreateDelegationRequest(factory, clock).execute(
+        parent_run_id=run.id,
+        target_agent_id=agent.id,
+        objective="summarize logs",
+        input_payload=None,
+        expected_output_contract="a summary",
+    )
+
+    assert request.child_task_id is None
+    assert request.child_run_id is None
+    assert (
+        len(uow.task_repo.items),
+        len(uow.run_repo.items),
+        len(uow.approval_repo.items),
+        len(uow.tool_repo.items),
+    ) == before
+
+
+def test_approved_parent_run_approval_has_no_delegation_or_child_authority() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    agent, run = _setup(uow, clock, factory)
+    run.start(clock.now())
+    approval = RequestApproval(factory, clock).execute(
+        RequestApprovalCommand(
+            run_id=run.id,
+            category=ApprovalCategory.OTHER,
+            summary="approve parent delegation proposal",
+            reason="test only",
+            requested_action="delegate",
+            requested_input={"target_agent_id": str(agent.id)},
+        )
+    )
+    approved = ApproveRequest(factory, clock).execute(
+        ApproveRequestCommand(approval_id=approval.approval_id, resolver="operator")
+    )
+    request = CreateDelegationRequest(factory, clock).execute(
+        parent_run_id=run.id,
+        target_agent_id=agent.id,
+        objective="summarize logs",
+        input_payload=None,
+        expected_output_contract="a summary",
+    )
+
+    assert approved.subject_kind is ApprovalSubjectKind.RUN
+    assert approved.subject_id == str(run.id)
+    assert request.status.value == "requested"
+    assert request.child_task_id is None
+    assert request.child_run_id is None
+    assert request.authorization_fingerprint != approved.authorization_fingerprint
+    assert len(uow.task_repo.items) == 1
+    assert len(uow.run_repo.items) == 1
+    assert len(uow.tool_repo.items) == 0
 
 
 def test_create_delegation_request_requires_existing_parent_run() -> None:

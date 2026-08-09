@@ -66,12 +66,35 @@ def test_agent_lifecycle_activate_disable_archive(app: FastAPI) -> None:
 
         activated = client.post(f"/v1/agents/{agent['id']}/revisions/{revision['id']}/activate")
         disabled = client.post(f"/v1/agents/{agent['id']}/disable")
+        reactivated = client.post(f"/v1/agents/{agent['id']}/revisions/{revision['id']}/activate")
         archived = client.post(f"/v1/agents/{agent['id']}/archive")
+        rejected = client.post(f"/v1/agents/{agent['id']}/revisions/{revision['id']}/activate")
 
     assert activated.status_code == 200
     assert activated.json()["active_revision_id"] == revision["id"]
     assert disabled.json()["status"] == "disabled"
+    assert reactivated.status_code == 200
+    assert reactivated.json()["status"] == "active"
     assert archived.json()["status"] == "archived"
+    assert rejected.status_code == 409
+    assert rejected.json()["error"]["type"] == "entity_conflict"
+
+
+def test_create_agent_revision_rejects_nonempty_runtime_config(app: FastAPI) -> None:
+    app.state.clock = _Clock()
+    with TestClient(app) as client:
+        agent = _create_agent(client, key="research.invalid-runtime-config")
+        response = client.post(
+            f"/v1/agents/{agent['id']}/revisions",
+            json={
+                "instructions": "x",
+                "runtime_kind": "claude_cli",
+                "runtime_config": {"command": "unsafe"},
+                "source_kind": "operator",
+            },
+        )
+    assert response.status_code == 422
+    assert response.json()["error"]["type"] == "invalid_brain_runtime_config"
 
 
 def test_create_agent_revision_rejects_unknown_runtime_kind(app: FastAPI) -> None:

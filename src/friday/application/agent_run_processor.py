@@ -42,6 +42,7 @@ from typing import Any
 
 from friday.application.agent_registry import ResolveRunAgent
 from friday.application.brain_runtime import BrainRequest, BrainResponse, BrainRuntime
+from friday.application.brain_runtime_registry import BrainRuntimeRegistry
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
 from friday.application.commands import RequestApprovalCommand
 from friday.application.conversation_context import ConversationContextAssembler
@@ -145,6 +146,7 @@ class AgentRunProcessor:
         uow_factory: UnitOfWorkFactory,
         clock: Clock,
         brain: BrainRuntime,
+        runtime_registry: BrainRuntimeRegistry,
         gateway: ToolGateway,
         verify_claim: VerifyRunClaim,
         request_tool_approval: RequestToolApproval,
@@ -159,6 +161,7 @@ class AgentRunProcessor:
         self._clock = clock
         self._brain = brain
         self._gateway = gateway
+        self._runtime_registry = runtime_registry
         self._verify_claim = verify_claim
         self._request_tool_approval = request_tool_approval
         self._execute_tool_action = execute_tool_action
@@ -168,7 +171,7 @@ class AgentRunProcessor:
         self._conversation_context = conversation_context
         self._monotonic = monotonic
         self._resolve_run_skills = ResolveRunSkills(uow_factory, clock)
-        self._resolve_run_agent = ResolveRunAgent(uow_factory, clock)
+        self._resolve_run_agent = ResolveRunAgent(uow_factory, clock, runtime_registry)
 
     # ------------------------------------------------------------------ API
 

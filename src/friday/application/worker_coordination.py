@@ -13,17 +13,26 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta
 
-from friday.application.errors import ApprovalNotFound, ClaimLost, EntityConflict, RunNotFound
+from friday.application.delegation_reconciliation import reconcile_child_terminal_in_uow
+from friday.application.errors import (
+    ApprovalNotFound,
+    ClaimLost,
+    DelegationRequestNotFound,
+    EntityConflict,
+    RunNotFound,
+)
 from friday.application.lifecycle_events import LifecycleEvents, run_result
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.results import RunClaimResult, RunResult
+from friday.application.retry_inheritance import inherit_frozen_resolutions_in_uow
 from friday.application.retry_policy import RetryPolicy
 from friday.application.run_lifecycle import _fail_run_event_specs, _succeed_run_event_specs
 from friday.application.skill_usage import materialize_skill_usage_in_uow
 from friday.domain.approval import TERMINAL_APPROVAL_STATUSES, ApprovalStatus
+from friday.domain.delegation import DelegationStatus
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure
-from friday.domain.identifiers import ApprovalRequestId, RunId
+from friday.domain.identifiers import ApprovalRequestId, DelegationRequestId, RunId
 from friday.domain.json_value import JsonValue
 from friday.domain.run import TERMINAL_RUN_STATUSES, Run, RunStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
@@ -63,7 +72,8 @@ class ClaimNextRun:
                 if (
                     run is None
                     or run.status in TERMINAL_RUN_STATUSES
-                    or run.status is RunStatus.WAITING_FOR_APPROVAL
+                    or run.status
+                    in {RunStatus.WAITING_FOR_APPROVAL, RunStatus.WAITING_FOR_DELEGATION}
                 ):
                     # Stale work item left behind by a state change that
                     # predates this claim; there is nothing to run.
@@ -240,6 +250,7 @@ class ApplyFailedOutcome:
                     execution_id=run.execution_id,
                 )
                 uow.runs.add(retry)
+                inherit_frozen_resolutions_in_uow(uow, run, retry)
                 delay = self._retry_policy.compute_delay(attempt_number + 1)
                 uow.work_queue.enqueue(retry.id, available_at=now + delay, enqueued_at=now)
                 LifecycleEvents.append_run_events(
@@ -254,6 +265,8 @@ class ApplyFailedOutcome:
                         )
                     ],
                 )
+            else:
+                reconcile_child_terminal_in_uow(uow, run, now)
 
             uow.commit()
             return run_result(run)
@@ -296,6 +309,8 @@ class ApplySucceededOutcome:
             has_approvals = getattr(uow.approvals, "has_pending_for_run", None)
             if has_approvals is not None and has_approvals(run_id):
                 raise EntityConflict("run has pending approvals")
+            if uow.delegation_requests.has_dispatched_for_run(run_id):
+                raise EntityConflict("run has an active delegation")
 
             removed = uow.work_queue.remove_if_claimed(
                 run_id, worker_id, claim_token, claim_generation, now
@@ -315,6 +330,7 @@ class ApplySucceededOutcome:
                     ),
                 )
             LifecycleEvents.append_run_events(uow, run, now, specs)
+            reconcile_child_terminal_in_uow(uow, run, now)
             materialize_skill_usage_in_uow(uow, run.id, now)
             uow.commit()
             return run_result(run)
@@ -392,5 +408,76 @@ class ApplyWaitingOutcome:
             )
             if not removed:
                 raise ClaimLost(f"waiting outcome lost claim for run {run_id}")
+            uow.commit()
+            return run_result(run)
+
+
+class ApplyWaitingForDelegationOutcome:
+    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
+        self._uow_factory = uow_factory
+        self._clock = clock
+
+    def execute(
+        self,
+        run_id: RunId,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        delegation_request_id: DelegationRequestId,
+    ) -> RunResult:
+        with self._uow_factory() as uow:
+            run = uow.runs.get(run_id)
+            if run is None:
+                uow.commit()
+                raise RunNotFound(run_id)
+            request = uow.delegation_requests.get(delegation_request_id)
+            if request is None:
+                uow.commit()
+                raise DelegationRequestNotFound(delegation_request_id)
+            if request.parent_run_id != run.id:
+                uow.commit()
+                raise EntityConflict("delegation request does not belong to run")
+
+            item = uow.work_queue.get(run_id)
+            if run.status is RunStatus.RUNNING and request.status in {
+                DelegationStatus.SUCCEEDED,
+                DelegationStatus.FAILED,
+                DelegationStatus.CANCELLED,
+            }:
+                if item is None:
+                    uow.commit()
+                    return run_result(run)
+                if (
+                    item.claimed_by != worker_id
+                    or item.claim_token != claim_token
+                    or item.claim_generation != claim_generation
+                ):
+                    uow.commit()
+                    raise ClaimLost(f"stale waiting delegation outcome for run {run_id}")
+                uow.commit()
+                raise EntityConflict(
+                    "processor reported waiting_for_delegation after delegation resolution"
+                )
+
+            if run.status is not RunStatus.WAITING_FOR_DELEGATION:
+                uow.commit()
+                raise EntityConflict(
+                    "processor reported waiting_for_delegation but the run is not waiting"
+                )
+            if run.delegation_request_id != request.id:
+                uow.commit()
+                raise EntityConflict("run is waiting for a different delegation request")
+            if request.status is not DelegationStatus.DISPATCHED:
+                uow.commit()
+                raise EntityConflict("delegation request has an invalid status")
+            if item is None:
+                uow.commit()
+                return run_result(run)
+            now = self._clock.now()
+            removed = uow.work_queue.remove_if_claimed(
+                run_id, worker_id, claim_token, claim_generation, now
+            )
+            if not removed:
+                raise ClaimLost(f"waiting delegation outcome lost claim for run {run_id}")
             uow.commit()
             return run_result(run)

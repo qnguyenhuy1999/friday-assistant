@@ -50,7 +50,7 @@ from friday.domain.approval import ApprovalRequest, ApprovalStatus
 from friday.domain.artifact import Artifact
 from friday.domain.conversation import Conversation
 from friday.domain.conversation_turn import ConversationTurn
-from friday.domain.delegation import DelegationRequest
+from friday.domain.delegation import DelegationRequest, DelegationStatus
 from friday.domain.delivery_attempt import (
     DeliveryAttempt,
     DeliveryAttemptOutcome,
@@ -1420,8 +1420,12 @@ class FakeRunAgentResolutionRepository:
 class FakeDelegationRequestRepository:
     def __init__(self) -> None:
         self.items: dict[DelegationRequestId, DelegationRequest] = {}
+        self._runs: FakeRunRepository | None = None
 
     def add(self, request: DelegationRequest) -> None:
+        self.items[request.id] = request
+
+    def save(self, request: DelegationRequest) -> None:
         self.items[request.id] = request
 
     def get(self, delegation_id: DelegationRequestId) -> DelegationRequest | None:
@@ -1432,6 +1436,36 @@ class FakeDelegationRequestRepository:
             (x for x in self.items.values() if x.parent_run_id == run_id),
             key=lambda x: x.created_at,
         )
+
+    def count_dispatched_for_run(self, run_id: RunId) -> int:
+        return sum(
+            request.parent_run_id == run_id
+            and request.child_run_id is not None
+            and request.status
+            in {
+                DelegationStatus.DISPATCHED,
+                DelegationStatus.SUCCEEDED,
+                DelegationStatus.FAILED,
+                DelegationStatus.CANCELLED,
+            }
+            for request in self.items.values()
+        )
+
+    def has_dispatched_for_run(self, run_id: RunId) -> bool:
+        return any(
+            request.parent_run_id == run_id and request.status is DelegationStatus.DISPATCHED
+            for request in self.items.values()
+        )
+
+    def get_for_child_execution(self, execution_id: RunId) -> DelegationRequest | None:
+        for request in sorted(self.items.values(), key=lambda x: (x.created_at, str(x.id))):
+            if request.child_run_id is None:
+                continue
+            runs = self._runs
+            run = runs.get(request.child_run_id) if runs is not None else None
+            if run is not None and run.execution_id == execution_id:
+                return request
+        return None
 
 
 class FakeSkillRepository:
@@ -1788,6 +1822,7 @@ class FakeUnitOfWork:
         self.skill_promotion_request_repo = FakeSkillPromotionRequestRepository()
         self.skill_rollback_request_repo = FakeSkillRollbackRequestRepository()
         self.run_repo = FakeRunRepository()
+        self.delegation_request_repo._runs = self.run_repo
         self.schedule_repo = FakeScheduleRepository()
         self.conversation_repo = FakeConversationRepository()
         self.conversation_turn_repo = FakeConversationTurnRepository()

@@ -12,8 +12,8 @@ from friday.domain.delegation import (
     DelegationStatus,
     compute_delegation_fingerprint,
 )
-from friday.domain.errors import DomainValidationError
-from friday.domain.identifiers import AgentId, DelegationRequestId, RunId, RunStepId
+from friday.domain.errors import DomainValidationError, InvalidStateTransition
+from friday.domain.identifiers import AgentId, DelegationRequestId, RunId, RunStepId, TaskId
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -153,3 +153,35 @@ def test_malformed_authorization_fingerprint_is_rejected() -> None:
             status=request.status,
             created_at=request.created_at,
         )
+
+
+def test_delegation_execution_transitions_are_explicit_and_immutable() -> None:
+    request = _new_request()
+    child_task_id = TaskId.new()
+    child_run_id = RunId.new()
+    request.dispatch(child_task_id, child_run_id, T0)
+    assert request.status is DelegationStatus.DISPATCHED
+    assert request.started_at == T0
+    with pytest.raises(InvalidStateTransition):
+        request.dispatch(TaskId.new(), RunId.new(), T0)
+    request.succeed(T0)
+    assert request.status.value == DelegationStatus.SUCCEEDED.value
+    assert request.completed_at == T0
+    with pytest.raises(InvalidStateTransition):
+        request.fail(T0, "late")
+
+
+def test_delegation_failure_and_cancellation_shapes_are_durable() -> None:
+    failed = _new_request()
+    failed.dispatch(TaskId.new(), RunId.new(), T0)
+    failed.fail(T0, "child_failed")
+    assert failed.status is DelegationStatus.FAILED
+    assert failed.failure_code == "child_failed"
+    assert failed.completed_at == T0
+
+    cancelled = _new_request()
+    cancelled.cancel(T0)
+    assert cancelled.status is DelegationStatus.CANCELLED
+    assert cancelled.completed_at == T0
+    with pytest.raises(InvalidStateTransition):
+        cancelled.cancel(T0)

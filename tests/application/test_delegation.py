@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 
 from friday.application.agent_registry import (
     ActivateAgentRevision,
     CreateAgent,
     CreateAgentRevision,
+    ResolveRunAgent,
 )
 from friday.application.approval_workflow import ApproveRequest, RequestApproval
 from friday.application.brain_runtime_registry import BrainRuntimeRegistry
@@ -17,11 +20,13 @@ from friday.application.commands import (
 from friday.application.create_task import CreateTask
 from friday.application.delegation import (
     CreateDelegationRequest,
+    DispatchDelegation,
     GetDelegationRequest,
     ListDelegationsForRun,
 )
 from friday.application.errors import (
     AgentNotFound,
+    ClaimLost,
     DelegationRequestNotFound,
     EntityConflict,
     RunNotFound,
@@ -29,10 +34,12 @@ from friday.application.errors import (
 )
 from friday.domain.agent import AgentRevisionSourceKind
 from friday.domain.approval import ApprovalCategory, ApprovalSubjectKind
-from friday.domain.identifiers import AgentId, DelegationRequestId, RunId, RunStepId
+from friday.domain.delegation import DelegationRequest
+from friday.domain.event import RunEventType
+from friday.domain.identifiers import AgentId, DelegationRequestId, RunId, RunStepId, TaskId
 from friday.domain.run import Run
 from friday.domain.step import RunStep
-from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
+from tests.application.fakes import T0, CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
 
 
 def _registry() -> BrainRuntimeRegistry:
@@ -239,3 +246,167 @@ def test_list_delegations_for_run_requires_existing_run() -> None:
     factory = CountingUnitOfWorkFactory(uow)
     with pytest.raises(RunNotFound):
         ListDelegationsForRun(factory).execute(RunId.new())
+
+
+def _claim_parent(uow: FakeUnitOfWork, run: Run) -> int:
+    run.start(T0)
+    uow.run_repo.save(run)
+    uow.work_queue_repo.enqueue(run.id, T0, T0)
+    assert uow.work_queue_repo.try_claim(
+        run.id, "parent-worker", "parent-token", T0, T0 + timedelta(minutes=1)
+    )
+    item = uow.work_queue_repo.get(run.id)
+    assert item is not None
+    return item.claim_generation
+
+
+def test_claim_fenced_dispatch_materializes_one_normal_child_execution() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    agent, parent = _setup(uow, clock, factory)
+    generation = _claim_parent(uow, parent)
+
+    request = DispatchDelegation(factory, clock, _registry(), max_delegations_per_run=4).execute(
+        parent_run_id=parent.id,
+        worker_id="parent-worker",
+        claim_token="parent-token",
+        claim_generation=generation,
+        target_agent_key="coder",
+        objective="research the change",
+        input_payload={"scope": "delegation"},
+        expected_output_contract="Return evidence.",
+    )
+
+    assert request.status.value == "dispatched"
+    assert request.child_task_id is not None
+    assert request.child_run_id is not None
+    assert parent.status.value == "waiting_for_delegation"
+    assert parent.delegation_request_id == request.id
+    assert parent.id not in uow.work_queue_repo.items
+    child = uow.run_repo.get(request.child_run_id)
+    assert child is not None
+    assert child.execution_id == child.id
+    assert child.id in uow.work_queue_repo.items
+    assert uow.task_agent_binding_repo.items[request.child_task_id].agent_id == agent.id
+    assert [event.type for event in uow.event_store.appended][-2:] == [
+        RunEventType.DELEGATION_DISPATCHED,
+        RunEventType.RUN_WAITING_FOR_DELEGATION,
+    ]
+
+    child_claimed = uow.work_queue_repo.try_claim(
+        child.id, "child-worker", "child-token", T0, T0 + timedelta(minutes=1)
+    )
+    assert child_claimed
+    child_item = uow.work_queue_repo.get(child.id)
+    assert child_item is not None
+    resolution = ResolveRunAgent(factory, clock, _registry()).execute(
+        child.id, "child-worker", "child-token", child_item.claim_generation
+    )
+    assert resolution is not None
+    assert resolution.agent_id == agent.id
+
+
+def test_stale_parent_claim_creates_no_delegation_state() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    _agent, parent = _setup(uow, clock, factory)
+    _claim_parent(uow, parent)
+    before = (
+        len(uow.task_repo.items),
+        len(uow.run_repo.items),
+        len(uow.delegation_request_repo.items),
+    )
+
+    with pytest.raises(ClaimLost):
+        DispatchDelegation(factory, clock, _registry()).execute(
+            parent_run_id=parent.id,
+            worker_id="parent-worker",
+            claim_token="stale-token",
+            claim_generation=1,
+            target_agent_key="coder",
+            objective="research the change",
+            input_payload={},
+            expected_output_contract="Return evidence.",
+        )
+
+    assert (
+        len(uow.task_repo.items),
+        len(uow.run_repo.items),
+        len(uow.delegation_request_repo.items),
+    ) == before
+
+
+def test_nested_delegation_is_rejected_before_child_materialization() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    agent, parent = _setup(uow, clock, factory)
+    generation = _claim_parent(uow, parent)
+    incoming = DelegationRequest.new(
+        id=DelegationRequestId.new(),
+        parent_run_id=parent.id,
+        target_agent_id=agent.id,
+        objective="incoming",
+        input_payload={},
+        expected_output_contract="result",
+        created_at=T0,
+    )
+    incoming.dispatch(parent.task_id, parent.id, T0)
+    uow.delegation_request_repo.add(incoming)
+
+    with pytest.raises(EntityConflict, match="nested_delegation_not_supported"):
+        DispatchDelegation(factory, clock, _registry()).execute(
+            parent_run_id=parent.id,
+            worker_id="parent-worker",
+            claim_token="parent-token",
+            claim_generation=generation,
+            target_agent_key="coder",
+            objective="grandchild",
+            input_payload={},
+            expected_output_contract="result",
+        )
+    assert len(uow.task_repo.items) == 1
+
+
+def test_delegation_budget_and_input_limits_fail_closed() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    agent, parent = _setup(uow, clock, factory)
+    generation = _claim_parent(uow, parent)
+    for _ in range(4):
+        request = DelegationRequest.new(
+            id=DelegationRequestId.new(),
+            parent_run_id=parent.id,
+            target_agent_id=agent.id,
+            objective="already dispatched",
+            input_payload={},
+            expected_output_contract="result",
+            created_at=T0,
+        )
+        request.dispatch(TaskId.new(), RunId.new(), T0)
+        request.succeed(T0)
+        uow.delegation_request_repo.add(request)
+
+    with pytest.raises(EntityConflict, match="delegation_budget_exhausted"):
+        DispatchDelegation(factory, clock, _registry()).execute(
+            parent_run_id=parent.id,
+            worker_id="parent-worker",
+            claim_token="parent-token",
+            claim_generation=generation,
+            target_agent_key="coder",
+            objective="over budget",
+            input_payload={},
+            expected_output_contract="result",
+        )
+
+    uow.delegation_request_repo.items.clear()
+    with pytest.raises(EntityConflict, match="delegation_input_too_large"):
+        DispatchDelegation(factory, clock, _registry()).execute(
+            parent_run_id=parent.id,
+            worker_id="parent-worker",
+            claim_token="parent-token",
+            claim_generation=generation,
+            target_agent_key="coder",
+            objective="large input",
+            input_payload={"data": "x" * 20_000},
+            expected_output_contract="result",
+        )

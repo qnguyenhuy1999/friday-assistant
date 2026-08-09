@@ -10,17 +10,30 @@ import pytest
 
 from friday.application.runtime_context import (
     MIN_CONTEXT_CHARS,
+    AgentContextTooLarge,
+    DelegationTarget,
     RunSnapshot,
     build_runtime_context,
 )
 from friday.application.tool_gateway import ToolDescriptor
+from friday.domain.agent import (
+    Agent,
+    AgentRevision,
+    AgentRevisionSourceKind,
+    RunAgentResolution,
+)
 from friday.domain.approval import ApprovalCategory, ApprovalRequest
 from friday.domain.artifact import Artifact, ArtifactKind
+from friday.domain.delegation import DelegationRequest
 from friday.domain.event import RunEvent, RunEventType
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.identifiers import (
+    AgentId,
+    AgentRevisionId,
     ApprovalRequestId,
     ArtifactId,
+    DelegationRequestId,
+    RunAgentResolutionId,
     RunEventId,
     RunId,
     RunStepId,
@@ -142,6 +155,33 @@ def _build(snapshot: RunSnapshot, max_chars: int = 20_000) -> str:
     )
 
 
+def _agent_context() -> tuple[RunAgentResolution, Agent, AgentRevision]:
+    agent_id = AgentId.new()
+    agent = Agent.new(
+        id=agent_id,
+        key="researcher",
+        display_name="Researcher",
+        description="Evidence gathering",
+        created_at=NOW,
+    )
+    revision = AgentRevision.new(
+        id=AgentRevisionId.new(),
+        agent_id=agent_id,
+        version=3,
+        instructions="Use primary sources and cite the evidence.",
+        runtime_kind="claude_cli",
+        runtime_config={},
+        source_kind=AgentRevisionSourceKind.OPERATOR,
+        created_at=NOW,
+    )
+    agent.activate(revision, NOW)
+    return (
+        RunAgentResolution(RunAgentResolutionId.new(), RUN_ID, agent_id, revision.id, NOW),
+        agent,
+        revision,
+    )
+
+
 def test_minimal_snapshot_renders_objective_run_and_tools() -> None:
     document = _build(_snapshot())
     assert "# OBJECTIVE" in document
@@ -153,6 +193,56 @@ def test_minimal_snapshot_renders_objective_run_and_tools() -> None:
     # empty sections are omitted entirely
     for absent in ("# STEPS", "# APPROVALS", "# TOOL INVOCATIONS", "# ARTIFACTS"):
         assert absent not in document
+
+
+def test_exact_agent_instructions_and_bounded_target_manifest_are_rendered() -> None:
+    document = _build(
+        _snapshot(
+            agent=_agent_context(),
+            delegation_targets=(
+                DelegationTarget("zeta", "Zeta", "z description"),
+                DelegationTarget("alpha", "Alpha", "a description"),
+            ),
+        )
+    )
+    assert "# AGENT" in document
+    assert "Agent key: researcher" in document
+    assert "Revision: 3" in document
+    assert "Agent instructions influence reasoning." in document
+    assert "Use primary sources and cite the evidence." in document
+    assert document.index("- alpha") < document.index("- zeta")
+    assert "credentials" not in document
+    assert "runtime_kind" not in document
+
+
+def test_agent_instructions_are_all_or_nothing() -> None:
+    snapshot = _snapshot(agent=_agent_context())
+    with pytest.raises(AgentContextTooLarge):
+        build_runtime_context(
+            snapshot,
+            tool_manifest=MANIFEST,
+            attempt_number=1,
+            turn_number=1,
+            max_chars=20_000,
+            max_agent_context_chars=10,
+        )
+
+
+def test_incoming_delegation_context_contains_only_explicit_bounded_input() -> None:
+    request = DelegationRequest.new(
+        id=DelegationRequestId.new(),
+        parent_run_id=RunId.new(),
+        target_agent_id=AgentId.new(),
+        objective="Inspect the release notes.",
+        input_payload={"release": "21.2", "paths": ["CHANGELOG.md"]},
+        expected_output_contract="Return cited findings.",
+        created_at=NOW,
+    )
+    document = _build(_snapshot(incoming_delegation=request))
+    assert "# DELEGATED WORK" in document
+    assert "Objective: Inspect the release notes." in document
+    assert '"paths":["CHANGELOG.md"]' in document
+    assert "# APPROVALS" not in document
 
 
 def test_all_entities_render_in_deterministic_order() -> None:

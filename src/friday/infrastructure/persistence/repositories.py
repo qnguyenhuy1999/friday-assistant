@@ -3,9 +3,22 @@ from __future__ import annotations
 # ruff: noqa: E501
 import builtins
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, cast
 
-from sqlalchemy import DateTime, Select, String, and_, exists, func, literal, or_, select, update
+from sqlalchemy import (
+    DateTime,
+    Select,
+    String,
+    and_,
+    exists,
+    func,
+    inspect,
+    literal,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -29,6 +42,7 @@ from friday.domain import (
     ConversationTurnId,
     DelegationRequest,
     DelegationRequestId,
+    DelegationStatus,
     DeliveryAttempt,
     DeliveryAttemptId,
     DeliveryAttemptOutcome,
@@ -366,6 +380,9 @@ class DelegationRequestRepository:
     def add(self, request: DelegationRequest) -> None:
         self._session.add(delegation_request_to_row(request))
 
+    def save(self, request: DelegationRequest) -> None:
+        self._session.merge(delegation_request_to_row(request))
+
     def get(self, delegation_id: DelegationRequestId) -> DelegationRequest | None:
         row = self._session.get(DelegationRequestRow, str(delegation_id))
         return delegation_request_from_row(row) if row else None
@@ -379,6 +396,50 @@ class DelegationRequestRepository:
                 .order_by(DelegationRequestRow.created_at, DelegationRequestRow.id)
             ).scalars()
         ]
+
+    def count_dispatched_for_run(self, run_id: RunId) -> int:
+        return int(
+            self._session.scalar(
+                select(func.count())
+                .select_from(DelegationRequestRow)
+                .where(
+                    DelegationRequestRow.parent_run_id == str(run_id),
+                    DelegationRequestRow.status.in_(
+                        (
+                            DelegationStatus.DISPATCHED.value,
+                            DelegationStatus.SUCCEEDED.value,
+                            DelegationStatus.FAILED.value,
+                            DelegationStatus.CANCELLED.value,
+                        )
+                    ),
+                    DelegationRequestRow.child_run_id.is_not(None),
+                )
+            )
+            or 0
+        )
+
+    def has_dispatched_for_run(self, run_id: RunId) -> bool:
+        return (
+            self._session.scalar(
+                select(DelegationRequestRow.id)
+                .where(
+                    DelegationRequestRow.parent_run_id == str(run_id),
+                    DelegationRequestRow.status == DelegationStatus.DISPATCHED.value,
+                )
+                .limit(1)
+            )
+            is not None
+        )
+
+    def get_for_child_execution(self, execution_id: RunId) -> DelegationRequest | None:
+        row = self._session.scalar(
+            select(DelegationRequestRow)
+            .join(RunRow, DelegationRequestRow.child_run_id == RunRow.id)
+            .where(RunRow.execution_id == str(execution_id))
+            .order_by(DelegationRequestRow.created_at, DelegationRequestRow.id)
+            .limit(1)
+        )
+        return delegation_request_from_row(row) if row else None
 
 
 class SkillRepository:
@@ -1082,6 +1143,36 @@ class RunRepository:
         return [run_from_row(row) for row in self._session.execute(stmt).scalars()]
 
     def get_latest_for_execution(self, execution_id: RunId) -> Run | None:
+        # Historical migration tests and operators may inspect a database at
+        # 0032 with the current application package.  The new delegation
+        # column is the only RunRow field absent there; keep this read-only
+        # lineage query compatible without weakening the head-schema path.
+        columns = {
+            column["name"] for column in inspect(self._session.get_bind()).get_columns("runs")
+        }
+        if "delegation_request_id" not in columns:
+            legacy_stmt = (
+                select(
+                    RunRow.id,
+                    RunRow.task_id,
+                    RunRow.execution_id,
+                    RunRow.status,
+                    RunRow.created_at,
+                    RunRow.started_at,
+                    RunRow.ended_at,
+                    RunRow.failure,
+                    RunRow.approval_request_id,
+                )
+                .where(RunRow.execution_id == str(execution_id))
+                .order_by(RunRow.created_at.desc(), RunRow.id.desc())
+                .limit(1)
+            )
+            legacy_row = self._session.execute(legacy_stmt).first()
+            if legacy_row is None:
+                return None
+            return run_from_row(
+                cast(RunRow, SimpleNamespace(**legacy_row._mapping, delegation_request_id=None))
+            )
         stmt = (
             select(RunRow)
             .where(RunRow.execution_id == str(execution_id))

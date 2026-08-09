@@ -5,11 +5,14 @@ executing anything. No vendor SDK, no subprocess."""
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from friday.application.errors import BrainResponseInvalid
+from friday.domain.agent import MAX_AGENT_KEY_LENGTH, validate_agent_key
+from friday.domain.errors import DomainValidationError
 from friday.domain.json_value import JsonValue, ensure_json_value
 
 RUNTIME_ACTION_VERSION = 1
@@ -17,6 +20,11 @@ MAX_SUMMARY_CHARS = 4000
 MAX_REASON_CHARS = 2000
 MAX_TOOL_NAME_CHARS = 128
 MAX_YIELD_DELAY_SECONDS = 86400
+MAX_DELEGATION_INPUT_BYTES = 16_384
+MAX_DELEGATION_INPUT_DEPTH = 6
+MAX_DELEGATION_INPUT_NODES = 128
+MAX_DELEGATION_OBJECTIVE_CHARS = 4_000
+MAX_DELEGATION_OUTPUT_CONTRACT_CHARS = 4_000
 TOOL_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
 
 
@@ -44,7 +52,16 @@ class InvokeToolAction:
     reason: str | None
 
 
-BrainAction = FinishAction | FailAction | YieldAction | InvokeToolAction
+@dataclass(frozen=True, slots=True)
+class DelegateAction:
+    target_agent_key: str
+    objective: str
+    input_payload: JsonValue
+    expected_output_contract: str
+    reason: str | None
+
+
+BrainAction = FinishAction | FailAction | YieldAction | InvokeToolAction | DelegateAction
 
 
 def _require_dict(value: object, description: str) -> dict[str, object]:
@@ -125,11 +142,87 @@ def _parse_invoke_tool(raw: dict[str, object]) -> InvokeToolAction:
     return InvokeToolAction(tool=tool, tool_input=tool_input, reason=reason)
 
 
+def _json_complexity(value: JsonValue, *, depth: int = 0) -> tuple[int, int]:
+    if isinstance(value, dict):
+        nodes, deepest = 1, depth
+        for key, child in value.items():
+            child_nodes, child_depth = _json_complexity(child, depth=depth + 1)
+            nodes += 1 + len(key) + child_nodes
+            deepest = max(deepest, child_depth)
+        return nodes, deepest
+    if isinstance(value, list):
+        nodes, deepest = 1, depth
+        for child in value:
+            child_nodes, child_depth = _json_complexity(child, depth=depth + 1)
+            nodes += child_nodes
+            deepest = max(deepest, child_depth)
+        return nodes, deepest
+    return 1, depth
+
+
+def _parse_delegate(raw: dict[str, object]) -> DelegateAction:
+    _reject_unknown_keys(
+        raw,
+        {
+            "version",
+            "action",
+            "target_agent_key",
+            "objective",
+            "input",
+            "expected_output_contract",
+            "reason",
+        },
+        description="delegate action",
+    )
+    raw_key = _require_str(
+        raw.get("target_agent_key"),
+        field="target_agent_key",
+        min_length=1,
+        max_length=MAX_AGENT_KEY_LENGTH,
+    )
+    try:
+        target_agent_key = validate_agent_key(raw_key)
+    except DomainValidationError as exc:
+        raise BrainResponseInvalid("target_agent_key is not a valid Agent key") from exc
+    objective = _require_str(
+        raw.get("objective"),
+        field="objective",
+        min_length=1,
+        max_length=MAX_DELEGATION_OBJECTIVE_CHARS,
+    )
+    expected = _require_str(
+        raw.get("expected_output_contract"),
+        field="expected_output_contract",
+        min_length=1,
+        max_length=MAX_DELEGATION_OUTPUT_CONTRACT_CHARS,
+    )
+    input_raw = _require_dict(raw.get("input"), "delegate action 'input'")
+    try:
+        input_payload = ensure_json_value(input_raw, path="$.input")
+    except DomainValidationError as exc:
+        raise BrainResponseInvalid("delegate input is not valid JSON") from exc
+    canonical = json.dumps(input_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    nodes, depth = _json_complexity(input_payload)
+    if len(canonical.encode("utf-8")) > MAX_DELEGATION_INPUT_BYTES:
+        raise BrainResponseInvalid("delegate input exceeds the byte limit")
+    if depth > MAX_DELEGATION_INPUT_DEPTH:
+        raise BrainResponseInvalid("delegate input exceeds the depth limit")
+    if nodes > MAX_DELEGATION_INPUT_NODES:
+        raise BrainResponseInvalid("delegate input exceeds the node limit")
+    reason: str | None = None
+    if "reason" in raw:
+        reason = _require_str(
+            raw["reason"], field="reason", min_length=0, max_length=MAX_REASON_CHARS
+        )
+    return DelegateAction(target_agent_key, objective, input_payload, expected, reason)
+
+
 _PARSERS: dict[str, Callable[[dict[str, object]], BrainAction]] = {
     "finish": _parse_finish,
     "fail": _parse_fail,
     "yield": _parse_yield,
     "invoke_tool": _parse_invoke_tool,
+    "delegate": _parse_delegate,
 }
 
 

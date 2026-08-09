@@ -34,6 +34,7 @@ export interface Run {
     | "queued"
     | "running"
     | "waiting_for_approval"
+    | "waiting_for_delegation"
     | "succeeded"
     | "failed"
     | "cancelled";
@@ -120,6 +121,7 @@ export interface RunEvent {
     | "run_created"
     | "run_started"
     | "run_waiting_for_approval"
+    | "run_waiting_for_delegation"
     | "run_resumed"
     | "run_succeeded"
     | "run_failed"
@@ -139,6 +141,10 @@ export interface RunEvent {
     | "tool_invocation_cancelled"
     | "artifact_created"
     | "agent_finished"
+    | "delegation_dispatched"
+    | "delegation_succeeded"
+    | "delegation_failed"
+    | "delegation_cancelled"
     | "memory_context_attached"
     | "memory_retrieval_degraded"
     | "memory_write_requested"
@@ -629,6 +635,7 @@ const schema = {
             "queued",
             "running",
             "waiting_for_approval",
+            "waiting_for_delegation",
             "succeeded",
             "failed",
             "cancelled",
@@ -907,6 +914,7 @@ const schema = {
             "run_created",
             "run_started",
             "run_waiting_for_approval",
+            "run_waiting_for_delegation",
             "run_resumed",
             "run_succeeded",
             "run_failed",
@@ -926,6 +934,10 @@ const schema = {
             "tool_invocation_cancelled",
             "artifact_created",
             "agent_finished",
+            "delegation_dispatched",
+            "delegation_succeeded",
+            "delegation_failed",
+            "delegation_cancelled",
             "memory_context_attached",
             "memory_retrieval_degraded",
             "memory_write_requested",

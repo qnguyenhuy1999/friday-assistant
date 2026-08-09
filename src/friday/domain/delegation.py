@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from friday.domain.errors import DomainValidationError
+from friday.domain.errors import DomainValidationError, InvalidStateTransition
 from friday.domain.identifiers import (
     AgentId,
     DelegationRequestId,
@@ -74,7 +74,7 @@ def compute_delegation_fingerprint(
     ).hexdigest()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class DelegationRequest:
     id: DelegationRequestId
     parent_run_id: RunId
@@ -135,6 +135,73 @@ class DelegationRequest:
             object.__setattr__(self, "started_at", ensure_utc(self.started_at))
         if self.completed_at is not None:
             object.__setattr__(self, "completed_at", ensure_utc(self.completed_at))
+        self._validate_state_shape()
+
+    def _validate_state_shape(self) -> None:
+        dispatched = self.child_task_id is not None and self.child_run_id is not None
+        if (self.child_task_id is None) != (self.child_run_id is None):
+            raise DomainValidationError("delegation child task/run ids must be paired")
+        if self.status is DelegationStatus.REQUESTED:
+            if dispatched or self.started_at is not None or self.completed_at is not None:
+                raise DomainValidationError(
+                    "requested delegation cannot have child execution state"
+                )
+            if self.failure_code is not None:
+                raise DomainValidationError("requested delegation cannot have a failure code")
+        elif self.status is DelegationStatus.DISPATCHED:
+            if not dispatched or self.started_at is None or self.completed_at is not None:
+                raise DomainValidationError("dispatched delegation has invalid execution state")
+            if self.failure_code is not None:
+                raise DomainValidationError("dispatched delegation cannot have a failure code")
+        elif self.status is DelegationStatus.SUCCEEDED:
+            if not dispatched or self.started_at is None or self.completed_at is None:
+                raise DomainValidationError("succeeded delegation has invalid execution state")
+            if self.failure_code is not None:
+                raise DomainValidationError("succeeded delegation cannot have a failure code")
+        elif self.status is DelegationStatus.FAILED:
+            if not dispatched or self.started_at is None or self.completed_at is None:
+                raise DomainValidationError("failed delegation has invalid execution state")
+            if not self.failure_code:
+                raise DomainValidationError("failed DelegationRequest requires a failure_code")
+        elif self.status is DelegationStatus.CANCELLED:
+            if self.failure_code is not None:
+                raise DomainValidationError("cancelled delegation cannot have a failure code")
+            if dispatched and (self.started_at is None or self.completed_at is None):
+                raise DomainValidationError(
+                    "dispatched cancelled delegation has invalid execution state"
+                )
+
+    def dispatch(self, child_task_id: TaskId, child_run_id: RunId, at: datetime) -> None:
+        if self.status is not DelegationStatus.REQUESTED:
+            raise InvalidStateTransition("DelegationRequest", self.status.value, "dispatched")
+        if child_task_id is None or child_run_id is None:
+            raise DomainValidationError("dispatch requires child task and run ids")
+        self.child_task_id = child_task_id
+        self.child_run_id = child_run_id
+        self.started_at = ensure_utc(at)
+        self.status = DelegationStatus.DISPATCHED
+
+    def succeed(self, at: datetime) -> None:
+        if self.status is not DelegationStatus.DISPATCHED:
+            raise InvalidStateTransition("DelegationRequest", self.status.value, "succeeded")
+        self.completed_at = ensure_utc(at)
+        self.status = DelegationStatus.SUCCEEDED
+
+    def fail(self, at: datetime, failure_code: str) -> None:
+        if self.status is not DelegationStatus.DISPATCHED:
+            raise InvalidStateTransition("DelegationRequest", self.status.value, "failed")
+        code = failure_code.strip()
+        if not code or len(code) > MAX_FAILURE_CODE_LENGTH:
+            raise DomainValidationError("delegation failure code is empty or too long")
+        self.failure_code = code
+        self.completed_at = ensure_utc(at)
+        self.status = DelegationStatus.FAILED
+
+    def cancel(self, at: datetime) -> None:
+        if self.status not in {DelegationStatus.REQUESTED, DelegationStatus.DISPATCHED}:
+            raise InvalidStateTransition("DelegationRequest", self.status.value, "cancelled")
+        self.completed_at = ensure_utc(at)
+        self.status = DelegationStatus.CANCELLED
 
     @classmethod
     def new(

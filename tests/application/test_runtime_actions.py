@@ -11,6 +11,7 @@ import pytest
 
 from friday.application.errors import BrainResponseInvalid
 from friday.application.runtime_actions import (
+    DelegateAction,
     FailAction,
     FinishAction,
     InvokeToolAction,
@@ -35,6 +36,15 @@ VALID_EXAMPLES: dict[str, dict[str, Any]] = {
         "tool": "shell.run",
         "input": {"cmd": "ls"},
         "reason": "list files",
+    },
+    "delegate": {
+        "version": 1,
+        "action": "delegate",
+        "target_agent_key": "researcher",
+        "objective": "Investigate the failing build.",
+        "input": {"branch": "main", "paths": ["src"]},
+        "expected_output_contract": "Return evidence and a concise diagnosis.",
+        "reason": "A focused research pass is useful.",
     },
 }
 
@@ -63,6 +73,17 @@ def test_parse_invoke_tool_returns_invoke_tool_action() -> None:
     result = parse_brain_action(VALID_EXAMPLES["invoke_tool"])
     assert result == InvokeToolAction(
         tool="shell.run", tool_input={"cmd": "ls"}, reason="list files"
+    )
+
+
+def test_parse_delegate_returns_delegate_action() -> None:
+    result = parse_brain_action(VALID_EXAMPLES["delegate"])
+    assert result == DelegateAction(
+        target_agent_key="researcher",
+        objective="Investigate the failing build.",
+        input_payload={"branch": "main", "paths": ["src"]},
+        expected_output_contract="Return evidence and a concise diagnosis.",
+        reason="A focused research pass is useful.",
     )
 
 
@@ -138,6 +159,49 @@ def test_unknown_extra_key_raises_invalid() -> None:
         parse_brain_action(
             {"version": 1, "action": "fail", "reason": "x", "unexpected_field": "boom"}
         )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {
+            "version": 1,
+            "action": "delegate",
+            "target_agent_key": "Researcher",
+            "objective": "x",
+            "input": {},
+            "expected_output_contract": "y",
+        },
+        {
+            "version": 1,
+            "action": "delegate",
+            "target_agent_key": "researcher",
+            "objective": "x",
+            "input": {},
+            "expected_output_contract": "y",
+            "runtime": {"tool": "shell.run"},
+        },
+        {
+            "version": 1,
+            "action": "delegate",
+            "target_agent_key": "researcher",
+            "objective": "x",
+            "input": {"nested": [[[[[[[1]]]]]]]},
+            "expected_output_contract": "y",
+        },
+        {
+            "version": 1,
+            "action": "delegate",
+            "target_agent_key": "researcher",
+            "objective": "x",
+            "input": {1: "non-json-key"},
+            "expected_output_contract": "y",
+        },
+    ],
+)
+def test_delegate_strict_fields_key_and_bounds_are_enforced(raw: dict[Any, Any]) -> None:
+    with pytest.raises(BrainResponseInvalid):
+        parse_brain_action(raw)
 
 
 def test_invoke_tool_bad_pattern_raises_invalid() -> None:

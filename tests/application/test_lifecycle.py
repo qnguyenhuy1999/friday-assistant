@@ -43,7 +43,14 @@ from friday.application.lifecycle import (
 )
 from friday.application.run_lifecycle import GetLatestRunForExecution
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import ApprovalRequestId, RunId, RunStepId, TaskId, ToolInvocationId
+from friday.domain.identifiers import (
+    ApprovalRequestId,
+    DelegationRequestId,
+    RunId,
+    RunStepId,
+    TaskId,
+    ToolInvocationId,
+)
 from friday.domain.run import Run, RunStatus
 from friday.domain.step import RunStep, RunStepStatus
 from friday.domain.task import Task, TaskStatus
@@ -187,6 +194,8 @@ def _run_at(task_id: TaskId, status: RunStatus) -> Run:
         from friday.domain.identifiers import ApprovalRequestId
 
         run.wait_for_approval(T0, ApprovalRequestId.new())
+    elif status is RunStatus.WAITING_FOR_DELEGATION:
+        run.wait_for_delegation(T0, DelegationRequestId.new())
     elif status is RunStatus.SUCCEEDED:
         run.succeed(T0)
     elif status is RunStatus.FAILED:
@@ -519,7 +528,13 @@ def test_run_terminal_replays_and_retry_parent_preconditions_are_stable() -> Non
 
 
 @pytest.mark.parametrize(
-    "status", [RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_FOR_APPROVAL]
+    "status",
+    [
+        RunStatus.QUEUED,
+        RunStatus.RUNNING,
+        RunStatus.WAITING_FOR_APPROVAL,
+        RunStatus.WAITING_FOR_DELEGATION,
+    ],
 )
 def test_complete_run_rejects_non_terminal_or_invalid_run_states(status: RunStatus) -> None:
     uow, factory, task, _ = _prepared()

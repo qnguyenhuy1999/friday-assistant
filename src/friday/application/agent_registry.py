@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from friday.application.brain_runtime_registry import BrainRuntimeRegistry
 from friday.application.errors import (
+    AgentIntegrityFailed,
     AgentNotFound,
     AgentRevisionNotFound,
     ClaimLost,
@@ -24,7 +25,7 @@ from friday.domain import (
     TaskAgentBinding,
     TaskId,
 )
-from friday.domain.errors import InvalidStateTransition
+from friday.domain.errors import DomainValidationError, InvalidStateTransition
 from friday.domain.json_value import JsonValue
 
 
@@ -239,7 +240,10 @@ class ResolveRunAgent:
                 # Load the exact pointer, not merely the pointer value.  The
                 # repository mapper verifies the persisted SHA-256 before
                 # returning this immutable revision.
-                revision = uow.agent_revisions.get(agent.active_revision_id)
+                try:
+                    revision = uow.agent_revisions.get(agent.active_revision_id)
+                except DomainValidationError as exc:
+                    raise AgentIntegrityFailed() from exc
                 if revision is None:
                     raise EntityConflict("active agent revision does not exist")
                 if revision.agent_id != agent.id:

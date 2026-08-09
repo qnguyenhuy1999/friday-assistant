@@ -192,6 +192,13 @@ class EntityConflict(ApplicationError):
     """A write violated an expected uniqueness or state constraint."""
 
 
+class DelegatedManualRetryForbidden(EntityConflict):
+    """Automatic retries own the complete delegated execution lineage."""
+
+    def __init__(self) -> None:
+        super().__init__("delegated_manual_retry_forbidden")
+
+
 class ConcurrencyConflict(ApplicationError):
     """A write lost an optimistic-concurrency or stale-data race."""
 

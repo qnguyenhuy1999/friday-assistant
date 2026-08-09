@@ -716,6 +716,11 @@ class AgentRevisionRow(Base):
 
 class TaskAgentBindingRow(Base):
     __tablename__ = "task_agent_bindings"
+    __table_args__ = (
+        # task_id is the primary key, but this explicit candidate key is the
+        # target of DelegationRequest's composite ownership FK.
+        UniqueConstraint("task_id", "agent_id", name="uq_task_agent_bindings_task_agent"),
+    )
 
     task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), primary_key=True)
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"))
@@ -801,6 +806,11 @@ class DelegationRequestRow(Base):
             ["child_run_id", "child_task_id"],
             ["runs.id", "runs.task_id"],
             name="fk_delegation_requests_child_run_task_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["child_task_id", "target_agent_id"],
+            ["task_agent_bindings.task_id", "task_agent_bindings.agent_id"],
+            name="fk_delegation_requests_child_agent_ownership",
         ),
     )
     id: Mapped[str] = mapped_column(primary_key=True)

@@ -8,6 +8,7 @@ from friday.application.agent_registry import (
     ActivateAgentRevision,
     CreateAgent,
     CreateAgentRevision,
+    DisableAgent,
     ResolveRunAgent,
 )
 from friday.application.approval_workflow import ApproveRequest, RequestApproval
@@ -334,6 +335,116 @@ def test_stale_parent_claim_creates_no_delegation_state() -> None:
         len(uow.run_repo.items),
         len(uow.delegation_request_repo.items),
     ) == before
+
+
+def test_dispatch_rejects_unavailable_target_and_revision() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    agent, parent = _setup(uow, clock, factory)
+    generation = _claim_parent(uow, parent)
+    dispatch = DispatchDelegation(factory, clock, _registry())
+
+    with pytest.raises(EntityConflict, match="delegation_target_not_found"):
+        dispatch.execute(
+            parent_run_id=parent.id,
+            worker_id="parent-worker",
+            claim_token="parent-token",
+            claim_generation=generation,
+            target_agent_key="missing",
+            objective="work",
+            input_payload={},
+            expected_output_contract="result",
+        )
+
+    DisableAgent(factory, clock).execute(agent.id)
+    with pytest.raises(EntityConflict, match="delegation_target_unavailable"):
+        dispatch.execute(
+            parent_run_id=parent.id,
+            worker_id="parent-worker",
+            claim_token="parent-token",
+            claim_generation=generation,
+            target_agent_key="coder",
+            objective="work",
+            input_payload={},
+            expected_output_contract="result",
+        )
+
+
+def test_dispatch_rejects_missing_target_revision_and_runtime() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    agent, parent = _setup(uow, clock, factory)
+    generation = _claim_parent(uow, parent)
+    dispatch = DispatchDelegation(factory, clock, _registry())
+    uow.agent_revision_repo.items.clear()
+
+    with pytest.raises(EntityConflict, match="delegation_target_revision_unavailable"):
+        dispatch.execute(
+            parent_run_id=parent.id,
+            worker_id="parent-worker",
+            claim_token="parent-token",
+            claim_generation=generation,
+            target_agent_key="coder",
+            objective="work",
+            input_payload={},
+            expected_output_contract="result",
+        )
+
+    uow.agent_repo.items.clear()
+    agent, parent = _setup(uow, clock, factory)
+    generation = _claim_parent(uow, parent)
+    with pytest.raises(EntityConflict, match="delegation_target_runtime_unavailable"):
+        DispatchDelegation(factory, clock, BrainRuntimeRegistry()).execute(
+            parent_run_id=parent.id,
+            worker_id="parent-worker",
+            claim_token="parent-token",
+            claim_generation=generation,
+            target_agent_key=agent.key,
+            objective="work",
+            input_payload={},
+            expected_output_contract="result",
+        )
+
+
+def test_dispatch_rejects_invalid_parent_step_before_materialization() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    agent, parent = _setup(uow, clock, factory)
+    generation = _claim_parent(uow, parent)
+    dispatch = DispatchDelegation(factory, clock, _registry())
+
+    with pytest.raises(RunStepNotFound):
+        dispatch.execute(
+            parent_run_id=parent.id,
+            worker_id="parent-worker",
+            claim_token="parent-token",
+            claim_generation=generation,
+            target_agent_key=agent.key,
+            objective="work",
+            input_payload={},
+            expected_output_contract="result",
+            parent_run_step_id=RunStepId.new(),
+        )
+
+    other_task = CreateTask(factory, clock).execute(CreateTaskCommand("Other", ""))
+    other_run = Run.new(id=RunId.new(), task_id=other_task.task_id, created_at=clock.now())
+    uow.run_repo.add(other_run)
+    foreign_step = RunStep.new(
+        id=RunStepId.new(), run_id=other_run.id, name="foreign", position=0, created_at=clock.now()
+    )
+    uow.step_repo.add(foreign_step)
+    with pytest.raises(EntityConflict, match="parent_run_step_id must belong"):
+        dispatch.execute(
+            parent_run_id=parent.id,
+            worker_id="parent-worker",
+            claim_token="parent-token",
+            claim_generation=generation,
+            target_agent_key=agent.key,
+            objective="work",
+            input_payload={},
+            expected_output_contract="result",
+            parent_run_step_id=foreign_step.id,
+        )
 
 
 def test_nested_delegation_is_rejected_before_child_materialization() -> None:

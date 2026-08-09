@@ -33,11 +33,20 @@ _DELEGATION_STATE_SHAPE = (
 
 
 def upgrade() -> None:
+    with op.batch_alter_table("task_agent_bindings") as batch:
+        batch.create_unique_constraint("uq_task_agent_bindings_task_agent", ["task_id", "agent_id"])
+
     with op.batch_alter_table("delegation_requests") as batch:
         batch.create_unique_constraint("uq_delegation_requests_id_parent", ["id", "parent_run_id"])
         batch.create_unique_constraint("uq_delegation_requests_child_task_id", ["child_task_id"])
         batch.create_unique_constraint("uq_delegation_requests_child_run_id", ["child_run_id"])
         batch.create_check_constraint("ck_delegation_requests_state_shape", _DELEGATION_STATE_SHAPE)
+        batch.create_foreign_key(
+            "fk_delegation_requests_child_agent_ownership",
+            "task_agent_bindings",
+            ["child_task_id", "target_agent_id"],
+            ["task_id", "agent_id"],
+        )
 
     with op.batch_alter_table("runs") as batch:
         batch.add_column(sa.Column("delegation_request_id", sa.String(), nullable=True))
@@ -101,7 +110,11 @@ def downgrade() -> None:
         batch.drop_column("delegation_request_id")
 
     with op.batch_alter_table("delegation_requests") as batch:
+        batch.drop_constraint("fk_delegation_requests_child_agent_ownership", type_="foreignkey")
         batch.drop_constraint("ck_delegation_requests_state_shape", type_="check")
         batch.drop_constraint("uq_delegation_requests_child_run_id", type_="unique")
         batch.drop_constraint("uq_delegation_requests_child_task_id", type_="unique")
         batch.drop_constraint("uq_delegation_requests_id_parent", type_="unique")
+
+    with op.batch_alter_table("task_agent_bindings") as batch:
+        batch.drop_constraint("uq_task_agent_bindings_task_agent", type_="unique")

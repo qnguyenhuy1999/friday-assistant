@@ -15,11 +15,14 @@ from friday.application.agent_registry import (
     ActivateAgentRevision,
     CreateAgent,
     CreateAgentRevision,
+    ReplaceTaskAgent,
+    ResolveRunAgent,
 )
 from friday.application.brain_runtime_registry import BrainRuntimeRegistry
 from friday.application.commands import CreateTaskCommand, StartRunCommand
 from friday.application.create_task import CreateTask
 from friday.application.delegation import CreateDelegationRequest, DispatchDelegation
+from friday.application.errors import EntityConflict
 from friday.application.ports import UnitOfWorkFactory
 from friday.application.start_run import StartRun
 from friday.application.worker_coordination import ClaimNextRun
@@ -245,5 +248,107 @@ def test_sqlite_fences_duplicate_child_provenance_and_foreign_parent_wait(tmp_pa
                 ),
                 {"request_id": str(request_a.id), "run_id": str(other_run.run_id)},
             )
+    finally:
+        engine.dispose()
+
+
+def test_real_sqlite_delegated_task_agent_binding_is_owned_by_target_agent(
+    tmp_path: Path,
+) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        factory = create_unit_of_work_factory(create_session_factory(engine))
+        clock = Clock()
+        registry = _registry()
+        parent_task = CreateTask(factory, clock).execute(CreateTaskCommand("parent", ""))
+        parent = StartRun(factory, clock).execute(StartRunCommand(parent_task.task_id))
+        assert parent.run_id is not None
+        agent_a = CreateAgent(factory, clock).execute(
+            key="delegation.agent.a", display_name="Agent A", description=""
+        )
+        revision_a = CreateAgentRevision(factory, clock, registry).execute(
+            agent_id=agent_a.id,
+            instructions="A",
+            runtime_kind="claude_cli",
+            runtime_config={},
+            source_kind=AgentRevisionSourceKind.OPERATOR,
+        )
+        ActivateAgentRevision(factory, clock).execute(
+            agent_id=agent_a.id, revision_id=revision_a.id
+        )
+        agent_b = CreateAgent(factory, clock).execute(
+            key="delegation.agent.b", display_name="Agent B", description=""
+        )
+        revision_b = CreateAgentRevision(factory, clock, registry).execute(
+            agent_id=agent_b.id,
+            instructions="B",
+            runtime_kind="claude_cli",
+            runtime_config={},
+            source_kind=AgentRevisionSourceKind.OPERATOR,
+        )
+        ActivateAgentRevision(factory, clock).execute(
+            agent_id=agent_b.id, revision_id=revision_b.id
+        )
+        parent_claim = ClaimNextRun(
+            factory,
+            clock,
+            worker_id="parent-worker",
+            lease_duration=timedelta(minutes=1),
+            candidate_limit=5,
+        ).execute()
+        assert parent_claim is not None and parent_claim.run_id == parent.run_id
+
+        request = DispatchDelegation(factory, clock, registry).execute(
+            parent_run_id=parent.run_id,
+            worker_id=parent_claim.worker_id,
+            claim_token=parent_claim.claim_token,
+            claim_generation=parent_claim.claim_generation,
+            target_agent_key=agent_a.key,
+            objective="owned child",
+            input_payload={},
+            expected_output_contract="result",
+        )
+        assert request.child_task_id is not None and request.child_run_id is not None
+
+        with pytest.raises(EntityConflict, match="delegated_task_agent_binding_frozen"):
+            ReplaceTaskAgent(factory, clock).execute(
+                task_id=request.child_task_id, agent_id=agent_b.id
+            )
+        with pytest.raises(EntityConflict, match="delegated_task_agent_binding_frozen"):
+            ReplaceTaskAgent(factory, clock).execute(task_id=request.child_task_id, agent_id=None)
+
+        # The composite FK rejects a forged request target even when the
+        # attacker bypasses the application use case with raw SQL.
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE delegation_requests SET target_agent_id = :agent_id "
+                    "WHERE id = :request_id"
+                ),
+                {"agent_id": str(agent_b.id), "request_id": str(request.id)},
+            )
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM task_agent_bindings WHERE task_id = :task_id"),
+                {"task_id": str(request.child_task_id)},
+            )
+
+        child_claim = ClaimNextRun(
+            factory,
+            clock,
+            worker_id="child-worker",
+            lease_duration=timedelta(minutes=1),
+            candidate_limit=5,
+        ).execute()
+        assert child_claim is not None and child_claim.run_id == request.child_run_id
+        resolution = ResolveRunAgent(factory, clock, registry).execute(
+            child_claim.run_id,
+            child_claim.worker_id,
+            child_claim.claim_token,
+            child_claim.claim_generation,
+        )
+        assert resolution is not None
+        assert resolution.agent_id == request.target_agent_id == agent_a.id
+        assert resolution.revision_id == revision_a.id
     finally:
         engine.dispose()

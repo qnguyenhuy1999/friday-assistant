@@ -12,7 +12,12 @@ from friday.application.commands import (
     StartQueuedRunCommand,
 )
 from friday.application.delegation_reconciliation import reconcile_child_terminal_in_uow
-from friday.application.errors import EntityConflict, RunNotFound, TaskNotFound
+from friday.application.errors import (
+    DelegatedManualRetryForbidden,
+    EntityConflict,
+    RunNotFound,
+    TaskNotFound,
+)
 from friday.application.lifecycle_events import LifecycleEvents, run_result
 from friday.application.ports import UnitOfWork
 from friday.application.results import RunResult
@@ -264,6 +269,8 @@ class RetryFailedRun(LifecycleEvents):
                 raise RunNotFound(command.run_id)
             if source.status is not RunStatus.FAILED:
                 raise EntityConflict("only failed runs may be retried")
+            if uow.delegation_requests.get_for_child_execution(source.execution_id) is not None:
+                raise DelegatedManualRetryForbidden()
             task = uow.tasks.get(source.task_id)
             if task is None:
                 raise TaskNotFound(source.task_id)

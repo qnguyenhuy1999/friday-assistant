@@ -1467,6 +1467,12 @@ class FakeDelegationRequestRepository:
                 return request
         return None
 
+    def get_for_child_task(self, task_id: TaskId) -> DelegationRequest | None:
+        for request in sorted(self.items.values(), key=lambda x: (x.created_at, str(x.id))):
+            if request.child_task_id == task_id:
+                return request
+        return None
+
 
 class FakeSkillRepository:
     def __init__(self) -> None:

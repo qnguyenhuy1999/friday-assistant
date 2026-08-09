@@ -441,6 +441,15 @@ class DelegationRequestRepository:
         )
         return delegation_request_from_row(row) if row else None
 
+    def get_for_child_task(self, task_id: TaskId) -> DelegationRequest | None:
+        row = self._session.scalar(
+            select(DelegationRequestRow)
+            .where(DelegationRequestRow.child_task_id == str(task_id))
+            .order_by(DelegationRequestRow.created_at, DelegationRequestRow.id)
+            .limit(1)
+        )
+        return delegation_request_from_row(row) if row else None
+
 
 class SkillRepository:
     def __init__(self, session: Session) -> None:

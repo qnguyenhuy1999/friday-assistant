@@ -25,6 +25,7 @@ from friday.domain import (
     TaskAgentBinding,
     TaskId,
 )
+from friday.domain.delegation import DelegationStatus
 from friday.domain.errors import DomainValidationError, InvalidStateTransition
 from friday.domain.json_value import JsonValue
 
@@ -175,6 +176,14 @@ class ReplaceTaskAgent:
         with self._uow_factory() as uow:
             if uow.tasks.get(task_id) is None:
                 raise TaskNotFound(task_id)
+            delegation = uow.delegation_requests.get_for_child_task(task_id)
+            if delegation is not None and delegation.status in {
+                DelegationStatus.DISPATCHED,
+                DelegationStatus.SUCCEEDED,
+                DelegationStatus.FAILED,
+                DelegationStatus.CANCELLED,
+            }:
+                raise EntityConflict("delegated_task_agent_binding_frozen")
             binding: TaskAgentBinding | None = None
             if agent_id is not None:
                 agent = uow.agents.get(agent_id)
@@ -222,12 +231,27 @@ class ResolveRunAgent:
                 ):
                     raise ClaimLost("agent resolution requires an exact active worker claim")
                 existing = uow.run_agent_resolutions.get(run.id)
+                incoming_delegation = uow.delegation_requests.get_for_child_execution(
+                    run.execution_id
+                )
                 if existing is not None:
+                    if (
+                        incoming_delegation is not None
+                        and existing.agent_id != incoming_delegation.target_agent_id
+                    ):
+                        raise EntityConflict("delegation_target_agent_mismatch")
                     return existing
 
                 binding = uow.task_agent_bindings.get(run.task_id)
                 if binding is None:
+                    if incoming_delegation is not None:
+                        raise EntityConflict("delegated_child_agent_binding_missing")
                     return None
+                if (
+                    incoming_delegation is not None
+                    and binding.agent_id != incoming_delegation.target_agent_id
+                ):
+                    raise EntityConflict("delegation_target_agent_mismatch")
 
                 agent = uow.agents.get(binding.agent_id)
                 if (
@@ -281,7 +305,16 @@ class ResolveRunAgent:
                     raise ClaimLost("agent resolution claim expired before commit")
                 uow.commit()
                 return resolution
-        except EntityConflict:
+        except EntityConflict as exc:
+            # Provenance conflicts are semantic validation failures, not the
+            # unique-marker race handled below. Never turn a delegated
+            # target mismatch into a successful read of an already-frozen
+            # resolution.
+            if str(exc) in {
+                "delegation_target_agent_mismatch",
+                "delegated_child_agent_binding_missing",
+            }:
+                raise
             # Two valid resolvers may race on the unique resolution marker.
             # The loser rolls back and reloads the winner under its own
             # still-active claim, exactly like ResolveRunSkills.

@@ -24,6 +24,7 @@ from friday.application.errors import (
     ConcurrencyConflict,
     ConversationNotFound,
     ConversationTurnNotFound,
+    DelegatedManualRetryForbidden,
     DelegationRequestNotFound,
     EntityConflict,
     InvalidBrainRuntimeConfig,
@@ -88,6 +89,7 @@ _NOT_FOUND_TYPES: dict[type[ApplicationError], str] = {
 }
 
 _CONFLICT_TYPES: dict[type[ApplicationError], str] = {
+    DelegatedManualRetryForbidden: "delegated_manual_retry_forbidden",
     EntityConflict: "entity_conflict",
     ConcurrencyConflict: "concurrency_conflict",
 }

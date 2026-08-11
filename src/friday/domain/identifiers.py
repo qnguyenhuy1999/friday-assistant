@@ -171,3 +171,19 @@ class RunAgentResolutionId(_Id):
 
 class DelegationRequestId(_Id):
     pass
+
+
+class WorkflowId(_Id):
+    pass
+
+
+class WorkflowRevisionId(_Id):
+    pass
+
+
+class WorkflowNodeId(_Id):
+    pass
+
+
+class WorkflowEdgeId(_Id):
+    pass

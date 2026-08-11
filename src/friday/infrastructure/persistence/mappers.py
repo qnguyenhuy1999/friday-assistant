@@ -15,7 +15,11 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from friday.application.errors import AgentIntegrityFailed, SkillIntegrityFailed
+from friday.application.errors import (
+    AgentIntegrityFailed,
+    SkillIntegrityFailed,
+    WorkflowIntegrityFailed,
+)
 from friday.application.memory.models import (
     IndexSnapshot,
     IndexState,
@@ -120,6 +124,16 @@ from friday.domain import (
     ToolInvocation,
     ToolInvocationId,
     ToolInvocationStatus,
+    Workflow,
+    WorkflowEdge,
+    WorkflowEdgeId,
+    WorkflowId,
+    WorkflowNode,
+    WorkflowNodeId,
+    WorkflowRevision,
+    WorkflowRevisionId,
+    WorkflowRevisionSourceKind,
+    WorkflowStatus,
 )
 from friday.domain.json_value import JsonValue
 from friday.domain.schedule_fire_delivery_plan import (
@@ -173,6 +187,10 @@ from friday.infrastructure.persistence.models import (
     TaskRow,
     TaskSkillBindingRow,
     ToolInvocationRow,
+    WorkflowEdgeRow,
+    WorkflowNodeRow,
+    WorkflowRevisionRow,
+    WorkflowRow,
 )
 
 
@@ -826,6 +844,111 @@ def agent_revision_from_row(row: AgentRevisionRow) -> AgentRevision:
         row.content_sha256,
         AgentRevisionSourceKind(row.source_kind),
         read_back_utc(row.created_at),
+    )
+
+
+def workflow_to_row(value: Workflow) -> WorkflowRow:
+    return WorkflowRow(
+        id=str(value.id),
+        key=value.key,
+        display_name=value.display_name,
+        description=value.description,
+        status=value.status.value,
+        active_revision_id=str(value.active_revision_id) if value.active_revision_id else None,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+    )
+
+
+def workflow_from_row(row: WorkflowRow) -> Workflow:
+    return Workflow(
+        _id=WorkflowId.parse(row.id),
+        _key=row.key,
+        _display_name=row.display_name,
+        _description=row.description,
+        _status=WorkflowStatus(row.status),
+        _active_revision_id=WorkflowRevisionId.parse(row.active_revision_id)
+        if row.active_revision_id
+        else None,
+        _created_at=read_back_utc(row.created_at),
+        _updated_at=read_back_utc(row.updated_at),
+    )
+
+
+def workflow_node_to_row(value: WorkflowNode) -> WorkflowNodeRow:
+    return WorkflowNodeRow(
+        id=str(value.id),
+        revision_id=str(value.revision_id),
+        node_key=value.node_key,
+        target_agent_id=str(value.target_agent_id),
+        objective=value.objective,
+        input_payload=value.input_payload,
+        expected_output_contract=value.expected_output_contract,
+        created_at=value.created_at,
+    )
+
+
+def workflow_node_from_row(row: WorkflowNodeRow) -> WorkflowNode:
+    return WorkflowNode(
+        id=WorkflowNodeId.parse(row.id),
+        revision_id=WorkflowRevisionId.parse(row.revision_id),
+        node_key=row.node_key,
+        target_agent_id=AgentId.parse(row.target_agent_id),
+        objective=row.objective,
+        input_payload=cast(JsonValue, row.input_payload),
+        expected_output_contract=row.expected_output_contract,
+        created_at=read_back_utc(row.created_at),
+    )
+
+
+def workflow_edge_to_row(value: WorkflowEdge) -> WorkflowEdgeRow:
+    return WorkflowEdgeRow(
+        id=str(value.id),
+        revision_id=str(value.revision_id),
+        from_node_id=str(value.from_node_id),
+        to_node_id=str(value.to_node_id),
+        created_at=value.created_at,
+    )
+
+
+def workflow_edge_from_row(row: WorkflowEdgeRow) -> WorkflowEdge:
+    return WorkflowEdge(
+        id=WorkflowEdgeId.parse(row.id),
+        revision_id=WorkflowRevisionId.parse(row.revision_id),
+        from_node_id=WorkflowNodeId.parse(row.from_node_id),
+        to_node_id=WorkflowNodeId.parse(row.to_node_id),
+        created_at=read_back_utc(row.created_at),
+    )
+
+
+def workflow_revision_from_rows(
+    row: WorkflowRevisionRow, nodes: list[WorkflowNode], edges: list[WorkflowEdge]
+) -> WorkflowRevision:
+    try:
+        return WorkflowRevision(
+            id=WorkflowRevisionId.parse(row.id),
+            workflow_id=WorkflowId.parse(row.workflow_id),
+            version=row.version,
+            content_sha256=row.content_sha256,
+            source_kind=WorkflowRevisionSourceKind(row.source_kind),
+            nodes=tuple(nodes),
+            edges=tuple(edges),
+            created_at=read_back_utc(row.created_at),
+        )
+    except Exception as exc:
+        if isinstance(exc, WorkflowIntegrityFailed):
+            raise
+        raise WorkflowIntegrityFailed() from exc
+
+
+def workflow_revision_to_row(value: WorkflowRevision) -> WorkflowRevisionRow:
+    return WorkflowRevisionRow(
+        id=str(value.id),
+        workflow_id=str(value.workflow_id),
+        version=value.version,
+        content_sha256=value.content_sha256,
+        source_kind=value.source_kind.value,
+        created_at=value.created_at,
     )
 
 

@@ -22,6 +22,8 @@ from friday.domain.identifiers import (
     SkillRevisionId,
     TaskId,
     ToolInvocationId,
+    WorkflowId,
+    WorkflowRevisionId,
 )
 
 
@@ -148,6 +150,25 @@ class AgentIntegrityFailed(ApplicationError):
 
     def __init__(self) -> None:
         super().__init__("agent_integrity_failed")
+
+
+class WorkflowIntegrityFailed(ApplicationError):
+    """Persisted Workflow graph no longer matches its durable digest."""
+
+    def __init__(self) -> None:
+        super().__init__("workflow_integrity_failed")
+
+
+class WorkflowNotFound(ApplicationError):
+    def __init__(self, workflow_id: WorkflowId) -> None:
+        self.workflow_id = workflow_id
+        super().__init__(f"Workflow not found: {workflow_id}")
+
+
+class WorkflowRevisionNotFound(ApplicationError):
+    def __init__(self, revision_id: WorkflowRevisionId) -> None:
+        self.revision_id = revision_id
+        super().__init__(f"Workflow revision not found: {revision_id}")
 
 
 class DelegationRequestNotFound(ApplicationError):

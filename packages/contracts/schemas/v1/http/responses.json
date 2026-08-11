@@ -441,6 +441,96 @@
         "updated_at": { "type": "string" }
       }
     },
+    "Workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "key",
+        "display_name",
+        "description",
+        "status",
+        "active_revision_id",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "key": { "type": "string" },
+        "display_name": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "enum": ["active", "disabled", "archived"] },
+        "active_revision_id": { "type": ["string", "null"] },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      }
+    },
+    "WorkflowNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "revision_id",
+        "node_key",
+        "target_agent_id",
+        "objective",
+        "input_payload",
+        "expected_output_contract",
+        "created_at"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "revision_id": { "type": "string" },
+        "node_key": { "type": "string" },
+        "target_agent_id": { "type": "string" },
+        "objective": { "type": "string" },
+        "input_payload": {},
+        "expected_output_contract": { "type": "string" },
+        "created_at": { "type": "string" }
+      }
+    },
+    "WorkflowEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision_id", "from", "to", "created_at"],
+      "properties": {
+        "id": { "type": "string" },
+        "revision_id": { "type": "string" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "created_at": { "type": "string" }
+      }
+    },
+    "WorkflowRevision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "workflow_id",
+        "version",
+        "content_sha256",
+        "source_kind",
+        "nodes",
+        "edges",
+        "created_at"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "workflow_id": { "type": "string" },
+        "version": { "type": "integer" },
+        "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "source_kind": { "enum": ["operator", "imported"] },
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/WorkflowNode" }
+        },
+        "edges": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/WorkflowEdge" }
+        },
+        "created_at": { "type": "string" }
+      }
+    },
     "AgentRevision": {
       "type": "object",
       "additionalProperties": false,
@@ -1099,6 +1189,24 @@
     "conversation": { "$ref": "#/definitions/Conversation" },
     "conversationTurn": { "$ref": "#/definitions/ConversationTurn" },
     "agent": { "$ref": "#/definitions/Agent" },
+    "workflow": { "$ref": "#/definitions/Workflow" },
+    "workflowPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "next_cursor"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Workflow" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "workflowRevision": { "$ref": "#/definitions/WorkflowRevision" },
+    "workflowRevisions": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/WorkflowRevision" }
+    },
     "agentPage": {
       "type": "object",
       "additionalProperties": false,

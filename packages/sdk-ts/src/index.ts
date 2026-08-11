@@ -35,3 +35,11 @@ export type {
 export { SkillsResource } from "./resources/skills";
 export { AgentsResource } from "./resources/agents";
 export { DelegationsResource } from "./resources/delegations";
+export { WorkflowsResource } from "./resources/workflows";
+export type { ListWorkflowsParams } from "./resources/workflows";
+export type {
+  CreateWorkflowBody,
+  CreateWorkflowRevisionBody,
+  WorkflowEdgeInput,
+  WorkflowNodeInput,
+} from "@friday/contracts";

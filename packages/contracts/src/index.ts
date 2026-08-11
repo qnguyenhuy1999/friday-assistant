@@ -11,6 +11,12 @@ export type {
   PutTaskAgentBody,
 } from "./wire/agent";
 export type { CreateDelegationRequestBody } from "./wire/delegation";
+export type {
+  CreateWorkflowBody,
+  CreateWorkflowRevisionBody,
+  WorkflowEdgeInput,
+  WorkflowNodeInput,
+} from "./wire/workflow";
 export type { BrainAction, DelegateAction } from "./wire/runtime";
 export type {
   CreateSkillBody,
@@ -43,6 +49,9 @@ export type {
   Agent,
   AgentPage,
   AgentRevision,
+  Workflow,
+  WorkflowPage,
+  WorkflowRevision,
   ApprovalCategory,
   ApprovalRequest,
   ApprovalStatus,
@@ -96,6 +105,10 @@ export {
   validateAgentPage,
   validateAgentRevision,
   validateAgentRevisions,
+  validateWorkflow,
+  validateWorkflowPage,
+  validateWorkflowRevision,
+  validateWorkflowRevisions,
   validateTaskAgentBinding,
   validateRunAgentResolution,
   validateDelegationRequest,

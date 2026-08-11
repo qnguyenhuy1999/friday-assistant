@@ -21,6 +21,11 @@ RESOLUTION_ID = "00000000-0000-0000-0000-000000000006"
 DELEGATION_ID = "00000000-0000-0000-0000-000000000007"
 CHILD_TASK_ID = "00000000-0000-0000-0000-000000000008"
 CHILD_RUN_ID = "00000000-0000-0000-0000-000000000009"
+WORKFLOW_ID = "00000000-0000-0000-0000-000000000010"
+WORKFLOW_REVISION_ID = "00000000-0000-0000-0000-000000000011"
+WORKFLOW_NODE_A_ID = "00000000-0000-0000-0000-000000000012"
+WORKFLOW_NODE_B_ID = "00000000-0000-0000-0000-000000000013"
+WORKFLOW_EDGE_ID = "00000000-0000-0000-0000-000000000014"
 
 
 def _config(db_path: Path) -> Config:
@@ -255,6 +260,104 @@ def _durable_state_snapshot(db_path: Path) -> tuple[object, ...]:
         engine.dispose()
 
 
+def _workflow_state_snapshot(db_path: Path) -> tuple[object, ...]:
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.connect() as connection:
+            tables = (
+                "workflows",
+                "workflow_revisions",
+                "workflow_nodes",
+                "workflow_edges",
+            )
+            rows = tuple(
+                (
+                    table,
+                    connection.execute(text(f"SELECT * FROM {table} ORDER BY 1")).all(),
+                )
+                for table in tables
+            )
+        return (_revision(db_path), _schema_fingerprint(db_path), rows)
+    finally:
+        engine.dispose()
+
+
+def _seed_workflow_state(db_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO agents (id, key, display_name, description, status, "
+                    "active_revision_id, created_at, updated_at) VALUES "
+                    "(:id, '0034.workflow.target', 'Target', '', 'active', NULL, :at, :at)"
+                ),
+                {"id": AGENT_ID, "at": AT},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO workflows "
+                    "(id, key, display_name, description, status, active_revision_id, "
+                    "created_at, updated_at) VALUES "
+                    "(:id, '0034.workflow', 'Workflow', '', 'active', NULL, :at, :at)"
+                ),
+                {"id": WORKFLOW_ID, "at": AT},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO workflow_revisions "
+                    "(id, workflow_id, version, content_sha256, source_kind, created_at) "
+                    "VALUES (:id, :workflow_id, 1, :sha, 'operator', :at)"
+                ),
+                {
+                    "id": WORKFLOW_REVISION_ID,
+                    "workflow_id": WORKFLOW_ID,
+                    "sha": "a" * 64,
+                    "at": AT,
+                },
+            )
+            for node_id, node_key in (
+                (WORKFLOW_NODE_A_ID, "a"),
+                (WORKFLOW_NODE_B_ID, "b"),
+            ):
+                connection.execute(
+                    text(
+                        "INSERT INTO workflow_nodes "
+                        "(id, revision_id, node_key, target_agent_id, objective, input_payload, "
+                        "expected_output_contract, created_at) VALUES "
+                        "(:id, :revision_id, :node_key, :agent_id, :objective, '{}', 'done', :at)"
+                    ),
+                    {
+                        "id": node_id,
+                        "revision_id": WORKFLOW_REVISION_ID,
+                        "node_key": node_key,
+                        "agent_id": AGENT_ID,
+                        "objective": node_key,
+                        "at": AT,
+                    },
+                )
+            connection.execute(
+                text(
+                    "INSERT INTO workflow_edges "
+                    "(id, revision_id, from_node_id, to_node_id, created_at) "
+                    "VALUES (:id, :revision_id, :from_id, :to_id, :at)"
+                ),
+                {
+                    "id": WORKFLOW_EDGE_ID,
+                    "revision_id": WORKFLOW_REVISION_ID,
+                    "from_id": WORKFLOW_NODE_A_ID,
+                    "to_id": WORKFLOW_NODE_B_ID,
+                    "at": AT,
+                },
+            )
+            connection.execute(
+                text("UPDATE workflows SET active_revision_id = :revision_id WHERE id = :id"),
+                {"id": WORKFLOW_ID, "revision_id": WORKFLOW_REVISION_ID},
+            )
+    finally:
+        engine.dispose()
+
+
 def test_empty_phase21_downgrade_upgrade_cycle_is_compatible(tmp_path: Path) -> None:
     db_path = tmp_path / "phase21-empty.db"
     config = _config(db_path)
@@ -263,12 +366,12 @@ def test_empty_phase21_downgrade_upgrade_cycle_is_compatible(tmp_path: Path) -> 
     command.downgrade(config, "0031")
     assert _revision(db_path) == "0031"
     command.upgrade(config, "head")
-    assert _revision(db_path) == "0033"
+    assert _revision(db_path) == "0034"
 
     command.downgrade(config, "0030")
     assert _revision(db_path) == "0030"
     command.upgrade(config, "head")
-    assert _revision(db_path) == "0033"
+    assert _revision(db_path) == "0034"
 
 
 def test_0032_populated_downgrade_refuses_before_schema_mutation(tmp_path: Path) -> None:
@@ -374,3 +477,44 @@ def test_0031_populated_downgrade_refuses_before_schema_mutation(tmp_path: Path)
 
     assert _revision(db_path) == before_revision == "0031"
     assert _schema_fingerprint(db_path) == before_schema
+
+
+def test_0033_to_0034_and_empty_0034_downgrade_upgrade_cycle_is_lossless(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "phase21-empty-0034.db"
+    config = _config(db_path)
+
+    command.upgrade(config, "0033")
+    assert _revision(db_path) == "0033"
+    command.upgrade(config, "0034")
+    assert _revision(db_path) == "0034"
+    empty_0034 = _workflow_state_snapshot(db_path)
+
+    command.downgrade(config, "0033")
+    assert _revision(db_path) == "0033"
+    assert all(
+        table not in {row[0] for row in _schema_fingerprint(db_path)}
+        for table in ("workflows", "workflow_revisions", "workflow_nodes", "workflow_edges")
+    )
+
+    command.upgrade(config, "0034")
+    assert _revision(db_path) == "0034"
+    after = _workflow_state_snapshot(db_path)
+    assert after[0] == empty_0034[0] == "0034"
+    assert after[2] == empty_0034[2]
+
+
+def test_0034_populated_downgrade_refuses_before_schema_or_row_mutation(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "phase21-populated-0034.db"
+    config = _config(db_path)
+    command.upgrade(config, "0034")
+    _seed_workflow_state(db_path)
+    before = _workflow_state_snapshot(db_path)
+
+    with pytest.raises(RuntimeError, match="0034 cannot downgrade"):
+        command.downgrade(config, "0033")
+
+    assert _workflow_state_snapshot(db_path) == before

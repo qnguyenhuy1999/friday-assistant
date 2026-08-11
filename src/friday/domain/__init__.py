@@ -67,6 +67,10 @@ from friday.domain.identifiers import (
     TaskEventId,
     TaskId,
     ToolInvocationId,
+    WorkflowEdgeId,
+    WorkflowId,
+    WorkflowNodeId,
+    WorkflowRevisionId,
 )
 from friday.domain.json_value import JsonScalar, JsonValue, ensure_json_value
 from friday.domain.outbound_delivery import (
@@ -130,6 +134,16 @@ from friday.domain.task import Task, TaskStatus
 from friday.domain.task_event import TaskEvent, TaskEventType
 from friday.domain.time import ensure_utc
 from friday.domain.tool import ToolInvocation, ToolInvocationStatus
+from friday.domain.workflow import (
+    Workflow,
+    WorkflowEdge,
+    WorkflowNode,
+    WorkflowRevision,
+    WorkflowRevisionSourceKind,
+    WorkflowStatus,
+    canonical_workflow_content,
+    validate_workflow_dag,
+)
 
 __all__ = [
     "Agent",
@@ -138,6 +152,18 @@ __all__ = [
     "AgentRevisionId",
     "AgentRevisionSourceKind",
     "AgentStatus",
+    "Workflow",
+    "WorkflowId",
+    "WorkflowRevision",
+    "WorkflowRevisionId",
+    "WorkflowNode",
+    "WorkflowNodeId",
+    "WorkflowEdge",
+    "WorkflowEdgeId",
+    "WorkflowStatus",
+    "WorkflowRevisionSourceKind",
+    "canonical_workflow_content",
+    "validate_workflow_dag",
     "RunAgentResolution",
     "RunAgentResolutionId",
     "TaskAgentBinding",

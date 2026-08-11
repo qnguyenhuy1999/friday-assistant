@@ -185,8 +185,9 @@ Completed core foundations through:
 Phase 19 — Durable Messaging & Scheduled Delivery
 ```
 
-Phase 20 — Skills & Self-Improvement Loop is under its closure-review gate;
-it is not marked complete until the exact-head audit suite passes and merges.
+Phase 20 — Skills & Self-Improvement Loop is complete.
+Phase 21 Step 1 and Step 2 are complete. Phase 21 Step 3 — Workflow registry
+and DAG contract — is implemented; Phase 21 overall is not complete.
 
 Remaining v1 phases:
 

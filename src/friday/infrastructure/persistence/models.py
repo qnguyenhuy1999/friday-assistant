@@ -714,6 +714,99 @@ class AgentRevisionRow(Base):
     created_at: Mapped[datetime]
 
 
+class WorkflowRow(Base):
+    __tablename__ = "workflows"
+    __table_args__ = (
+        CheckConstraint("status IN ('active','disabled','archived')", name="ck_workflows_status"),
+        CheckConstraint("length(key) BETWEEN 1 AND 128", name="ck_workflows_key"),
+        ForeignKeyConstraint(
+            ["id", "active_revision_id"],
+            ["workflow_revisions.workflow_id", "workflow_revisions.id"],
+            name="fk_workflows_active_revision_ownership",
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(unique=True)
+    display_name: Mapped[str]
+    description: Mapped[str]
+    status: Mapped[str]
+    active_revision_id: Mapped[str | None]
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+
+
+class WorkflowRevisionRow(Base):
+    __tablename__ = "workflow_revisions"
+    __table_args__ = (
+        UniqueConstraint("workflow_id", "version", name="uq_workflow_revisions_workflow_version"),
+        UniqueConstraint("workflow_id", "id", name="uq_workflow_revisions_workflow_id"),
+        CheckConstraint("version > 0", name="ck_workflow_revisions_version"),
+        CheckConstraint(
+            "source_kind IN ('operator','imported')", name="ck_workflow_revisions_source_kind"
+        ),
+        CheckConstraint(
+            "length(content_sha256)=64 AND content_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_workflow_revisions_sha256",
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("workflows.id"), index=True)
+    version: Mapped[int]
+    content_sha256: Mapped[str]
+    source_kind: Mapped[str]
+    created_at: Mapped[datetime]
+
+
+class WorkflowNodeRow(Base):
+    __tablename__ = "workflow_nodes"
+    __table_args__ = (
+        UniqueConstraint("revision_id", "id", name="uq_workflow_nodes_revision_id"),
+        UniqueConstraint("revision_id", "node_key", name="uq_workflow_nodes_revision_key"),
+        CheckConstraint("length(node_key) BETWEEN 1 AND 128", name="ck_workflow_nodes_key"),
+        CheckConstraint("length(objective) BETWEEN 1 AND 4000", name="ck_workflow_nodes_objective"),
+        CheckConstraint(
+            "length(expected_output_contract) BETWEEN 1 AND 4000", name="ck_workflow_nodes_output"
+        ),
+        ForeignKeyConstraint(
+            ["revision_id"], ["workflow_revisions.id"], name="fk_workflow_nodes_revision"
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    revision_id: Mapped[str] = mapped_column(index=True)
+    node_key: Mapped[str]
+    target_agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"))
+    objective: Mapped[str]
+    input_payload: Mapped[object] = mapped_column(JSON)
+    expected_output_contract: Mapped[str]
+    created_at: Mapped[datetime]
+
+
+class WorkflowEdgeRow(Base):
+    __tablename__ = "workflow_edges"
+    __table_args__ = (
+        UniqueConstraint("revision_id", "id", name="uq_workflow_edges_revision_id"),
+        UniqueConstraint(
+            "revision_id", "from_node_id", "to_node_id", name="uq_workflow_edges_pair"
+        ),
+        CheckConstraint("from_node_id <> to_node_id", name="ck_workflow_edges_not_self"),
+        ForeignKeyConstraint(
+            ["revision_id", "from_node_id"],
+            ["workflow_nodes.revision_id", "workflow_nodes.id"],
+            name="fk_workflow_edges_from_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["revision_id", "to_node_id"],
+            ["workflow_nodes.revision_id", "workflow_nodes.id"],
+            name="fk_workflow_edges_to_ownership",
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    revision_id: Mapped[str] = mapped_column(index=True)
+    from_node_id: Mapped[str]
+    to_node_id: Mapped[str]
+    created_at: Mapped[datetime]
+
+
 class TaskAgentBindingRow(Base):
     __tablename__ = "task_agent_bindings"
     __table_args__ = (

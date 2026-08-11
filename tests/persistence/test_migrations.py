@@ -73,6 +73,10 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "task_agent_bindings",
             "run_agent_resolutions",
             "delegation_requests",
+            "workflows",
+            "workflow_revisions",
+            "workflow_nodes",
+            "workflow_edges",
             "alembic_version",
         }
         assert "execution_id" in {column["name"] for column in inspector.get_columns("runs")}

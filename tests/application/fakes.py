@@ -43,6 +43,8 @@ from friday.application.ports import (
     TaskEventStore,
     TaskRepository,
     ToolInvocationRepository,
+    WorkflowRepository,
+    WorkflowRevisionRepository,
     validate_delivery_attempt_history_limit,
 )
 from friday.domain.agent import Agent, AgentRevision, RunAgentResolution, TaskAgentBinding
@@ -80,6 +82,8 @@ from friday.domain.identifiers import (
     SkillRollbackRequestId,
     TaskId,
     ToolInvocationId,
+    WorkflowId,
+    WorkflowRevisionId,
 )
 from friday.domain.outbound_delivery import DeliveryStatus, OutboundDelivery
 from friday.domain.run import Run
@@ -111,6 +115,7 @@ from friday.domain.step import TERMINAL_RUN_STEP_STATUSES, RunStep
 from friday.domain.task import Task
 from friday.domain.task_event import TaskEvent
 from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES, ToolInvocation
+from friday.domain.workflow import Workflow, WorkflowRevision
 
 T0 = datetime(2026, 1, 2, 3, tzinfo=UTC)
 
@@ -1379,6 +1384,59 @@ class FakeAgentRevisionRepository:
         return len(self.list_for_agent(agent_id)) + 1
 
 
+class FakeWorkflowRepository:
+    def __init__(self) -> None:
+        self.items: dict[WorkflowId, Workflow] = {}
+
+    def add(self, value: Workflow) -> None:
+        self.items[value.id] = value
+
+    def get(self, value: WorkflowId) -> Workflow | None:
+        return self.items.get(value)
+
+    def get_by_key(self, key: str) -> Workflow | None:
+        return next((x for x in self.items.values() if x.key == key), None)
+
+    def save(self, value: Workflow) -> None:
+        self.items[value.id] = value
+
+    def list(self, limit: int) -> list[Workflow]:
+        return list(self.items.values())[:limit]
+
+    def list_page(
+        self, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> builtins.list[Workflow]:
+        values = sorted(self.items.values(), key=lambda value: (value.created_at, str(value.id)))
+        if after_created_at is not None and after_id is not None:
+            values = [
+                value
+                for value in values
+                if value.created_at > after_created_at
+                or (value.created_at == after_created_at and str(value.id) > after_id)
+            ]
+        return values[:limit]
+
+
+class FakeWorkflowRevisionRepository:
+    def __init__(self) -> None:
+        self.items: dict[WorkflowRevisionId, WorkflowRevision] = {}
+
+    def add(self, value: WorkflowRevision) -> None:
+        self.items[value.id] = value
+
+    def get(self, value: WorkflowRevisionId) -> WorkflowRevision | None:
+        return self.items.get(value)
+
+    def list_for_workflow(self, workflow_id: WorkflowId) -> list[WorkflowRevision]:
+        return sorted(
+            (x for x in self.items.values() if x.workflow_id == workflow_id),
+            key=lambda x: x.version,
+        )
+
+    def next_version(self, workflow_id: WorkflowId) -> int:
+        return len(self.list_for_workflow(workflow_id)) + 1
+
+
 class FakeTaskAgentBindingRepository:
     def __init__(self) -> None:
         self.items: dict[TaskId, TaskAgentBinding] = {}
@@ -1806,6 +1864,8 @@ class FakeUnitOfWork:
         self.task_repo = FakeTaskRepository()
         self.agent_repo = FakeAgentRepository()
         self.agent_revision_repo = FakeAgentRevisionRepository()
+        self.workflow_repo = FakeWorkflowRepository()
+        self.workflow_revision_repo = FakeWorkflowRevisionRepository()
         self.task_agent_binding_repo = FakeTaskAgentBindingRepository()
         self.run_agent_resolution_repo = FakeRunAgentResolutionRepository()
         self.delegation_request_repo = FakeDelegationRequestRepository()
@@ -1864,6 +1924,14 @@ class FakeUnitOfWork:
     @property
     def agent_revisions(self) -> AgentRevisionRepository:
         return self.agent_revision_repo
+
+    @property
+    def workflows(self) -> WorkflowRepository:
+        return self.workflow_repo
+
+    @property
+    def workflow_revisions(self) -> WorkflowRevisionRepository:
+        return self.workflow_revision_repo
 
     @property
     def task_agent_bindings(self) -> TaskAgentBindingRepository:

@@ -19,6 +19,29 @@ def test_task_cursor_pagination_and_validation(client: TestClient) -> None:
     assert client.get("/v1/tasks?cursor=bad").status_code == 422
 
 
+def test_workflow_cursor_pagination_and_validation(client: TestClient) -> None:
+    ids = [
+        client.post(
+            "/v1/workflows",
+            json={
+                "key": f"workflow-{number}",
+                "display_name": f"Workflow {number}",
+            },
+        ).json()["id"]
+        for number in range(3)
+    ]
+    first = client.get("/v1/workflows?limit=2")
+    assert first.status_code == 200
+    page = first.json()
+    assert [item["id"] for item in page["items"]] == ids[:2]
+    second = client.get("/v1/workflows", params={"limit": 2, "cursor": page["next_cursor"]})
+    assert second.status_code == 200
+    assert [item["id"] for item in second.json()["items"]] == ids[2:]
+    assert second.json()["next_cursor"] is None
+    assert client.get("/v1/workflows?limit=101").status_code == 422
+    assert client.get("/v1/workflows?cursor=bad").status_code == 422
+
+
 def test_run_and_step_cursor_pagination(client: TestClient) -> None:
     task_id = client.post("/v1/tasks", json={"title": "Task"}).json()["id"]
     run_ids = [client.post(f"/v1/tasks/{task_id}/runs").json()["run_id"]]

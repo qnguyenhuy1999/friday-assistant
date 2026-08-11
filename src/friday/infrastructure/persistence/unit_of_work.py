@@ -69,6 +69,8 @@ from friday.infrastructure.persistence.repositories import (
     TaskRepository,
     TaskSkillBindingRepository,
     ToolInvocationRepository,
+    WorkflowRepository,
+    WorkflowRevisionRepository,
 )
 from friday.infrastructure.persistence.work_queue import SqlAlchemyRunWorkQueue
 
@@ -89,6 +91,8 @@ class SqlAlchemyUnitOfWork:
         self._tasks = TaskRepository(session)
         self._agents = AgentRepository(session)
         self._agent_revisions = AgentRevisionRepository(session)
+        self._workflows = WorkflowRepository(session)
+        self._workflow_revisions = WorkflowRevisionRepository(session)
         self._task_agent_bindings = TaskAgentBindingRepository(session)
         self._run_agent_resolutions = RunAgentResolutionRepository(session)
         self._delegation_requests = DelegationRequestRepository(session)
@@ -140,6 +144,14 @@ class SqlAlchemyUnitOfWork:
     @property
     def agent_revisions(self) -> AgentRevisionRepository:
         return self._agent_revisions
+
+    @property
+    def workflows(self) -> WorkflowRepository:
+        return self._workflows
+
+    @property
+    def workflow_revisions(self) -> WorkflowRevisionRepository:
+        return self._workflow_revisions
 
     @property
     def task_agent_bindings(self) -> TaskAgentBindingRepository:

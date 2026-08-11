@@ -94,6 +94,10 @@ from friday.domain import (
     TaskSkillBinding,
     ToolInvocation,
     ToolInvocationId,
+    Workflow,
+    WorkflowId,
+    WorkflowRevision,
+    WorkflowRevisionId,
 )
 from friday.domain.delivery_attempt import validate_delivery_attempt_shape
 from friday.domain.run import TERMINAL_RUN_STATUSES
@@ -185,6 +189,14 @@ from friday.infrastructure.persistence.mappers import (
     task_to_row,
     tool_invocation_from_row,
     tool_invocation_to_row,
+    workflow_edge_from_row,
+    workflow_edge_to_row,
+    workflow_from_row,
+    workflow_node_from_row,
+    workflow_node_to_row,
+    workflow_revision_from_rows,
+    workflow_revision_to_row,
+    workflow_to_row,
 )
 from friday.infrastructure.persistence.models import (
     AgentRevisionRow,
@@ -231,6 +243,10 @@ from friday.infrastructure.persistence.models import (
     TaskRow,
     TaskSkillBindingRow,
     ToolInvocationRow,
+    WorkflowEdgeRow,
+    WorkflowNodeRow,
+    WorkflowRevisionRow,
+    WorkflowRow,
 )
 
 
@@ -288,6 +304,110 @@ class AgentRevisionRepository:
                 self._session.scalar(
                     select(func.coalesce(func.max(AgentRevisionRow.version), 0)).where(
                         AgentRevisionRow.agent_id == str(agent_id)
+                    )
+                )
+                or 0
+            )
+            + 1
+        )
+
+
+class WorkflowRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, workflow: Workflow) -> None:
+        self._session.add(workflow_to_row(workflow))
+
+    def get(self, workflow_id: WorkflowId) -> Workflow | None:
+        row = self._session.get(WorkflowRow, str(workflow_id))
+        return workflow_from_row(row) if row else None
+
+    def get_by_key(self, key: str) -> Workflow | None:
+        row = self._session.scalar(select(WorkflowRow).where(WorkflowRow.key == key))
+        return workflow_from_row(row) if row else None
+
+    def save(self, workflow: Workflow) -> None:
+        self._session.merge(workflow_to_row(workflow))
+
+    def list(self, limit: int) -> list[Workflow]:
+        return [
+            workflow_from_row(row)
+            for row in self._session.execute(
+                select(WorkflowRow).order_by(WorkflowRow.created_at, WorkflowRow.id).limit(limit)
+            ).scalars()
+        ]
+
+    def list_page(
+        self, limit: int, after_created_at: object | None, after_id: str | None
+    ) -> builtins.list[Workflow]:
+        stmt = select(WorkflowRow)
+        if after_created_at is not None and after_id is not None:
+            stmt = stmt.where(
+                or_(
+                    WorkflowRow.created_at > after_created_at,
+                    and_(
+                        WorkflowRow.created_at == after_created_at,
+                        WorkflowRow.id > after_id,
+                    ),
+                )
+            )
+        return [
+            workflow_from_row(row)
+            for row in self._session.execute(
+                stmt.order_by(WorkflowRow.created_at, WorkflowRow.id).limit(limit)
+            ).scalars()
+        ]
+
+
+class WorkflowRevisionRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, revision: WorkflowRevision) -> None:
+        self._session.add(workflow_revision_to_row(revision))
+        self._session.flush()
+        self._session.add_all(workflow_node_to_row(node) for node in revision.nodes)
+        self._session.flush()
+        self._session.add_all(workflow_edge_to_row(edge) for edge in revision.edges)
+
+    def _load(self, row: WorkflowRevisionRow) -> WorkflowRevision:
+        nodes = list(
+            self._session.scalars(
+                select(WorkflowNodeRow)
+                .where(WorkflowNodeRow.revision_id == row.id)
+                .order_by(WorkflowNodeRow.node_key)
+            )
+        )
+        edges = list(
+            self._session.scalars(
+                select(WorkflowEdgeRow).where(WorkflowEdgeRow.revision_id == row.id)
+            )
+        )
+        return workflow_revision_from_rows(
+            row,
+            [workflow_node_from_row(node) for node in nodes],
+            [workflow_edge_from_row(edge) for edge in edges],
+        )
+
+    def get(self, revision_id: WorkflowRevisionId) -> WorkflowRevision | None:
+        row = self._session.get(WorkflowRevisionRow, str(revision_id))
+        return self._load(row) if row else None
+
+    def list_for_workflow(self, workflow_id: WorkflowId) -> list[WorkflowRevision]:
+        rows = self._session.scalars(
+            select(WorkflowRevisionRow)
+            .where(WorkflowRevisionRow.workflow_id == str(workflow_id))
+            .order_by(WorkflowRevisionRow.version)
+        )
+        return [self._load(row) for row in rows]
+
+    def next_version(self, workflow_id: WorkflowId) -> int:
+        return (
+            int(
+                self._session.scalar(
+                    select(func.coalesce(func.max(WorkflowRevisionRow.version), 0)).where(
+                        WorkflowRevisionRow.workflow_id == str(workflow_id)
                     )
                 )
                 or 0

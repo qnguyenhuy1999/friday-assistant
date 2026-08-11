@@ -233,6 +233,47 @@ export interface Agent {
   updated_at: string;
 }
 
+export interface Workflow {
+  id: string;
+  key: string;
+  display_name: string;
+  description: string;
+  status: "active" | "disabled" | "archived";
+  active_revision_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowNode {
+  id: string;
+  revision_id: string;
+  node_key: string;
+  target_agent_id: string;
+  objective: string;
+  input_payload: JsonValue;
+  expected_output_contract: string;
+  created_at: string;
+}
+
+export interface WorkflowEdge {
+  id: string;
+  revision_id: string;
+  from: string;
+  to: string;
+  created_at: string;
+}
+
+export interface WorkflowRevision {
+  id: string;
+  workflow_id: string;
+  version: number;
+  content_sha256: string;
+  source_kind: "operator" | "imported";
+  nodes: Array<WorkflowNode>;
+  edges: Array<WorkflowEdge>;
+  created_at: string;
+}
+
 export interface AgentRevision {
   id: string;
   agent_id: string;
@@ -513,6 +554,7 @@ export type ArtifactKind = Artifact["kind"];
 export type RunEventType = RunEvent["type"];
 export type TaskEventType = TaskEvent["type"];
 
+export type WorkflowPage = Page<Workflow>;
 export type AgentPage = Page<Agent>;
 export type SkillPage = Page<Skill>;
 export type TaskPage = Page<Task>;
@@ -1197,6 +1239,153 @@ const schema = {
           type: "string",
         },
         updated_at: {
+          type: "string",
+        },
+      },
+    },
+    Workflow: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "key",
+        "display_name",
+        "description",
+        "status",
+        "active_revision_id",
+        "created_at",
+        "updated_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        key: {
+          type: "string",
+        },
+        display_name: {
+          type: "string",
+        },
+        description: {
+          type: "string",
+        },
+        status: {
+          enum: ["active", "disabled", "archived"],
+        },
+        active_revision_id: {
+          type: ["string", "null"],
+        },
+        created_at: {
+          type: "string",
+        },
+        updated_at: {
+          type: "string",
+        },
+      },
+    },
+    WorkflowNode: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "revision_id",
+        "node_key",
+        "target_agent_id",
+        "objective",
+        "input_payload",
+        "expected_output_contract",
+        "created_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        revision_id: {
+          type: "string",
+        },
+        node_key: {
+          type: "string",
+        },
+        target_agent_id: {
+          type: "string",
+        },
+        objective: {
+          type: "string",
+        },
+        input_payload: {},
+        expected_output_contract: {
+          type: "string",
+        },
+        created_at: {
+          type: "string",
+        },
+      },
+    },
+    WorkflowEdge: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "revision_id", "from", "to", "created_at"],
+      properties: {
+        id: {
+          type: "string",
+        },
+        revision_id: {
+          type: "string",
+        },
+        from: {
+          type: "string",
+        },
+        to: {
+          type: "string",
+        },
+        created_at: {
+          type: "string",
+        },
+      },
+    },
+    WorkflowRevision: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "workflow_id",
+        "version",
+        "content_sha256",
+        "source_kind",
+        "nodes",
+        "edges",
+        "created_at",
+      ],
+      properties: {
+        id: {
+          type: "string",
+        },
+        workflow_id: {
+          type: "string",
+        },
+        version: {
+          type: "integer",
+        },
+        content_sha256: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        source_kind: {
+          enum: ["operator", "imported"],
+        },
+        nodes: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/WorkflowNode",
+          },
+        },
+        edges: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/WorkflowEdge",
+          },
+        },
+        created_at: {
           type: "string",
         },
       },
@@ -2233,6 +2422,34 @@ const schema = {
     agent: {
       $ref: "#/definitions/Agent",
     },
+    workflow: {
+      $ref: "#/definitions/Workflow",
+    },
+    workflowPage: {
+      type: "object",
+      additionalProperties: false,
+      required: ["items", "next_cursor"],
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/Workflow",
+          },
+        },
+        next_cursor: {
+          type: ["string", "null"],
+        },
+      },
+    },
+    workflowRevision: {
+      $ref: "#/definitions/WorkflowRevision",
+    },
+    workflowRevisions: {
+      type: "array",
+      items: {
+        $ref: "#/definitions/WorkflowRevision",
+      },
+    },
     agentPage: {
       type: "object",
       additionalProperties: false,
@@ -2603,6 +2820,14 @@ export const validateConversationTurn: WireValidator = (value, path) =>
   assertWire("conversationTurn", value, path);
 export const validateAgent: WireValidator = (value, path) =>
   assertWire("agent", value, path);
+export const validateWorkflow: WireValidator = (value, path) =>
+  assertWire("workflow", value, path);
+export const validateWorkflowPage: WireValidator = (value, path) =>
+  assertWire("workflowPage", value, path);
+export const validateWorkflowRevision: WireValidator = (value, path) =>
+  assertWire("workflowRevision", value, path);
+export const validateWorkflowRevisions: WireValidator = (value, path) =>
+  assertWire("workflowRevisions", value, path);
 export const validateAgentPage: WireValidator = (value, path) =>
   assertWire("agentPage", value, path);
 export const validateAgentRevision: WireValidator = (value, path) =>

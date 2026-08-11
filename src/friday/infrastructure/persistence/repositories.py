@@ -338,6 +338,27 @@ class WorkflowRepository:
             ).scalars()
         ]
 
+    def list_page(
+        self, limit: int, after_created_at: object | None, after_id: str | None
+    ) -> builtins.list[Workflow]:
+        stmt = select(WorkflowRow)
+        if after_created_at is not None and after_id is not None:
+            stmt = stmt.where(
+                or_(
+                    WorkflowRow.created_at > after_created_at,
+                    and_(
+                        WorkflowRow.created_at == after_created_at,
+                        WorkflowRow.id > after_id,
+                    ),
+                )
+            )
+        return [
+            workflow_from_row(row)
+            for row in self._session.execute(
+                stmt.order_by(WorkflowRow.created_at, WorkflowRow.id).limit(limit)
+            ).scalars()
+        ]
+
 
 class WorkflowRevisionRepository:
     def __init__(self, session: Session) -> None:
@@ -347,6 +368,7 @@ class WorkflowRevisionRepository:
         self._session.add(workflow_revision_to_row(revision))
         self._session.flush()
         self._session.add_all(workflow_node_to_row(node) for node in revision.nodes)
+        self._session.flush()
         self._session.add_all(workflow_edge_to_row(edge) for edge in revision.edges)
 
     def _load(self, row: WorkflowRevisionRow) -> WorkflowRevision:

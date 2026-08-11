@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+import friday.domain.workflow as workflow_module
 from friday.domain import (
     AgentId,
     DomainValidationError,
@@ -58,10 +59,20 @@ def test_canonical_hash_is_independent_of_node_order() -> None:
     assert first.content_sha256 == second.content_sha256
 
 
-def test_revision_rejects_foreign_node_ownership_before_hash() -> None:
+def test_revision_rejects_foreign_node_ownership_before_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     revision_id = WorkflowRevisionId.new()
     foreign = WorkflowRevisionId.new()
     node = WorkflowNode(WorkflowNodeId.new(), foreign, "a", AgentId.new(), "do", {}, "done", T0)
+    canonicalized = False
+
+    def canonicalize(*args: object, **kwargs: object) -> str:
+        nonlocal canonicalized
+        canonicalized = True
+        return "should not be hashed"
+
+    monkeypatch.setattr(workflow_module, "canonical_workflow_content", canonicalize)
     with pytest.raises(DomainValidationError, match="ownership"):
         WorkflowRevision.new(
             id=revision_id,
@@ -69,6 +80,27 @@ def test_revision_rejects_foreign_node_ownership_before_hash() -> None:
             version=1,
             nodes=[node],
             edges=[],
+            source_kind=WorkflowRevisionSourceKind.OPERATOR,
+            created_at=T0,
+        )
+    assert not canonicalized
+
+
+def test_revision_rejects_foreign_edge_ownership_before_hash() -> None:
+    revision_id = WorkflowRevisionId.new()
+    foreign = WorkflowRevisionId.new()
+    nodes = [
+        WorkflowNode(WorkflowNodeId.new(), revision_id, "a", AgentId.new(), "do", {}, "done", T0),
+        WorkflowNode(WorkflowNodeId.new(), revision_id, "b", AgentId.new(), "do", {}, "done", T0),
+    ]
+    edge = WorkflowEdge(WorkflowEdgeId.new(), foreign, nodes[0].id, nodes[1].id, T0)
+    with pytest.raises(DomainValidationError, match="ownership"):
+        WorkflowRevision.new(
+            id=revision_id,
+            workflow_id=WorkflowId.new(),
+            version=1,
+            nodes=nodes,
+            edges=[edge],
             source_kind=WorkflowRevisionSourceKind.OPERATOR,
             created_at=T0,
         )

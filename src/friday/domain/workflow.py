@@ -146,6 +146,17 @@ def canonical_workflow_content(nodes: list[WorkflowNode], edges: list[WorkflowEd
     )
 
 
+def validate_workflow_revision_ownership(
+    expected_revision_id: WorkflowRevisionId,
+    nodes: list[WorkflowNode],
+    edges: list[WorkflowEdge],
+) -> None:
+    if any(node.revision_id != expected_revision_id for node in nodes):
+        raise DomainValidationError("WorkflowNode ownership does not match revision")
+    if any(edge.revision_id != expected_revision_id for edge in edges):
+        raise DomainValidationError("WorkflowEdge ownership does not match revision")
+
+
 def validate_workflow_dag(nodes: list[WorkflowNode], edges: list[WorkflowEdge]) -> None:
     if not nodes:
         raise DomainValidationError("WorkflowRevision requires at least one node")
@@ -203,14 +214,11 @@ class WorkflowRevision:
     def __post_init__(self) -> None:
         if self.version < 1:
             raise DomainValidationError("WorkflowRevision.version must be positive")
-        if any(node.revision_id != self.id for node in self.nodes):
-            raise DomainValidationError("WorkflowNode ownership does not match revision")
-        if any(edge.revision_id != self.id for edge in self.edges):
-            raise DomainValidationError("WorkflowEdge ownership does not match revision")
-        validate_workflow_dag(list(self.nodes), list(self.edges))
-        expected = hashlib.sha256(
-            canonical_workflow_content(list(self.nodes), list(self.edges)).encode()
-        ).hexdigest()
+        nodes = list(self.nodes)
+        edges = list(self.edges)
+        validate_workflow_revision_ownership(self.id, nodes, edges)
+        validate_workflow_dag(nodes, edges)
+        expected = hashlib.sha256(canonical_workflow_content(nodes, edges).encode()).hexdigest()
         if self.content_sha256 != expected:
             raise DomainValidationError("workflow_integrity_failed")
         if not re.fullmatch(r"[0-9a-f]{64}", self.content_sha256):
@@ -229,6 +237,7 @@ class WorkflowRevision:
         source_kind: WorkflowRevisionSourceKind,
         created_at: datetime,
     ) -> WorkflowRevision:
+        validate_workflow_revision_ownership(id, nodes, edges)
         validate_workflow_dag(nodes, edges)
         content = canonical_workflow_content(nodes, edges)
         return cls(

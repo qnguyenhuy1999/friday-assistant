@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TypedDict
 
 from friday.application.errors import EntityConflict, WorkflowNotFound, WorkflowRevisionNotFound
@@ -191,3 +192,9 @@ class ListWorkflows:
     def execute(self, limit: int = 100) -> list[Workflow]:
         with self._uow_factory() as uow:
             return uow.workflows.list(limit)
+
+    def page(
+        self, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> list[Workflow]:
+        with self._uow_factory() as uow:
+            return uow.workflows.list_page(limit, after_created_at, after_id)

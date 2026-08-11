@@ -1403,6 +1403,19 @@ class FakeWorkflowRepository:
     def list(self, limit: int) -> list[Workflow]:
         return list(self.items.values())[:limit]
 
+    def list_page(
+        self, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> builtins.list[Workflow]:
+        values = sorted(self.items.values(), key=lambda value: (value.created_at, str(value.id)))
+        if after_created_at is not None and after_id is not None:
+            values = [
+                value
+                for value in values
+                if value.created_at > after_created_at
+                or (value.created_at == after_created_at and str(value.id) > after_id)
+            ]
+        return values[:limit]
+
 
 class FakeWorkflowRevisionRepository:
     def __init__(self) -> None:

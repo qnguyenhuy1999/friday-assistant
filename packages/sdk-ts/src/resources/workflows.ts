@@ -12,6 +12,10 @@ import {
   validateWorkflowRevisions,
 } from "@friday/contracts";
 import type { FridayHttpClient } from "../http";
+export interface ListWorkflowsParams {
+  limit?: number;
+  cursor?: string;
+}
 export class WorkflowsResource {
   constructor(private readonly http: FridayHttpClient) {}
   create(input: CreateWorkflowBody) {
@@ -22,10 +26,11 @@ export class WorkflowsResource {
       validate: validateWorkflow,
     });
   }
-  list() {
+  list(params: ListWorkflowsParams = {}) {
     return this.http.requestJson<WorkflowPage>({
       method: "GET",
       path: "/v1/workflows",
+      query: { limit: params.limit, cursor: params.cursor },
       validate: validateWorkflowPage,
     });
   }

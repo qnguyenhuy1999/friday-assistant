@@ -3,9 +3,16 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 
 from apps.api.dependencies import get_clock, get_uow_factory
+from apps.api.pagination import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    cursor_datetime,
+    decode_cursor,
+    page_from_query,
+)
 from apps.api.schemas.workflows import (
     CreateWorkflowBody,
     CreateWorkflowRevisionBody,
@@ -98,8 +105,32 @@ def create(body: CreateWorkflowBody, uow: Uow, clock: ClockDep) -> WorkflowRespo
 
 
 @router.get("", response_model=WorkflowPageResponse, operation_id="listWorkflows")
-def list_workflows(uow: Uow) -> WorkflowPageResponse:
-    return WorkflowPageResponse(items=[_workflow(x) for x in ListWorkflows(uow).execute()])
+def list_workflows(
+    uow: Uow,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    cursor: str | None = None,
+) -> WorkflowPageResponse:
+    after = decode_cursor(
+        cursor,
+        collection="workflows",
+        parent_id=None,
+        order="created_at_id_asc",
+        parts=2,
+    )
+    results = ListWorkflows(uow).page(
+        limit + 1,
+        cursor_datetime(after.after[0]) if after else None,
+        after.after[1] if after else None,
+    )
+    page, next_cursor = page_from_query(
+        results,
+        limit=limit,
+        collection="workflows",
+        parent_id=None,
+        order="created_at_id_asc",
+        key=lambda workflow: (workflow.created_at.isoformat(), str(workflow.id)),
+    )
+    return WorkflowPageResponse(items=[_workflow(x) for x in page], next_cursor=next_cursor)
 
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse, operation_id="getWorkflow")

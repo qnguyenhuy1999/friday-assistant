@@ -718,6 +718,7 @@ class WorkflowRow(Base):
     __tablename__ = "workflows"
     __table_args__ = (
         CheckConstraint("status IN ('active','disabled','archived')", name="ck_workflows_status"),
+        CheckConstraint("length(key) BETWEEN 1 AND 128", name="ck_workflows_key"),
         ForeignKeyConstraint(
             ["id", "active_revision_id"],
             ["workflow_revisions.workflow_id", "workflow_revisions.id"],

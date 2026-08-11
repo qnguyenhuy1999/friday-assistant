@@ -43,6 +43,8 @@ from friday.application.errors import (
     ToolInvocationNotFound,
     TransactionFailure,
     UnknownBrainRuntimeKind,
+    WorkflowNotFound,
+    WorkflowRevisionNotFound,
 )
 from friday.domain.errors import DomainValidationError
 
@@ -86,6 +88,8 @@ _NOT_FOUND_TYPES: dict[type[ApplicationError], str] = {
     AgentNotFound: "agent_not_found",
     AgentRevisionNotFound: "agent_revision_not_found",
     DelegationRequestNotFound: "delegation_request_not_found",
+    WorkflowNotFound: "workflow_not_found",
+    WorkflowRevisionNotFound: "workflow_revision_not_found",
 }
 
 _CONFLICT_TYPES: dict[type[ApplicationError], str] = {

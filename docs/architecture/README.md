@@ -104,9 +104,9 @@ reverse.
 
 ## Status
 
-Implemented through **Phase 19 — Durable Messaging & Scheduled Delivery**.
-Phase 20 remains under its closure-review gate and is deliberately not marked
-complete here until the exact-head closure suite has passed and merged:
+Implemented through **Phase 21 / Step 3 — Workflow registry and DAG contract**.
+Phase 21 overall remains incomplete: workflow invocation and execution are
+deliberately deferred to later steps.
 
 - **Phase 4–5** — framework-independent domain model, application ports, JSON
   Schema contracts, and the SQLite persistence adapter (see
@@ -134,11 +134,15 @@ complete here until the exact-head closure suite has passed and merged:
 - **Phase 19** — durable outbound messaging and scheduled delivery with
   per-fire authority snapshots (see
   [messaging-and-scheduled-delivery.md](messaging-and-scheduled-delivery.md)).
-- **Phase 20 (closure in progress)** — immutable versioned Skills, task
+- **Phase 20 (complete)** — immutable versioned Skills, task
   binding and run freezing, bounded runtime injection, factual usage evidence,
   deterministic isolated evaluation, brain-only candidate proposals,
   exact-intent promotion and rollback, and policy-driven proposal generation
   (see [phase-20-skills.md](phase-20-skills.md)).
+- **Phase 21 / Step 1** — durable delegation request definition.
+- **Phase 21 / Step 2** — durable delegation execution relationship.
+- **Phase 21 / Step 3** — immutable versioned Workflow registry, graph
+  ownership, canonical DAG integrity hashing, lifecycle control, API, and SDK.
 
 Remaining core work is Phase 21 multi-agent delegation.
 The adapter and migration behavior are covered by `tests/persistence`.

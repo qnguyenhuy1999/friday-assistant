@@ -12,6 +12,7 @@ import { SchedulesResource } from "./resources/schedules";
 import { SkillsResource } from "./resources/skills";
 import { TasksResource } from "./resources/tasks";
 import { ToolInvocationsResource } from "./resources/tool-invocations";
+import { WorkflowsResource } from "./resources/workflows";
 export interface FridayClientOptions {
   baseUrl: string;
   fetchImpl?: typeof fetch;
@@ -31,6 +32,7 @@ export class FridayClient {
   readonly skills;
   readonly agents;
   readonly delegations;
+  readonly workflows;
   constructor(options: FridayClientOptions) {
     const http = new FridayHttpClient(options);
     this.tasks = new TasksResource(http);
@@ -46,5 +48,6 @@ export class FridayClient {
     this.skills = new SkillsResource(http);
     this.agents = new AgentsResource(http);
     this.delegations = new DelegationsResource(http);
+    this.workflows = new WorkflowsResource(http);
   }
 }

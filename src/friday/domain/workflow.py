@@ -151,6 +151,12 @@ def validate_workflow_dag(nodes: list[WorkflowNode], edges: list[WorkflowEdge]) 
         raise DomainValidationError("WorkflowRevision requires at least one node")
     if len(nodes) > MAX_WORKFLOW_NODES or len(edges) > MAX_WORKFLOW_EDGES:
         raise DomainValidationError("WorkflowRevision graph exceeds limits")
+    if len({n.id for n in nodes}) != len(nodes):
+        raise DomainValidationError("duplicate WorkflowNode.id")
+    revision_ids = {n.revision_id for n in nodes}
+    if len(revision_ids) != 1:
+        raise DomainValidationError("WorkflowNode ownership does not match revision")
+    revision_id = next(iter(revision_ids))
     keys = [n.node_key for n in nodes]
     if len(set(keys)) != len(keys):
         raise DomainValidationError("duplicate WorkflowNode.node_key")
@@ -159,11 +165,9 @@ def validate_workflow_dag(nodes: list[WorkflowNode], edges: list[WorkflowEdge]) 
     indegree = {n.id: 0 for n in nodes}
     outgoing: dict[WorkflowNodeId, list[WorkflowNodeId]] = {n.id: [] for n in nodes}
     for e in edges:
-        if (
-            e.revision_id != nodes[0].revision_id
-            or e.from_node_id not in ids
-            or e.to_node_id not in ids
-        ):
+        if e.revision_id != revision_id:
+            raise DomainValidationError("WorkflowEdge ownership does not match revision")
+        if e.from_node_id not in ids or e.to_node_id not in ids:
             raise DomainValidationError("WorkflowEdge endpoint does not belong to revision")
         pair = (e.from_node_id, e.to_node_id)
         if pair in pairs:
@@ -199,6 +203,10 @@ class WorkflowRevision:
     def __post_init__(self) -> None:
         if self.version < 1:
             raise DomainValidationError("WorkflowRevision.version must be positive")
+        if any(node.revision_id != self.id for node in self.nodes):
+            raise DomainValidationError("WorkflowNode ownership does not match revision")
+        if any(edge.revision_id != self.id for edge in self.edges):
+            raise DomainValidationError("WorkflowEdge ownership does not match revision")
         validate_workflow_dag(list(self.nodes), list(self.edges))
         expected = hashlib.sha256(
             canonical_workflow_content(list(self.nodes), list(self.edges)).encode()
@@ -221,6 +229,7 @@ class WorkflowRevision:
         source_kind: WorkflowRevisionSourceKind,
         created_at: datetime,
     ) -> WorkflowRevision:
+        validate_workflow_dag(nodes, edges)
         content = canonical_workflow_content(nodes, edges)
         return cls(
             id,

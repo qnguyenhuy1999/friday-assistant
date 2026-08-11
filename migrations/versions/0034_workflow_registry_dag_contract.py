@@ -23,6 +23,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.UniqueConstraint("key", name="uq_workflows_key"),
+        sa.CheckConstraint("length(key) BETWEEN 1 AND 128", name="ck_workflows_key"),
         sa.CheckConstraint(
             "status IN ('active','disabled','archived')", name="ck_workflows_status"
         ),

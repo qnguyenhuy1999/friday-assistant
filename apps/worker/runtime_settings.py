@@ -21,6 +21,9 @@ _DEFAULT_MAX_TURNS_PER_CLAIM = 8
 _DEFAULT_MAX_TOOL_CALLS_PER_CLAIM = 4
 _DEFAULT_MAX_CONTEXT_CHARS = 60_000
 _DEFAULT_MAX_SKILL_CONTEXT_CHARS = 24_000
+_DEFAULT_MAX_AGENT_CONTEXT_CHARS = 24_000
+_DEFAULT_MAX_DELEGATIONS_PER_RUN = 4
+_DEFAULT_MAX_DELEGATION_TARGETS = 32
 _DEFAULT_MAX_RESPONSE_BYTES = 65_536
 _DEFAULT_MAX_YIELD_SECONDS = 3_600
 _DEFAULT_MAX_PROCESSING_SECONDS = 600.0
@@ -54,6 +57,9 @@ class RuntimeSettings:
     max_processing_seconds: float = _DEFAULT_MAX_PROCESSING_SECONDS
     claude_max_stderr_bytes: int = _DEFAULT_CLAUDE_MAX_STDERR_BYTES
     max_skill_context_chars: int = _DEFAULT_MAX_SKILL_CONTEXT_CHARS
+    max_agent_context_chars: int | None = None
+    max_delegations_per_run: int = _DEFAULT_MAX_DELEGATIONS_PER_RUN
+    max_delegation_targets: int = _DEFAULT_MAX_DELEGATION_TARGETS
 
     def __post_init__(self) -> None:
         if not str(self.workspace_root).strip():
@@ -72,6 +78,8 @@ class RuntimeSettings:
             "max_tool_calls_per_claim": self.max_tool_calls_per_claim,
             "max_context_chars": self.max_context_chars,
             "max_skill_context_chars": self.max_skill_context_chars,
+            "max_delegations_per_run": self.max_delegations_per_run,
+            "max_delegation_targets": self.max_delegation_targets,
             "max_response_bytes": self.max_response_bytes,
             "max_processing_seconds": self.max_processing_seconds,
             "tool_timeout_seconds": self.tool_timeout_seconds,
@@ -88,6 +96,11 @@ class RuntimeSettings:
             raise ValueError("max_yield_seconds must be >= 0")
         if self.max_skill_context_chars >= self.max_context_chars:
             raise ValueError("max_skill_context_chars must be below max_context_chars")
+        if (
+            self.max_agent_context_chars is not None
+            and self.max_agent_context_chars > self.max_context_chars
+        ):
+            raise ValueError("max_agent_context_chars must be at most max_context_chars")
         if self.tool_max_timeout_seconds < self.tool_timeout_seconds:
             raise ValueError("tool_max_timeout_seconds must be >= tool_timeout_seconds")
 
@@ -130,6 +143,21 @@ class RuntimeSettings:
             max_skill_context_chars=int(
                 os.environ.get(
                     "FRIDAY_RUNTIME_MAX_SKILL_CONTEXT_CHARS", _DEFAULT_MAX_SKILL_CONTEXT_CHARS
+                )
+            ),
+            max_agent_context_chars=int(
+                os.environ.get(
+                    "FRIDAY_RUNTIME_MAX_AGENT_CONTEXT_CHARS", _DEFAULT_MAX_AGENT_CONTEXT_CHARS
+                )
+            ),
+            max_delegations_per_run=int(
+                os.environ.get(
+                    "FRIDAY_RUNTIME_MAX_DELEGATIONS_PER_RUN", _DEFAULT_MAX_DELEGATIONS_PER_RUN
+                )
+            ),
+            max_delegation_targets=int(
+                os.environ.get(
+                    "FRIDAY_RUNTIME_MAX_DELEGATION_TARGETS", _DEFAULT_MAX_DELEGATION_TARGETS
                 )
             ),
             max_response_bytes=int(

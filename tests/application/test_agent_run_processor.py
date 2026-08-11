@@ -18,10 +18,12 @@ from friday.application.errors import (
     BrainResponseInvalid,
     BrainTimeout,
     BrainUnavailable,
+    ClaimLost,
     ToolNotFound,
 )
 from friday.application.run_processor import ClaimContext
 from friday.application.runtime_actions import (
+    DelegateAction,
     FailAction,
     FinishAction,
     InvokeToolAction,
@@ -37,10 +39,16 @@ from friday.application.tool_gateway import (
     ToolExecutionResult,
     ToolRiskAssessment,
 )
-from friday.application.worker_coordination import ApplySucceededOutcome, VerifyRunClaim
+from friday.application.worker_coordination import (
+    ApplySucceededOutcome,
+    ApplyWaitingForDelegationOutcome,
+    ClaimNextRun,
+    VerifyRunClaim,
+)
+from friday.domain.agent import Agent, AgentRevision, AgentRevisionSourceKind, TaskAgentBinding
 from friday.domain.approval import ApprovalCategory, ApprovalRequest, ApprovalStatus
 from friday.domain.event import RunEventType
-from friday.domain.identifiers import ApprovalRequestId, RunId, TaskId
+from friday.domain.identifiers import AgentId, AgentRevisionId, ApprovalRequestId, RunId, TaskId
 from friday.domain.run import Run, RunStatus
 from friday.domain.task import Task
 from friday.domain.tool import ToolInvocationStatus
@@ -81,7 +89,9 @@ class ScriptedBrain:
         item = self._responses.pop(0)
         if isinstance(item, Exception):
             raise item
-        assert isinstance(item, FinishAction | FailAction | YieldAction | InvokeToolAction)
+        assert isinstance(
+            item, FinishAction | FailAction | YieldAction | InvokeToolAction | DelegateAction
+        )
         return BrainResponse(action=item)
 
 
@@ -192,6 +202,173 @@ def test_agent_finished_payload_flows_from_real_processor_to_durable_events() ->
         if event.type is RunEventType.AGENT_FINISHED
     )
     assert finished.payload == {"summary": "ship it", "details": {"files": ["a.ts"]}}
+
+
+def test_delegate_child_execution_reconciles_and_parent_observes_durable_result() -> None:
+    delegate = DelegateAction(
+        target_agent_key="researcher",
+        objective="Gather release evidence.",
+        input_payload={"release": "21.2", "paths": ["CHANGELOG.md"]},
+        expected_output_contract="Return cited findings.",
+        reason="Use a specialist.",
+    )
+    harness = Harness(delegate, FinishAction(summary="parent complete"))
+    agent_id = AgentId.new()
+    agent = Agent.new(
+        id=agent_id,
+        key="researcher",
+        display_name="Researcher",
+        description="Evidence gathering",
+        created_at=T0,
+    )
+    revision = AgentRevision.new(
+        id=AgentRevisionId.new(),
+        agent_id=agent_id,
+        version=1,
+        instructions="Use primary sources and cite every finding.",
+        runtime_kind="claude_cli",
+        runtime_config={},
+        source_kind=AgentRevisionSourceKind.OPERATOR,
+        created_at=T0,
+    )
+    agent.activate(revision, T0)
+    harness.uow.agent_repo.add(agent)
+    harness.uow.agent_revision_repo.add(revision)
+
+    waiting = harness.processor.process(harness.context())
+    assert waiting.kind == "waiting_for_delegation"
+    assert waiting.delegation_request_id is not None
+    request = harness.uow.delegation_request_repo.get(waiting.delegation_request_id)
+    assert request is not None
+    assert request.child_run_id is not None
+
+    child_claim = ClaimNextRun(
+        harness.factory,
+        harness.clock,
+        worker_id="child-worker",
+        lease_duration=LEASE,
+        candidate_limit=5,
+    ).execute()
+    assert child_claim is not None
+    child_brain = ScriptedBrain(FinishAction(summary="evidence found", details={"sources": 2}))
+    child_processor = AgentRunProcessor(
+        uow_factory=harness.factory,
+        clock=harness.clock,
+        brain=child_brain,
+        runtime_registry=_runtime_registry(),
+        gateway=harness.gateway,
+        verify_claim=VerifyRunClaim(harness.factory, harness.clock),
+        request_tool_approval=RequestToolApproval(harness.factory, harness.clock),
+        execute_tool_action=ExecuteToolAction(harness.factory, harness.clock, harness.gateway),
+        limits=LIMITS,
+    )
+    child_context = ClaimContext(
+        run_id=child_claim.run_id,
+        task_id=child_claim.task_id,
+        worker_id=child_claim.worker_id,
+        claim_token=child_claim.claim_token,
+        claim_generation=child_claim.claim_generation,
+        attempt_number=child_claim.attempt_number,
+        is_lease_lost=lambda: False,
+    )
+    child_outcome = child_processor.process(child_context)
+    assert child_outcome.kind == "succeeded"
+    assert child_brain.requests[0].context is not None
+    assert "# AGENT" in child_brain.requests[0].context
+    assert "Use primary sources and cite every finding." in child_brain.requests[0].context
+    assert "# DELEGATED WORK" in child_brain.requests[0].context
+    assert '"release":"21.2"' in child_brain.requests[0].context
+    assert "# APPROVALS" not in child_brain.requests[0].context
+
+    ApplySucceededOutcome(harness.factory, harness.clock).execute(
+        child_claim.run_id,
+        child_claim.worker_id,
+        child_claim.claim_token,
+        child_claim.claim_generation,
+        child_outcome.final_response,
+    )
+    assert request.status.value == "succeeded"
+    assert harness.run.status is RunStatus.RUNNING
+    fresh_parent_item = harness.uow.work_queue_repo.get(harness.run.id)
+    assert fresh_parent_item is not None
+    assert fresh_parent_item.claimed_by is None
+
+    with pytest.raises(ClaimLost):
+        ApplyWaitingForDelegationOutcome(harness.factory, harness.clock).execute(
+            harness.run.id,
+            "w1",
+            "tok",
+            harness.generation,
+            request.id,
+        )
+    assert harness.uow.work_queue_repo.get(harness.run.id) is fresh_parent_item
+
+    parent_claim = ClaimNextRun(
+        harness.factory,
+        harness.clock,
+        worker_id="parent-next",
+        lease_duration=LEASE,
+        candidate_limit=5,
+    ).execute()
+    assert parent_claim is not None and parent_claim.run_id == harness.run.id
+    parent_outcome = harness.processor.process(
+        ClaimContext(
+            run_id=parent_claim.run_id,
+            task_id=parent_claim.task_id,
+            worker_id=parent_claim.worker_id,
+            claim_token=parent_claim.claim_token,
+            claim_generation=parent_claim.claim_generation,
+            attempt_number=parent_claim.attempt_number,
+            is_lease_lost=lambda: False,
+        )
+    )
+    assert parent_outcome.kind == "succeeded"
+    assert "# DELEGATIONS" in harness.brain.requests[-1].context
+    assert "summary=evidence found" in harness.brain.requests[-1].context
+    ApplySucceededOutcome(harness.factory, harness.clock).execute(
+        parent_claim.run_id,
+        parent_claim.worker_id,
+        parent_claim.claim_token,
+        parent_claim.claim_generation,
+        parent_outcome.final_response,
+    )
+    completed = harness.uow.run_repo.get(harness.run.id)
+    assert completed is not None and completed.status is RunStatus.SUCCEEDED
+
+
+def test_corrupt_frozen_agent_revision_fails_before_brain_call() -> None:
+    harness = Harness(FINISH)
+    agent_id = AgentId.new()
+    agent = Agent.new(
+        id=agent_id,
+        key="corrupt-agent",
+        display_name="Corrupt",
+        description="",
+        created_at=T0,
+    )
+    revision = AgentRevision.new(
+        id=AgentRevisionId.new(),
+        agent_id=agent_id,
+        version=1,
+        instructions="frozen instructions",
+        runtime_kind="claude_cli",
+        runtime_config={},
+        source_kind=AgentRevisionSourceKind.OPERATOR,
+        created_at=T0,
+    )
+    agent.activate(revision, T0)
+    object.__setattr__(revision, "content_sha256", "0" * 64)
+    harness.uow.agent_repo.add(agent)
+    harness.uow.agent_revision_repo.add(revision)
+    harness.uow.task_agent_binding_repo.replace(
+        harness.run.task_id, TaskAgentBinding(harness.run.task_id, agent.id, T0)
+    )
+
+    outcome = harness.processor.process(harness.context())
+    assert outcome.kind == "failed"
+    assert outcome.failure is not None
+    assert outcome.failure.code == "agent_integrity_failed"
+    assert harness.brain.requests == []
 
 
 # --- terminal actions -------------------------------------------------------

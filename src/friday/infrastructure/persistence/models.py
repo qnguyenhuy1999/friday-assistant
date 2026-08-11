@@ -716,6 +716,11 @@ class AgentRevisionRow(Base):
 
 class TaskAgentBindingRow(Base):
     __tablename__ = "task_agent_bindings"
+    __table_args__ = (
+        # task_id is the primary key, but this explicit candidate key is the
+        # target of DelegationRequest's composite ownership FK.
+        UniqueConstraint("task_id", "agent_id", name="uq_task_agent_bindings_task_agent"),
+    )
 
     task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), primary_key=True)
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"))
@@ -766,6 +771,7 @@ class DelegationRequestRow(Base):
             name="ck_delegation_requests_output_contract_length",
         ),
         UniqueConstraint("authorization_fingerprint", name="uq_delegation_requests_fingerprint"),
+        UniqueConstraint("id", "parent_run_id", name="uq_delegation_requests_id_parent"),
         # NULL parent_run_step_id (no step scoping) skips the composite FK
         # check; a non-NULL value must name a step belonging to this exact
         # parent run, not merely any existing run_steps.id.
@@ -778,10 +784,33 @@ class DelegationRequestRow(Base):
             "child_run_id IS NULL OR child_task_id IS NOT NULL",
             name="ck_delegation_requests_child_run_task_shape",
         ),
+        CheckConstraint(
+            "(status = 'requested' AND child_task_id IS NULL AND child_run_id IS NULL "
+            "AND started_at IS NULL AND completed_at IS NULL AND failure_code IS NULL) OR "
+            "(status = 'dispatched' AND child_task_id IS NOT NULL AND child_run_id IS NOT NULL "
+            "AND started_at IS NOT NULL AND completed_at IS NULL AND failure_code IS NULL) OR "
+            "(status = 'succeeded' AND child_task_id IS NOT NULL AND child_run_id IS NOT NULL "
+            "AND started_at IS NOT NULL AND completed_at IS NOT NULL AND failure_code IS NULL) OR "
+            "(status = 'failed' AND child_task_id IS NOT NULL AND child_run_id IS NOT NULL "
+            "AND started_at IS NOT NULL AND completed_at IS NOT NULL "
+            "AND failure_code IS NOT NULL) OR "
+            "(status = 'cancelled' AND failure_code IS NULL AND "
+            "((child_task_id IS NULL AND child_run_id IS NULL AND started_at IS NULL) OR "
+            "(child_task_id IS NOT NULL AND child_run_id IS NOT NULL AND started_at IS NOT NULL)) "
+            "AND completed_at IS NOT NULL)",
+            name="ck_delegation_requests_state_shape",
+        ),
+        UniqueConstraint("child_task_id", name="uq_delegation_requests_child_task_id"),
+        UniqueConstraint("child_run_id", name="uq_delegation_requests_child_run_id"),
         ForeignKeyConstraint(
             ["child_run_id", "child_task_id"],
             ["runs.id", "runs.task_id"],
             name="fk_delegation_requests_child_run_task_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["child_task_id", "target_agent_id"],
+            ["task_agent_bindings.task_id", "task_agent_bindings.agent_id"],
+            name="fk_delegation_requests_child_agent_ownership",
         ),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
@@ -844,9 +873,24 @@ class RunRow(Base):
         UniqueConstraint("id", "task_id", name="uq_runs_id_task"),
         UniqueConstraint("id", "execution_id", name="uq_runs_id_execution"),
         CheckConstraint(
-            "status IN ('queued', 'running', 'waiting_for_approval', 'succeeded', 'failed', "
+            "status IN ('queued', 'running', 'waiting_for_approval', "
+            "'waiting_for_delegation', 'succeeded', 'failed', "
             "'cancelled')",
             name="ck_runs_status",
+        ),
+        CheckConstraint(
+            "((status = 'waiting_for_approval' AND approval_request_id IS NOT NULL "
+            "AND delegation_request_id IS NULL) OR "
+            "(status = 'waiting_for_delegation' AND delegation_request_id IS NOT NULL "
+            "AND approval_request_id IS NULL) OR "
+            "(status NOT IN ('waiting_for_approval', 'waiting_for_delegation') "
+            "AND approval_request_id IS NULL AND delegation_request_id IS NULL))",
+            name="ck_runs_wait_marker_shape",
+        ),
+        ForeignKeyConstraint(
+            ["delegation_request_id", "id"],
+            ["delegation_requests.id", "delegation_requests.parent_run_id"],
+            name="fk_runs_delegation_parent_ownership",
         ),
     )
 
@@ -861,6 +905,7 @@ class RunRow(Base):
     # No DB-level FK to approval_requests: see docs/architecture/persistence.md
     # ("Cross-reference columns without FK constraints").
     approval_request_id: Mapped[str | None] = mapped_column(index=True)
+    delegation_request_id: Mapped[str | None] = mapped_column(index=True)
 
 
 class ScheduleRow(Base):

@@ -63,6 +63,37 @@
       },
       "required": ["version", "action", "tool", "input"],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "title": "DelegateAction",
+      "properties": {
+        "version": { "const": 1 },
+        "action": { "const": "delegate" },
+        "target_agent_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96,
+          "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+        },
+        "objective": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "input": { "type": "object" },
+        "expected_output_contract": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "reason": { "type": "string", "maxLength": 2000 }
+      },
+      "required": [
+        "version",
+        "action",
+        "target_agent_key",
+        "objective",
+        "input",
+        "expected_output_contract"
+      ],
+      "additionalProperties": false
     }
   ]
 }

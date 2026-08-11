@@ -4,11 +4,13 @@ from datetime import timedelta
 
 import pytest
 
+from friday.application.delegation_reconciliation import reconcile_child_terminal_in_uow
 from friday.application.errors import ApprovalNotFound, ClaimLost, EntityConflict
 from friday.application.retry_policy import RetryPolicy
 from friday.application.worker_coordination import (
     ApplyFailedOutcome,
     ApplySucceededOutcome,
+    ApplyWaitingForDelegationOutcome,
     ApplyWaitingOutcome,
     ClaimNextRun,
     CompleteRunWorkItem,
@@ -18,9 +20,18 @@ from friday.application.worker_coordination import (
     VerifyRunClaim,
 )
 from friday.domain.approval import ApprovalCategory, ApprovalRequest
+from friday.domain.delegation import DelegationRequest, DelegationStatus
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import ApprovalRequestId, RunId, RunStepId, TaskId, ToolInvocationId
+from friday.domain.identifiers import (
+    AgentId,
+    ApprovalRequestId,
+    DelegationRequestId,
+    RunId,
+    RunStepId,
+    TaskId,
+    ToolInvocationId,
+)
 from friday.domain.run import Run, RunStatus
 from friday.domain.step import RunStep
 from friday.domain.tool import ToolInvocation
@@ -589,3 +600,82 @@ def test_apply_waiting_outcome_rejects_run_that_is_not_waiting() -> None:
         )
 
     assert run.status is RunStatus.RUNNING
+
+
+def _delegation_fixture() -> tuple[FakeUnitOfWork, Run, Run, DelegationRequest]:
+    uow = FakeUnitOfWork()
+    parent = Run.new(id=RunId.new(), task_id=TaskId.new(), created_at=T0)
+    parent.start(T0)
+    child = Run.new(id=RunId.new(), task_id=TaskId.new(), created_at=T0)
+    child.start(T0)
+    request = DelegationRequest.new(
+        id=DelegationRequestId.new(),
+        parent_run_id=parent.id,
+        target_agent_id=AgentId.new(),
+        objective="inspect",
+        input_payload={"scope": "tests"},
+        expected_output_contract="findings",
+        created_at=T0,
+    )
+    request.dispatch(child.task_id, child.id, T0)
+    parent.wait_for_delegation(T0, request.id)
+    uow.run_repo.add(parent)
+    uow.run_repo.add(child)
+    uow.delegation_request_repo.add(request)
+    return uow, parent, child, request
+
+
+@pytest.mark.parametrize("terminal", ["success", "failure", "cancel"])
+def test_child_terminal_reconciliation_wakes_parent_once(terminal: str) -> None:
+    uow, parent, child, request = _delegation_fixture()
+    now = T0 + timedelta(seconds=1)
+    if terminal == "success":
+        child.succeed(now)
+    elif terminal == "failure":
+        child.fail(now, FAILURE)
+    else:
+        child.cancel(now)
+    reconcile_child_terminal_in_uow(uow, child, now)
+
+    expected = {
+        "success": DelegationStatus.SUCCEEDED,
+        "failure": DelegationStatus.FAILED,
+        "cancel": DelegationStatus.CANCELLED,
+    }[terminal]
+    assert request.status is expected
+    assert parent.status is RunStatus.RUNNING
+    assert uow.work_queue_repo.get(parent.id) is not None
+    event_count = len(uow.event_store.appended)
+    reconcile_child_terminal_in_uow(uow, child, now)
+    assert len(uow.event_store.appended) == event_count
+
+
+def test_retryable_child_failure_leaves_parent_waiting_and_delegation_dispatched() -> None:
+    uow, parent, child, request = _delegation_fixture()
+    uow.work_queue_repo.enqueue(child.id, T0, T0)
+    assert uow.work_queue_repo.try_claim(child.id, "child", "token", T0, T0 + LEASE)
+    item = uow.work_queue_repo.get(child.id)
+    assert item is not None
+    result = ApplyFailedOutcome(
+        CountingUnitOfWorkFactory(uow),
+        FakeClock(T0 + timedelta(seconds=1)),
+        retry_policy=RetryPolicy(3, timedelta(seconds=1), 2, timedelta(seconds=10)),
+    ).execute(child.id, "child", "token", item.claim_generation, RETRYABLE_FAILURE)
+    assert result.status is RunStatus.FAILED
+    assert request.status is DelegationStatus.DISPATCHED
+    assert parent.status is RunStatus.WAITING_FOR_DELEGATION
+    assert len(uow.run_repo.list_for_execution(child.execution_id)) == 2
+
+
+def test_waiting_for_delegation_applier_removes_only_the_exact_old_claim() -> None:
+    uow, parent, _child, request = _delegation_fixture()
+    uow.work_queue_repo.enqueue(parent.id, T0, T0)
+    assert uow.work_queue_repo.try_claim(parent.id, "parent", "token", T0, T0 + LEASE)
+    item = uow.work_queue_repo.get(parent.id)
+    assert item is not None
+    result = ApplyWaitingForDelegationOutcome(
+        CountingUnitOfWorkFactory(uow), FakeClock(T0)
+    ).execute(parent.id, "parent", "token", item.claim_generation, request.id)
+    assert result.run_id == parent.id
+    assert parent.status is RunStatus.WAITING_FOR_DELEGATION
+    assert uow.work_queue_repo.get(parent.id) is None

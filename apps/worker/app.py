@@ -57,6 +57,7 @@ from friday.application.tool_gateway import ToolGateway
 from friday.application.worker_coordination import (
     ApplyFailedOutcome,
     ApplySucceededOutcome,
+    ApplyWaitingForDelegationOutcome,
     ApplyWaitingOutcome,
     ClaimNextRun,
     RenewRunLease,
@@ -461,6 +462,13 @@ def _compose_worker(
             max_response_bytes=runtime.max_response_bytes,
             max_yield_seconds=runtime.max_yield_seconds,
             max_processing_seconds=runtime.max_processing_seconds,
+            max_agent_context_chars=(
+                min(runtime.max_agent_context_chars, max(1, runtime.max_context_chars - 1))
+                if runtime.max_agent_context_chars is not None
+                else min(24_000, max(1, runtime.max_context_chars - 1))
+            ),
+            max_delegations_per_run=runtime.max_delegations_per_run,
+            max_delegation_targets=runtime.max_delegation_targets,
         ),
         memory_retriever=memory.retriever,
         conversation_context=ConversationContextAssembler(uow_factory),
@@ -479,6 +487,7 @@ def _compose_worker(
         apply_failed=ApplyFailedOutcome(uow_factory, clock, retry_policy=retry_policy),
         apply_succeeded=ApplySucceededOutcome(uow_factory, clock),
         apply_waiting=ApplyWaitingOutcome(uow_factory, clock),
+        apply_waiting_for_delegation=ApplyWaitingForDelegationOutcome(uow_factory, clock),
         recover_expired_leases=RecoverExpiredLeases(
             uow_factory, clock, batch_size=settings.maintenance_batch_size
         ),

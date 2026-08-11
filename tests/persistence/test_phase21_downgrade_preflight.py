@@ -19,6 +19,8 @@ REVISION_ID = "00000000-0000-0000-0000-000000000004"
 BINDING_TASK_ID = "00000000-0000-0000-0000-000000000005"
 RESOLUTION_ID = "00000000-0000-0000-0000-000000000006"
 DELEGATION_ID = "00000000-0000-0000-0000-000000000007"
+CHILD_TASK_ID = "00000000-0000-0000-0000-000000000008"
+CHILD_RUN_ID = "00000000-0000-0000-0000-000000000009"
 
 
 def _config(db_path: Path) -> Config:
@@ -175,6 +177,84 @@ def _seed_agent_state(db_path: Path) -> None:
         engine.dispose()
 
 
+def _seed_step2_state(db_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO tasks (id, title, description, status, created_at) "
+                    "VALUES (:id, 'child', '', 'active', :at)"
+                ),
+                {"id": CHILD_TASK_ID, "at": AT},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO runs (id, task_id, execution_id, status, created_at) "
+                    "VALUES (:id, :task_id, :execution_id, 'queued', :at)"
+                ),
+                {
+                    "id": CHILD_RUN_ID,
+                    "task_id": CHILD_TASK_ID,
+                    "execution_id": CHILD_RUN_ID,
+                    "at": AT,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO task_agent_bindings (task_id, agent_id, created_at) "
+                    "VALUES (:task_id, :agent_id, :at)"
+                ),
+                {"task_id": CHILD_TASK_ID, "agent_id": AGENT_ID, "at": AT},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO delegation_requests ("
+                    "id, parent_run_id, parent_run_step_id, target_agent_id, objective, "
+                    "input_payload, expected_output_contract, authorization_fingerprint, status, "
+                    "child_task_id, child_run_id, created_at, started_at, completed_at, "
+                    "failure_code) VALUES (:id, :parent_id, NULL, :agent_id, 'delegate', '{}', "
+                    "'result', :fingerprint, 'dispatched', :child_task_id, :child_run_id, "
+                    ":at, :at, NULL, NULL)"
+                ),
+                {
+                    "id": DELEGATION_ID,
+                    "parent_id": RUN_ID,
+                    "agent_id": AGENT_ID,
+                    "fingerprint": "c" * 64,
+                    "child_task_id": CHILD_TASK_ID,
+                    "child_run_id": CHILD_RUN_ID,
+                    "at": AT,
+                },
+            )
+            connection.execute(
+                text(
+                    "UPDATE runs SET status = 'waiting_for_delegation', "
+                    "delegation_request_id = :delegation_id WHERE id = :run_id"
+                ),
+                {"delegation_id": DELEGATION_ID, "run_id": RUN_ID},
+            )
+    finally:
+        engine.dispose()
+
+
+def _durable_state_snapshot(db_path: Path) -> tuple[object, ...]:
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.connect() as connection:
+            revision = connection.execute(text("SELECT version_num FROM alembic_version")).all()
+            delegations = connection.execute(
+                text("SELECT * FROM delegation_requests ORDER BY id")
+            ).all()
+            runs = connection.execute(text("SELECT * FROM runs ORDER BY id")).all()
+            bindings = connection.execute(
+                text("SELECT * FROM task_agent_bindings ORDER BY task_id")
+            ).all()
+        return (revision, _schema_fingerprint(db_path), delegations, runs, bindings)
+    finally:
+        engine.dispose()
+
+
 def test_empty_phase21_downgrade_upgrade_cycle_is_compatible(tmp_path: Path) -> None:
     db_path = tmp_path / "phase21-empty.db"
     config = _config(db_path)
@@ -183,18 +263,18 @@ def test_empty_phase21_downgrade_upgrade_cycle_is_compatible(tmp_path: Path) -> 
     command.downgrade(config, "0031")
     assert _revision(db_path) == "0031"
     command.upgrade(config, "head")
-    assert _revision(db_path) == "0032"
+    assert _revision(db_path) == "0033"
 
     command.downgrade(config, "0030")
     assert _revision(db_path) == "0030"
     command.upgrade(config, "head")
-    assert _revision(db_path) == "0032"
+    assert _revision(db_path) == "0033"
 
 
 def test_0032_populated_downgrade_refuses_before_schema_mutation(tmp_path: Path) -> None:
     db_path = tmp_path / "phase21-delegation.db"
     config = _config(db_path)
-    command.upgrade(config, "head")
+    command.upgrade(config, "0032")
     _seed_delegation(db_path)
     before_revision = _revision(db_path)
     before_schema = _schema_fingerprint(db_path)
@@ -204,6 +284,81 @@ def test_0032_populated_downgrade_refuses_before_schema_mutation(tmp_path: Path)
 
     assert _revision(db_path) == before_revision == "0032"
     assert _schema_fingerprint(db_path) == before_schema
+
+
+def test_0032_requested_delegation_rows_upgrade_compatibly_to_0033(tmp_path: Path) -> None:
+    db_path = tmp_path / "phase21-compatible-upgrade.db"
+    config = _config(db_path)
+    command.upgrade(config, "0032")
+    _seed_delegation(db_path)
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.connect() as connection:
+            before = connection.execute(text("SELECT * FROM delegation_requests ORDER BY id")).all()
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "0033")
+    assert _revision(db_path) == "0033"
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.connect() as connection:
+            after = connection.execute(text("SELECT * FROM delegation_requests ORDER BY id")).all()
+        assert after == before
+    finally:
+        engine.dispose()
+
+
+def test_0033_empty_downgrade_to_0032_is_compatible(tmp_path: Path) -> None:
+    db_path = tmp_path / "phase21-empty-0033.db"
+    config = _config(db_path)
+    command.upgrade(config, "0033")
+    command.downgrade(config, "0032")
+    assert _revision(db_path) == "0032"
+
+
+def test_0033_populated_downgrade_refuses_before_any_state_or_ddl_mutation(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "phase21-populated-0033.db"
+    config = _config(db_path)
+    command.upgrade(config, "0033")
+    # Seed the parent/child/request in a valid Step-2 shape, including both
+    # ownership edges introduced by 0033.
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO tasks (id, title, description, status, created_at) "
+                    "VALUES (:id, 'parent', '', 'pending', :at)"
+                ),
+                {"id": TASK_ID, "at": AT},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO runs (id, task_id, execution_id, status, created_at) "
+                    "VALUES (:id, :task_id, :execution_id, 'queued', :at)"
+                ),
+                {"id": RUN_ID, "task_id": TASK_ID, "execution_id": RUN_ID, "at": AT},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO agents (id, key, display_name, description, status, "
+                    "active_revision_id, created_at, updated_at) VALUES "
+                    "(:id, '0033.target', 'Target', '', 'active', NULL, :at, :at)"
+                ),
+                {"id": AGENT_ID, "at": AT},
+            )
+    finally:
+        engine.dispose()
+    _seed_step2_state(db_path)
+    before = _durable_state_snapshot(db_path)
+
+    with pytest.raises(RuntimeError, match="0033 cannot downgrade"):
+        command.downgrade(config, "0032")
+
+    assert _durable_state_snapshot(db_path) == before
 
 
 def test_0031_populated_downgrade_refuses_before_schema_mutation(tmp_path: Path) -> None:

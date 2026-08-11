@@ -1032,6 +1032,7 @@ def run_to_row(run: Run) -> RunRow:
         ended_at=run.ended_at,
         failure=_failure_to_dict(run.failure),
         approval_request_id=str(run.approval_request_id) if run.approval_request_id else None,
+        delegation_request_id=str(run.delegation_request_id) if run.delegation_request_id else None,
     )
 
 
@@ -1047,6 +1048,9 @@ def run_from_row(row: RunRow) -> Run:
         _failure=_failure_from_dict(row.failure),
         _approval_request_id=ApprovalRequestId.parse(row.approval_request_id)
         if row.approval_request_id
+        else None,
+        _delegation_request_id=DelegationRequestId.parse(row.delegation_request_id)
+        if row.delegation_request_id
         else None,
     )
 

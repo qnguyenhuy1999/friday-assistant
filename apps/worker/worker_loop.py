@@ -15,6 +15,7 @@ from friday.application.run_processor import ClaimContext, ProcessingOutcome, Ru
 from friday.application.worker_coordination import (
     ApplyFailedOutcome,
     ApplySucceededOutcome,
+    ApplyWaitingForDelegationOutcome,
     ApplyWaitingOutcome,
     ClaimNextRun,
     RenewRunLease,
@@ -61,6 +62,7 @@ class WorkerLoop:
         materialize_scheduled_answers: MaterializeScheduledAnswerDeliveries | None = None,
         evaluate_due_skill_policies: EvaluateDueSkillImprovementPolicies | None = None,
         delivery_worker: OutboundDeliveryWorker | None = None,
+        apply_waiting_for_delegation: ApplyWaitingForDelegationOutcome | None = None,
     ) -> None:
         self._claim_next_run = claim_next_run
         self._renew_lease = renew_lease
@@ -68,6 +70,7 @@ class WorkerLoop:
         self._apply_failed = apply_failed
         self._apply_succeeded = apply_succeeded
         self._apply_waiting = apply_waiting
+        self._apply_waiting_for_delegation = apply_waiting_for_delegation
         self._recover_expired_leases = recover_expired_leases
         self._expire_due_approvals = expire_due_approvals
         self._materialize_due_schedules = materialize_due_schedules
@@ -218,6 +221,17 @@ class WorkerLoop:
                     claim.claim_token,
                     claim.claim_generation,
                     outcome.approval_request_id,
+                )
+            elif outcome.kind == "waiting_for_delegation":
+                assert outcome.delegation_request_id is not None
+                if self._apply_waiting_for_delegation is None:
+                    raise RuntimeError("delegation waiting outcome applier is not configured")
+                self._apply_waiting_for_delegation.execute(
+                    claim.run_id,
+                    claim.worker_id,
+                    claim.claim_token,
+                    claim.claim_generation,
+                    outcome.delegation_request_id,
                 )
             elif outcome.kind == "yielded":
                 assert outcome.available_at is not None

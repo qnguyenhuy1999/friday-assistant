@@ -8,7 +8,7 @@ from enum import StrEnum
 
 from friday.domain.errors import DomainValidationError, InvalidStateTransition
 from friday.domain.failure import Failure
-from friday.domain.identifiers import ApprovalRequestId, RunId, TaskId
+from friday.domain.identifiers import ApprovalRequestId, DelegationRequestId, RunId, TaskId
 from friday.domain.time import ensure_utc
 
 
@@ -16,6 +16,7 @@ class RunStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     WAITING_FOR_APPROVAL = "waiting_for_approval"
+    WAITING_FOR_DELEGATION = "waiting_for_delegation"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -35,6 +36,7 @@ class Run:
     _ended_at: datetime | None = field(default=None)
     _failure: Failure | None = field(default=None)
     _approval_request_id: ApprovalRequestId | None = field(default=None)
+    _delegation_request_id: DelegationRequestId | None = field(default=None)
 
     @classmethod
     def new(
@@ -85,6 +87,10 @@ class Run:
     def approval_request_id(self) -> ApprovalRequestId | None:
         return self._approval_request_id
 
+    @property
+    def delegation_request_id(self) -> DelegationRequestId | None:
+        return self._delegation_request_id
+
     def _require_status(self, *allowed: RunStatus, target: RunStatus) -> None:
         if self._status not in allowed:
             raise InvalidStateTransition("Run", self._status.value, target.value)
@@ -96,14 +102,39 @@ class Run:
 
     def wait_for_approval(self, at: datetime, approval_request_id: ApprovalRequestId) -> None:
         self._require_status(RunStatus.RUNNING, target=RunStatus.WAITING_FOR_APPROVAL)
+        if self._delegation_request_id is not None:
+            raise DomainValidationError(
+                "approval and delegation wait markers are mutually exclusive"
+            )
         ensure_utc(at)
         self._approval_request_id = approval_request_id
         self._status = RunStatus.WAITING_FOR_APPROVAL
 
+    def wait_for_delegation(self, at: datetime, delegation_request_id: DelegationRequestId) -> None:
+        self._require_status(RunStatus.RUNNING, target=RunStatus.WAITING_FOR_DELEGATION)
+        if self._approval_request_id is not None:
+            raise DomainValidationError(
+                "approval and delegation wait markers are mutually exclusive"
+            )
+        ensure_utc(at)
+        self._delegation_request_id = delegation_request_id
+        self._status = RunStatus.WAITING_FOR_DELEGATION
+
     def resume(self, at: datetime) -> None:
-        self._require_status(RunStatus.WAITING_FOR_APPROVAL, target=RunStatus.RUNNING)
+        self._require_status(
+            RunStatus.WAITING_FOR_APPROVAL,
+            RunStatus.WAITING_FOR_DELEGATION,
+            target=RunStatus.RUNNING,
+        )
         ensure_utc(at)
         self._approval_request_id = None
+        self._delegation_request_id = None
+        self._status = RunStatus.RUNNING
+
+    def resume_from_delegation(self, at: datetime) -> None:
+        self._require_status(RunStatus.WAITING_FOR_DELEGATION, target=RunStatus.RUNNING)
+        ensure_utc(at)
+        self._delegation_request_id = None
         self._status = RunStatus.RUNNING
 
     def succeed(self, at: datetime) -> None:
@@ -122,10 +153,12 @@ class Run:
             RunStatus.QUEUED,
             RunStatus.RUNNING,
             RunStatus.WAITING_FOR_APPROVAL,
+            RunStatus.WAITING_FOR_DELEGATION,
             target=RunStatus.CANCELLED,
         )
         self._ended_at = self._validated_end(at)
         self._approval_request_id = None
+        self._delegation_request_id = None
         self._status = RunStatus.CANCELLED
 
     def _validated_end(self, at: datetime) -> datetime:

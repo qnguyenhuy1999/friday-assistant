@@ -9,7 +9,7 @@ import pytest
 
 from friday.domain.errors import DomainValidationError, InvalidStateTransition
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import ApprovalRequestId, RunId, TaskId
+from friday.domain.identifiers import ApprovalRequestId, DelegationRequestId, RunId, TaskId
 from friday.domain.run import TERMINAL_RUN_STATUSES, Run, RunStatus
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -37,6 +37,9 @@ def _run_in(status: RunStatus) -> Run:
     if status is RunStatus.WAITING_FOR_APPROVAL:
         run.wait_for_approval(T0, ApprovalRequestId.new())
         return run
+    if status is RunStatus.WAITING_FOR_DELEGATION:
+        run.wait_for_delegation(T0, DelegationRequestId.new())
+        return run
     if status is RunStatus.SUCCEEDED:
         run.succeed(T1)
     elif status is RunStatus.FAILED:
@@ -49,7 +52,7 @@ def _run_in(status: RunStatus) -> Run:
 def test_start_from_queued_succeeds() -> None:
     run = _run_in(RunStatus.QUEUED)
     run.start(T1)
-    assert run.status is RunStatus.RUNNING
+    assert run.status.value == RunStatus.RUNNING.value
     assert run.started_at == T1
 
 
@@ -75,7 +78,25 @@ def test_resume_from_waiting_for_approval_clears_approval_id() -> None:
     assert run.approval_request_id is None
 
 
-@pytest.mark.parametrize("status", [s for s in ALL_STATUSES if s != RunStatus.WAITING_FOR_APPROVAL])
+def test_wait_and_resume_from_delegation_clears_delegation_id() -> None:
+    run = _run_in(RunStatus.RUNNING)
+    delegation_id = DelegationRequestId.new()
+    run.wait_for_delegation(T1, delegation_id)
+    assert run.status is RunStatus.WAITING_FOR_DELEGATION
+    assert run.delegation_request_id == delegation_id
+    run.resume_from_delegation(T1)
+    assert run.status.value == RunStatus.RUNNING.value
+    assert run.delegation_request_id is None
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        s
+        for s in ALL_STATUSES
+        if s not in {RunStatus.WAITING_FOR_APPROVAL, RunStatus.WAITING_FOR_DELEGATION}
+    ],
+)
 def test_resume_from_non_waiting_is_rejected(status: RunStatus) -> None:
     run = _run_in(status)
     with pytest.raises(InvalidStateTransition):
@@ -102,13 +123,20 @@ def test_fail_end_before_start_is_rejected() -> None:
 
 
 @pytest.mark.parametrize(
-    "status", [RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_FOR_APPROVAL]
+    "status",
+    [
+        RunStatus.QUEUED,
+        RunStatus.RUNNING,
+        RunStatus.WAITING_FOR_APPROVAL,
+        RunStatus.WAITING_FOR_DELEGATION,
+    ],
 )
 def test_cancel_from_non_terminal_status_succeeds(status: RunStatus) -> None:
     run = _run_in(status)
     run.cancel(T1)
     assert run.status is RunStatus.CANCELLED
     assert run.approval_request_id is None
+    assert run.delegation_request_id is None
 
 
 @pytest.mark.parametrize("status", sorted(TERMINAL_RUN_STATUSES, key=str))

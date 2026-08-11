@@ -33,6 +33,7 @@ Failure policy (stable codes, bounded messages):
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 import uuid
 from collections.abc import Callable
@@ -46,6 +47,7 @@ from friday.application.brain_runtime_registry import BrainRuntimeRegistry
 from friday.application.claim_aware_tool_execution import ExecuteToolAction
 from friday.application.commands import RequestApprovalCommand
 from friday.application.conversation_context import ConversationContextAssembler
+from friday.application.delegation import DispatchDelegation
 from friday.application.errors import (
     AgentIntegrityFailed,
     ApplicationError,
@@ -54,10 +56,12 @@ from friday.application.errors import (
     BrainTimeout,
     BrainUnavailable,
     ClaimLost,
+    InvalidBrainRuntimeConfig,
     SkillIntegrityFailed,
     ToolExecutionAmbiguous,
     ToolInputInvalid,
     ToolNotFound,
+    UnknownBrainRuntimeKind,
 )
 from friday.application.lifecycle_events import LifecycleEvents
 from friday.application.memory.models import (
@@ -79,6 +83,7 @@ from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.run_processor import ClaimContext, ProcessingOutcome
 from friday.application.runtime_actions import (
     BrainAction,
+    DelegateAction,
     FailAction,
     FinishAction,
     InvokeToolAction,
@@ -86,6 +91,10 @@ from friday.application.runtime_actions import (
 )
 from friday.application.runtime_context import (
     MIN_CONTEXT_CHARS,
+    AgentContextTooLarge,
+    DelegatedContextTooLarge,
+    DelegationTarget,
+    DelegationView,
     RunSnapshot,
     SkillContextTooLarge,
     build_runtime_context,
@@ -97,9 +106,10 @@ from friday.application.tool_authorization import (
 )
 from friday.application.tool_gateway import ToolCall, ToolGateway, ToolRiskAssessment
 from friday.application.worker_coordination import VerifyRunClaim
+from friday.domain.errors import DomainValidationError
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import RunStepId
+from friday.domain.identifiers import RunId, RunStepId
 from friday.domain.json_value import JsonValue
 from friday.domain.run import RunStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
@@ -119,6 +129,9 @@ class RuntimeLimits:
     max_yield_seconds: int
     max_processing_seconds: float = 600.0
     max_skill_context_chars: int = 24_000
+    max_agent_context_chars: int = 24_000
+    max_delegations_per_run: int = 4
+    max_delegation_targets: int = 32
 
     def __post_init__(self) -> None:
         if self.max_turns_per_claim < 1:
@@ -135,6 +148,14 @@ class RuntimeLimits:
             raise ValueError("max_processing_seconds must be positive")
         if not 0 < self.max_skill_context_chars < self.max_context_chars:
             raise ValueError("max_skill_context_chars must be positive and below max_context_chars")
+        if not 0 < self.max_agent_context_chars <= self.max_context_chars:
+            raise ValueError(
+                "max_agent_context_chars must be positive and at most max_context_chars"
+            )
+        if self.max_delegations_per_run < 1:
+            raise ValueError("max_delegations_per_run must be positive")
+        if self.max_delegation_targets < 1:
+            raise ValueError("max_delegation_targets must be positive")
 
 
 class AgentRunProcessor:
@@ -152,6 +173,7 @@ class AgentRunProcessor:
         request_tool_approval: RequestToolApproval,
         execute_tool_action: ExecuteToolAction,
         limits: RuntimeLimits,
+        dispatch_delegation: DispatchDelegation | None = None,
         memory_retriever: MemoryRetrieverPort | None = None,
         memory_query_builder: MemoryQueryBuilder | None = None,
         conversation_context: ConversationContextAssembler | None = None,
@@ -165,6 +187,12 @@ class AgentRunProcessor:
         self._verify_claim = verify_claim
         self._request_tool_approval = request_tool_approval
         self._execute_tool_action = execute_tool_action
+        self._dispatch_delegation = dispatch_delegation or DispatchDelegation(
+            uow_factory,
+            clock,
+            runtime_registry,
+            max_delegations_per_run=limits.max_delegations_per_run,
+        )
         self._limits = limits
         self._memory_retriever = memory_retriever
         self._memory_query_builder = memory_query_builder or MemoryQueryBuilder()
@@ -247,6 +275,12 @@ class AgentRunProcessor:
                     "skill integrity verification failed",
                     retryable=False,
                 )
+            except AgentIntegrityFailed:
+                return self._failed(
+                    "agent_integrity_failed",
+                    "agent integrity verification failed",
+                    retryable=False,
+                )
             if snapshot is None:
                 return self._yield_now()
             conversation = (
@@ -277,6 +311,7 @@ class AgentRunProcessor:
                     turn_number=turn,
                     max_chars=self._limits.max_context_chars,
                     max_skill_context_chars=self._limits.max_skill_context_chars,
+                    max_agent_context_chars=self._limits.max_agent_context_chars,
                     memory_context=memory,
                     conversation_context=conversation,
                 )
@@ -284,6 +319,18 @@ class AgentRunProcessor:
                 return self._failed(
                     "skill_context_too_large",
                     "frozen skill context exceeds budget",
+                    retryable=False,
+                )
+            except AgentContextTooLarge:
+                return self._failed(
+                    "agent_context_too_large",
+                    "frozen Agent context exceeds budget",
+                    retryable=False,
+                )
+            except DelegatedContextTooLarge:
+                return self._failed(
+                    "delegated_context_too_large",
+                    "delegated input exceeds the runtime context budget",
                     retryable=False,
                 )
             remaining = deadline - self._monotonic()
@@ -373,6 +420,44 @@ class AgentRunProcessor:
             delay = min(action.delay_seconds or 0, self._limits.max_yield_seconds)
             available_at = self._clock.now() + timedelta(seconds=delay)
             return ProcessingOutcome.yielded(available_at), None, False, False
+
+        if isinstance(action, DelegateAction):
+            try:
+                request = self._dispatch_delegation.execute(
+                    parent_run_id=context.run_id,
+                    worker_id=context.worker_id,
+                    claim_token=context.claim_token,
+                    claim_generation=context.claim_generation,
+                    target_agent_key=action.target_agent_key,
+                    objective=action.objective,
+                    input_payload=action.input_payload,
+                    expected_output_contract=action.expected_output_contract,
+                )
+            except ClaimLost:
+                return self._yield_now(), None, False, False
+            except ApplicationError as exc:
+                message = str(exc)
+                code = (
+                    message
+                    if message
+                    in {
+                        "delegation_budget_exhausted",
+                        "nested_delegation_not_supported",
+                    }
+                    else "delegation_dispatch_failed"
+                )
+                return (
+                    self._failed(code, message, retryable=False),
+                    None,
+                    False,
+                    False,
+                )
+            return (
+                ProcessingOutcome.waiting_for_delegation(request.id),
+                f"delegated to {action.target_agent_key}",
+                False,
+                False,
+            )
 
         return self._dispatch_tool(context, action, deadline)
 
@@ -500,6 +585,100 @@ class AgentRunProcessor:
                 ):
                     raise SkillIntegrityFailed()
                 skills.append((binding, skill, revision))
+            agent = None
+            resolution = uow.run_agent_resolutions.get(context.run_id)
+            if resolution is not None:
+                identity = uow.agents.get(resolution.agent_id)
+                try:
+                    agent_revision = uow.agent_revisions.get(resolution.revision_id)
+                except DomainValidationError as exc:
+                    raise AgentIntegrityFailed() from exc
+                if (
+                    identity is None
+                    or agent_revision is None
+                    or resolution.agent_id != identity.id
+                    or resolution.revision_id != agent_revision.id
+                    or agent_revision.agent_id != identity.id
+                ):
+                    raise AgentIntegrityFailed()
+                expected_sha = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "instructions": agent_revision.instructions,
+                            "runtime_kind": agent_revision.runtime_kind,
+                            "runtime_config": agent_revision.runtime_config,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                if agent_revision.content_sha256 != expected_sha:
+                    raise AgentIntegrityFailed()
+                try:
+                    self._runtime_registry.validate_runtime_config(
+                        agent_revision.runtime_kind, agent_revision.runtime_config
+                    )
+                except (UnknownBrainRuntimeKind, InvalidBrainRuntimeConfig) as exc:
+                    raise AgentIntegrityFailed() from exc
+                agent = (resolution, identity, agent_revision)
+
+            targets: list[DelegationTarget] = []
+            if agent is not None:
+                for identity in sorted(
+                    uow.agents.list(100_000), key=lambda value: (value.key, str(value.id))
+                ):
+                    if (
+                        identity.status.value != "active"
+                        or identity.active_revision_id is None
+                        or len(targets) >= self._limits.max_delegation_targets
+                    ):
+                        continue
+                    try:
+                        target_revision = uow.agent_revisions.get(identity.active_revision_id)
+                    except DomainValidationError as exc:
+                        raise AgentIntegrityFailed() from exc
+                    if target_revision is None or target_revision.agent_id != identity.id:
+                        continue
+                    targets.append(
+                        DelegationTarget(identity.key, identity.display_name, identity.description)
+                    )
+
+            delegation_views: list[DelegationView] = []
+            for request in uow.delegation_requests.list_for_run(context.run_id):
+                target = uow.agents.get(request.target_agent_id)
+                target_key = target.key if target is not None else str(request.target_agent_id)
+                child_execution_id = None
+                summary = None
+                details: JsonValue = None
+                if request.child_run_id is not None:
+                    child = uow.runs.get(request.child_run_id)
+                    if child is not None:
+                        child_execution_id = str(child.execution_id)
+                        if request.status.value == "succeeded":
+                            successful = [
+                                candidate
+                                for candidate in uow.runs.list_for_execution(child.execution_id)
+                                if candidate.status is RunStatus.SUCCEEDED
+                            ]
+                            for candidate in reversed(successful):
+                                finished = uow.events.latest_of_type_for_run(
+                                    candidate.id, RunEventType.AGENT_FINISHED
+                                )
+                                if finished is not None and isinstance(finished.payload, dict):
+                                    raw_summary = finished.payload.get("summary")
+                                    summary = raw_summary if isinstance(raw_summary, str) else None
+                                    details = finished.payload.get("details")
+                                    break
+                delegation_views.append(
+                    DelegationView(
+                        request=request,
+                        target_key=target_key,
+                        child_execution_id=child_execution_id,
+                        summary=summary,
+                        details=details,
+                    )
+                )
+            incoming = uow.delegation_requests.get_for_child_execution(run.execution_id)
             return RunSnapshot(
                 task=task,
                 run=run,
@@ -512,6 +691,10 @@ class AgentRunProcessor:
                 events=tuple(events),
                 previous_turns=turn_notes,
                 skills=tuple(skills),
+                agent=agent,
+                delegation_targets=tuple(targets),
+                delegations=tuple(delegation_views),
+                incoming_delegation=incoming,
             )
 
     def _retrieve_memory(
@@ -590,7 +773,7 @@ class AgentRunProcessor:
                 )
             uow.commit()
 
-    def _finish_blocker(self, run_id: object, snapshot: RunSnapshot | None = None) -> str | None:
+    def _finish_blocker(self, run_id: RunId, snapshot: RunSnapshot | None = None) -> str | None:
         with self._uow_factory() as uow:
             has_steps = getattr(uow.steps, "has_non_terminal_for_run", None)
             if (has_steps is not None and has_steps(run_id)) or (
@@ -627,6 +810,8 @@ class AgentRunProcessor:
                 and any(approval.status.value == "pending" for approval in snapshot.approvals)
             ):
                 return "one or more approvals are pending"
+            if uow.delegation_requests.has_dispatched_for_run(run_id):
+                return "one or more delegations are active"
         return None
 
     def _yield_now(self) -> ProcessingOutcome:

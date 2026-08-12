@@ -10,7 +10,7 @@ from typing import Protocol
 from apps.worker.operational_logging import lifecycle_log
 from friday.application.errors import ClaimLost
 from friday.application.materialize_due_schedule import MaterializeDueSchedules
-from friday.application.ports import Clock
+from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.run_processor import ClaimContext, ProcessingOutcome, RunProcessor
 from friday.application.worker_coordination import (
     ApplyFailedOutcome,
@@ -27,7 +27,13 @@ from friday.application.worker_maintenance import (
     MaterializeScheduledAnswerDeliveries,
     RecoverExpiredLeases,
 )
+from friday.application.workflow_execution_use_cases import (
+    ReconcileWorkflowExecution,
+    StartWorkflowExecution,
+)
 from friday.domain.failure import Failure, FailureCause
+from friday.domain.identifiers import RunId, TaskId
+from friday.domain.workflow_execution import TaskWorkflowBinding
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +69,9 @@ class WorkerLoop:
         evaluate_due_skill_policies: EvaluateDueSkillImprovementPolicies | None = None,
         delivery_worker: OutboundDeliveryWorker | None = None,
         apply_waiting_for_delegation: ApplyWaitingForDelegationOutcome | None = None,
+        workflow_starter: StartWorkflowExecution | None = None,
+        workflow_reconciler: ReconcileWorkflowExecution | None = None,
+        uow_factory: UnitOfWorkFactory | None = None,
     ) -> None:
         self._claim_next_run = claim_next_run
         self._renew_lease = renew_lease
@@ -71,6 +80,9 @@ class WorkerLoop:
         self._apply_succeeded = apply_succeeded
         self._apply_waiting = apply_waiting
         self._apply_waiting_for_delegation = apply_waiting_for_delegation
+        self._workflow_starter = workflow_starter
+        self._workflow_reconciler = workflow_reconciler
+        self._uow_factory = uow_factory
         self._recover_expired_leases = recover_expired_leases
         self._expire_due_approvals = expire_due_approvals
         self._materialize_due_schedules = materialize_due_schedules
@@ -104,6 +116,63 @@ class WorkerLoop:
             "claim_generation": claim.claim_generation,
         }
         lifecycle_log(logger, logging.INFO, "worker.claimed_run", **fields)
+
+        workflow_binding = self._workflow_binding_for_task(claim.task_id)
+        if workflow_binding is not None:
+            if self._workflow_starter is None:
+                lifecycle_log(
+                    logger, logging.ERROR, "worker.workflow_bootstrap_not_configured", **fields
+                )
+                try:
+                    self._apply_failed.execute(
+                        claim.run_id,
+                        claim.worker_id,
+                        claim.claim_token,
+                        claim.claim_generation,
+                        Failure(
+                            code="workflow_bootstrap_not_configured",
+                            message="Workflow execution is not configured for this worker.",
+                            retryable=False,
+                            cause=FailureCause.RUNTIME,
+                        ),
+                    )
+                except ClaimLost:
+                    lifecycle_log(
+                        logger, logging.INFO, "worker.workflow_bootstrap_failure_fenced", **fields
+                    )
+                return True
+            try:
+                self._workflow_starter.execute(
+                    claim.run_id,
+                    workflow_binding.workflow_id,
+                    claim.worker_id,
+                    claim.claim_token,
+                    claim.claim_generation,
+                )
+            except ClaimLost:
+                lifecycle_log(logger, logging.INFO, "worker.workflow_bootstrap_fenced", **fields)
+            except Exception:  # noqa: BLE001 - fail closed without invoking a brain
+                lifecycle_log(logger, logging.ERROR, "worker.workflow_bootstrap_failed", **fields)
+                try:
+                    self._apply_failed.execute(
+                        claim.run_id,
+                        claim.worker_id,
+                        claim.claim_token,
+                        claim.claim_generation,
+                        Failure(
+                            code="workflow_bootstrap_failed",
+                            message="Workflow execution could not be bootstrapped safely.",
+                            retryable=False,
+                            cause=FailureCause.RUNTIME,
+                        ),
+                    )
+                except ClaimLost:
+                    lifecycle_log(
+                        logger, logging.INFO, "worker.workflow_bootstrap_failure_fenced", **fields
+                    )
+            else:
+                lifecycle_log(logger, logging.INFO, "worker.workflow_bootstrapped", **fields)
+            return True
 
         lease_lost = threading.Event()
         stop_heartbeat = threading.Event()
@@ -192,6 +261,8 @@ class WorkerLoop:
                 )
             except ClaimLost:
                 lifecycle_log(logger, logging.INFO, "worker.failure_outcome_fenced", **fields)
+            else:
+                self._reconcile_workflow_child(claim.run_id)
             return True
 
         assert outcome is not None
@@ -204,6 +275,7 @@ class WorkerLoop:
                     claim.claim_generation,
                     outcome.final_response,
                 )
+                self._reconcile_workflow_child(claim.run_id)
             elif outcome.kind == "failed":
                 assert outcome.failure is not None
                 self._apply_failed.execute(
@@ -213,6 +285,7 @@ class WorkerLoop:
                     claim.claim_generation,
                     outcome.failure,
                 )
+                self._reconcile_workflow_child(claim.run_id)
             elif outcome.kind == "waiting_for_approval":
                 assert outcome.approval_request_id is not None
                 self._apply_waiting.execute(
@@ -261,6 +334,33 @@ class WorkerLoop:
         else:
             lifecycle_log(logger, logging.INFO, f"worker.outcome_{outcome.kind}", **fields)
         return True
+
+    def _workflow_binding_for_task(self, task_id: TaskId) -> TaskWorkflowBinding | None:
+        if self._uow_factory is None:
+            return None
+        with self._uow_factory() as uow:
+            binding = uow.task_workflow_bindings.get_by_task_id(task_id)
+            uow.commit()
+            return binding
+
+    def _reconcile_workflow_child(self, run_id: RunId) -> None:
+        if self._uow_factory is None or self._workflow_reconciler is None:
+            return
+        try:
+            with self._uow_factory() as uow:
+                run = uow.runs.get(run_id)
+                node = None
+                if run is not None:
+                    get_by_child_execution_id = getattr(
+                        uow.workflow_node_executions, "get_by_child_execution_id", None
+                    )
+                    if callable(get_by_child_execution_id):
+                        node = get_by_child_execution_id(run.execution_id)
+                uow.commit()
+            if node is not None:
+                self._workflow_reconciler.execute(node.workflow_execution_id)
+        except Exception:  # noqa: BLE001 - outcome durability must stand alone
+            lifecycle_log(logger, logging.ERROR, "worker.workflow_reconciliation_failed")
 
     def run_maintenance_tick(self) -> None:
         try:

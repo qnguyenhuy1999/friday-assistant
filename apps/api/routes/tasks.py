@@ -18,9 +18,11 @@ from apps.api.schemas.skills import ReplaceTaskSkillsBody, TaskSkillBindingRespo
 from apps.api.schemas.tasks import (
     CreateTaskBody,
     FailureBody,
+    PutTaskWorkflowBody,
     StartRunResponse,
     TaskPageResponse,
     TaskResponse,
+    TaskWorkflowBindingResponse,
 )
 from friday.application.agent_registry import ReplaceTaskAgent
 from friday.application.commands import (
@@ -37,10 +39,12 @@ from friday.application.results import TaskResult
 from friday.application.skill_registry import ReplaceTaskSkills
 from friday.application.start_run import StartRun
 from friday.application.task_lifecycle import CancelTask, CompleteTask, FailTask, GetTask, ListTasks
+from friday.application.workflow_execution_use_cases import BindTaskWorkflow, UnbindTaskWorkflow
 from friday.domain.agent import TaskAgentBinding
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import AgentId, SkillId, TaskId
+from friday.domain.identifiers import AgentId, SkillId, TaskId, WorkflowId
 from friday.domain.skill import TaskSkillBinding
+from friday.domain.workflow_execution import TaskWorkflowBinding
 
 router = APIRouter(prefix="/v1/tasks", tags=["tasks"])
 UowDependency = Annotated[UnitOfWorkFactory, Depends(get_uow_factory)]
@@ -127,6 +131,58 @@ def put_task_agent(
         agent_id=AgentId.parse(body.agent_id) if body.agent_id else None,
     )
     return _agent_binding_response(binding) if binding is not None else None
+
+
+def _workflow_binding_response(binding: TaskWorkflowBinding) -> TaskWorkflowBindingResponse:
+    return TaskWorkflowBindingResponse(
+        task_id=str(binding.task_id),
+        workflow_id=str(binding.workflow_id),
+        created_at=binding.created_at,
+        updated_at=binding.updated_at,
+    )
+
+
+@router.get(
+    "/{task_id}/workflow",
+    response_model=TaskWorkflowBindingResponse | None,
+    operation_id="getTaskWorkflow",
+)
+def get_task_workflow(
+    task_id: UUID, uow_factory: UowDependency
+) -> TaskWorkflowBindingResponse | None:
+    with uow_factory() as uow:
+        typed_task_id = TaskId.parse(str(task_id))
+        if uow.tasks.get(typed_task_id) is None:
+            raise TaskNotFound(typed_task_id)
+        binding = uow.task_workflow_bindings.get_by_task_id(typed_task_id)
+        return _workflow_binding_response(binding) if binding is not None else None
+
+
+@router.put(
+    "/{task_id}/workflow",
+    response_model=TaskWorkflowBindingResponse,
+    operation_id="putTaskWorkflow",
+)
+def put_task_workflow(
+    task_id: UUID,
+    body: PutTaskWorkflowBody,
+    uow_factory: UowDependency,
+    clock: ClockDependency,
+) -> TaskWorkflowBindingResponse:
+    binding = BindTaskWorkflow(uow_factory, clock).execute(
+        task_id=TaskId.parse(str(task_id)),
+        workflow_id=WorkflowId.parse(body.workflow_id),
+    )
+    return _workflow_binding_response(binding)
+
+
+@router.delete(
+    "/{task_id}/workflow",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="deleteTaskWorkflow",
+)
+def delete_task_workflow(task_id: UUID, uow_factory: UowDependency) -> None:
+    UnbindTaskWorkflow(uow_factory).execute(task_id=TaskId.parse(str(task_id)))
 
 
 def _task_response(result: TaskResult) -> TaskResponse:

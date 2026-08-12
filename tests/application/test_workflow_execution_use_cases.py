@@ -1,0 +1,400 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from friday.application.agent_registry import ReplaceTaskAgent
+from friday.application.brain_runtime_registry import BrainRuntimeRegistry
+from friday.application.errors import WorkflowBindingError, WorkflowExecutionError
+from friday.application.workflow_execution_use_cases import (
+    BindTaskWorkflow,
+    ReconcileWorkflowExecution,
+    ResolveRunWorkflow,
+    StartWorkflowExecution,
+)
+from friday.domain import (
+    Agent,
+    AgentId,
+    AgentRevision,
+    AgentRevisionId,
+    AgentRevisionSourceKind,
+    Run,
+    RunId,
+    RunStatus,
+    Task,
+    TaskAgentBinding,
+    TaskId,
+    Workflow,
+    WorkflowEdge,
+    WorkflowEdgeId,
+    WorkflowExecution,
+    WorkflowExecutionStatus,
+    WorkflowId,
+    WorkflowNode,
+    WorkflowNodeExecutionStatus,
+    WorkflowNodeId,
+    WorkflowRevision,
+    WorkflowRevisionId,
+    WorkflowRevisionSourceKind,
+)
+from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
+
+T0 = datetime(2026, 1, 1, tzinfo=UTC)
+T1 = T0 + timedelta(minutes=1)
+WORKER = "workflow-worker"
+TOKEN = "workflow-token"
+
+
+def _runtime_registry() -> BrainRuntimeRegistry:
+    registry = BrainRuntimeRegistry()
+    registry.register("claude_cli", lambda: None)  # type: ignore[arg-type,return-value]
+    return registry
+
+
+def _agent(uow: FakeUnitOfWork, *, key: str, activate: bool = True) -> Agent:
+    agent = Agent.new(id=AgentId.new(), key=key, display_name=key, description="", created_at=T0)
+    uow.agents.add(agent)
+    if activate:
+        revision = AgentRevision.new(
+            id=AgentRevisionId.new(),
+            agent_id=agent.id,
+            version=1,
+            instructions=f"instructions for {key}",
+            runtime_kind="claude_cli",
+            runtime_config={},
+            source_kind=AgentRevisionSourceKind.OPERATOR,
+            created_at=T0,
+        )
+        uow.agent_revisions.add(revision)
+        agent.activate(revision, T0)
+        uow.agents.save(agent)
+    return agent
+
+
+def _workflow(
+    uow: FakeUnitOfWork,
+    agents: list[Agent],
+    edges: list[tuple[int, int]],
+) -> tuple[Workflow, WorkflowRevision, list[WorkflowNode]]:
+    workflow = Workflow.new(
+        id=WorkflowId.new(),
+        key=f"workflow.{str(WorkflowId.new())[:8]}",
+        display_name="Workflow",
+        description="",
+        created_at=T0,
+    )
+    uow.workflows.add(workflow)
+    revision_id = WorkflowRevisionId.new()
+    nodes = [
+        WorkflowNode(
+            id=WorkflowNodeId.new(),
+            revision_id=revision_id,
+            node_key=f"node-{index}",
+            target_agent_id=agents[index % len(agents)].id,
+            objective=f"objective-{index}",
+            input_payload={"index": index},
+            expected_output_contract="result",
+            created_at=T0,
+        )
+        for index in range(max(len(agents), max((max(edge) for edge in edges), default=-1) + 1))
+    ]
+    workflow_edges = [
+        WorkflowEdge(
+            id=WorkflowEdgeId.new(),
+            revision_id=revision_id,
+            from_node_id=nodes[source].id,
+            to_node_id=nodes[target].id,
+            created_at=T0,
+        )
+        for source, target in edges
+    ]
+    revision = WorkflowRevision.new(
+        id=revision_id,
+        workflow_id=workflow.id,
+        version=1,
+        nodes=nodes,
+        edges=workflow_edges,
+        source_kind=WorkflowRevisionSourceKind.OPERATOR,
+        created_at=T0,
+    )
+    uow.workflow_revisions.add(revision)
+    workflow.activate(revision, T0)
+    uow.workflows.save(workflow)
+    return workflow, revision, nodes
+
+
+def _root(
+    uow: FakeUnitOfWork,
+    factory: CountingUnitOfWorkFactory,
+    workflow: Workflow,
+    *,
+    direct_agent: Agent | None = None,
+) -> tuple[Task, Run, int]:
+    task = Task.new(id=TaskId.new(), title="root", description="root", created_at=T0)
+    task.start(T0)
+    uow.tasks.add(task)
+    if direct_agent is not None:
+        uow.task_agent_bindings.replace(task.id, TaskAgentBinding(task.id, direct_agent.id, T0))
+    run = Run.new(id=RunId.new(), task_id=task.id, created_at=T0)
+    run.start(T0)
+    uow.runs.add(run)
+    uow.work_queue.enqueue(run.id, T0, T0)
+    assert uow.work_queue.try_claim(run.id, WORKER, TOKEN, T0, T0 + timedelta(hours=1))
+    if direct_agent is None:
+        BindTaskWorkflow(factory, FakeClock(T0)).execute(task_id=task.id, workflow_id=workflow.id)
+    item = uow.work_queue.get(run.id)
+    assert item is not None
+    return task, run, item.claim_generation
+
+
+def _bootstrap(
+    *,
+    edges: list[tuple[int, int]],
+    agent_count: int = 1,
+    activate_all: bool = True,
+) -> tuple[
+    FakeUnitOfWork,
+    CountingUnitOfWorkFactory,
+    FakeClock,
+    Workflow,
+    WorkflowRevision,
+    list[WorkflowNode],
+    Task,
+    Run,
+    WorkflowExecution,
+]:
+    uow = FakeUnitOfWork()
+    clock = FakeClock(T0)
+    factory = CountingUnitOfWorkFactory(uow)
+    agents = [
+        _agent(uow, key=f"agent-{index}", activate=activate_all or index == 0)
+        for index in range(agent_count)
+    ]
+    workflow, revision, nodes = _workflow(uow, agents, edges)
+    task, run, generation = _root(uow, factory, workflow)
+    execution = StartWorkflowExecution(factory, clock, _runtime_registry()).execute(
+        run.id, workflow.id, WORKER, TOKEN, generation
+    )
+    return uow, factory, clock, workflow, revision, nodes, task, run, execution
+
+
+def _complete_child(uow: FakeUnitOfWork, child_run_id: RunId) -> None:
+    child = uow.runs.get(child_run_id)
+    assert child is not None
+    child.start(T0)
+    child.succeed(T1)
+    uow.runs.save(child)
+
+
+def test_binding_rejects_direct_agent_and_archived_workflows() -> None:
+    uow = FakeUnitOfWork()
+    factory = CountingUnitOfWorkFactory(uow)
+    clock = FakeClock(T0)
+    agent = _agent(uow, key="direct")
+    workflow, _, _ = _workflow(uow, [agent], [])
+    task = Task.new(id=TaskId.new(), title="task", description="", created_at=T0)
+    uow.tasks.add(task)
+    uow.task_agent_bindings.replace(task.id, TaskAgentBinding(task.id, agent.id, T0))
+
+    with pytest.raises(WorkflowBindingError):
+        BindTaskWorkflow(factory, clock).execute(task_id=task.id, workflow_id=workflow.id)
+
+    uow.task_agent_bindings.replace(task.id, None)
+    workflow.archive(T1)
+    with pytest.raises(WorkflowBindingError):
+        BindTaskWorkflow(factory, clock).execute(task_id=task.id, workflow_id=workflow.id)
+
+
+def test_replace_task_agent_rejects_workflow_owned_task() -> None:
+    uow = FakeUnitOfWork()
+    factory = CountingUnitOfWorkFactory(uow)
+    clock = FakeClock(T0)
+    first = _agent(uow, key="first")
+    second = _agent(uow, key="second")
+    workflow, _, _ = _workflow(uow, [first], [])
+    task = Task.new(id=TaskId.new(), title="task", description="", created_at=T0)
+    uow.tasks.add(task)
+    BindTaskWorkflow(factory, clock).execute(task_id=task.id, workflow_id=workflow.id)
+
+    with pytest.raises(WorkflowBindingError):
+        ReplaceTaskAgent(factory, clock).execute(task_id=task.id, agent_id=second.id)
+
+
+def test_run_workflow_resolution_is_immutable_after_revision_change() -> None:
+    uow = FakeUnitOfWork()
+    factory = CountingUnitOfWorkFactory(uow)
+    clock = FakeClock(T0)
+    agent = _agent(uow, key="resolver")
+    workflow, revision, nodes = _workflow(uow, [agent], [])
+    _, run, generation = _root(uow, factory, workflow)
+    resolver = ResolveRunWorkflow(factory, clock)
+    first = resolver.execute(run.id, workflow.id, WORKER, TOKEN, generation)
+
+    second_revision_id = WorkflowRevisionId.new()
+    second_node = WorkflowNode(
+        id=WorkflowNodeId.new(),
+        revision_id=second_revision_id,
+        node_key="replacement",
+        target_agent_id=agent.id,
+        objective="replacement",
+        input_payload={},
+        expected_output_contract="result",
+        created_at=T1,
+    )
+    second_revision = WorkflowRevision.new(
+        id=second_revision_id,
+        workflow_id=workflow.id,
+        version=2,
+        nodes=[second_node],
+        edges=[],
+        source_kind=WorkflowRevisionSourceKind.OPERATOR,
+        created_at=T1,
+    )
+    uow.workflow_revisions.add(second_revision)
+    workflow.activate(second_revision, T1)
+    uow.workflows.save(workflow)
+
+    again = resolver.execute(run.id, workflow.id, WORKER, TOKEN, generation)
+    assert again == first
+    assert again.workflow_revision_id == revision.id
+    assert nodes[0].node_key != second_node.node_key
+
+
+def test_start_freezes_exact_agent_revisions_and_dispatches_only_roots() -> None:
+    uow, factory, clock, workflow, revision, _, task, run, execution = _bootstrap(
+        edges=[(0, 1)], agent_count=1
+    )
+    node_executions = uow.workflow_node_executions.list_by_execution(execution.id)
+    assert run.status is RunStatus.WAITING_FOR_WORKFLOW
+    assert run.workflow_execution_id == execution.id
+    assert execution.workflow_revision_id == revision.id
+    assert len(node_executions) == 2
+    assert [node.status for node in node_executions] == [
+        WorkflowNodeExecutionStatus.DISPATCHED,
+        WorkflowNodeExecutionStatus.PENDING,
+    ]
+    assert len(uow.task_repo.items) == 2
+    assert len(uow.run_repo.items) == 2
+    assert uow.work_queue.get(run.id) is None
+    assert task.id in uow.task_repo.items
+
+    old_revision_ids = {node.target_agent_revision_id for node in node_executions}
+    agent = next(iter(uow.agent_repo.items.values()))
+    replacement = AgentRevision.new(
+        id=AgentRevisionId.new(),
+        agent_id=agent.id,
+        version=2,
+        instructions="replacement",
+        runtime_kind="claude_cli",
+        runtime_config={},
+        source_kind=AgentRevisionSourceKind.OPERATOR,
+        created_at=T1,
+    )
+    uow.agent_revisions.add(replacement)
+    agent.activate(replacement, T1)
+    uow.agents.save(agent)
+    assert old_revision_ids == {node.target_agent_revision_id for node in node_executions}
+    assert clock.now() == T0
+
+
+def test_start_fails_before_any_execution_state_when_agent_snapshot_is_invalid() -> None:
+    uow = FakeUnitOfWork()
+    factory = CountingUnitOfWorkFactory(uow)
+    clock = FakeClock(T0)
+    valid = _agent(uow, key="valid")
+    invalid = _agent(uow, key="invalid", activate=False)
+    workflow, _, _ = _workflow(uow, [valid, invalid], [(0, 1)])
+    task, run, generation = _root(uow, factory, workflow)
+
+    with pytest.raises(WorkflowExecutionError):
+        StartWorkflowExecution(factory, clock, _runtime_registry()).execute(
+            run.id, workflow.id, WORKER, TOKEN, generation
+        )
+
+    assert not uow.workflow_executions.items
+    assert not uow.workflow_node_executions.items
+    assert not uow.run_workflow_resolutions.items
+    assert len(uow.task_repo.items) == 1
+    assert len(uow.run_repo.items) == 1
+    assert run.status is RunStatus.RUNNING
+    assert task.id in uow.task_repo.items
+
+
+def test_reconcile_chain_to_terminal_execution() -> None:
+    uow, factory, clock, workflow, _, _, _, run, execution = _bootstrap(edges=[(0, 1)])
+    first = next(
+        node
+        for node in uow.workflow_node_executions.list_by_execution(execution.id)
+        if node.node_key == "node-0"
+    )
+    _complete_child(uow, first.child_run_id)  # type: ignore[arg-type]
+    reconciled = ReconcileWorkflowExecution(factory, clock).execute(execution.id)
+    second = next(node for node in reconciled if node.node_key == "node-1")
+    assert second.status is WorkflowNodeExecutionStatus.DISPATCHED
+
+    _complete_child(uow, second.child_run_id)  # type: ignore[arg-type]
+    reconciled = ReconcileWorkflowExecution(factory, clock).execute(execution.id)
+    assert all(node.status is WorkflowNodeExecutionStatus.SUCCEEDED for node in reconciled)
+    completed_execution = uow.workflow_executions.get(execution.id)
+    completed_run = uow.runs.get(run.id)
+    assert completed_execution is not None
+    assert completed_run is not None
+    assert completed_execution.status is WorkflowExecutionStatus.SUCCEEDED
+    assert completed_run.status is RunStatus.SUCCEEDED
+
+
+def test_reconcile_multi_root_dispatches_all_roots() -> None:
+    uow, factory, clock, _, _, _, _, _, execution = _bootstrap(edges=[], agent_count=3)
+    nodes = uow.workflow_node_executions.list_by_execution(execution.id)
+    assert len(nodes) == 3
+    assert all(node.status is WorkflowNodeExecutionStatus.DISPATCHED for node in nodes)
+    assert len(uow.work_queue_repo.items) == 3
+
+
+def test_reconcile_fan_out_and_fan_in_waits_for_all_predecessors() -> None:
+    uow, factory, clock, _, _, _, _, _, execution = _bootstrap(
+        edges=[(0, 1), (0, 2), (1, 3), (2, 3)]
+    )
+    nodes = uow.workflow_node_executions.list_by_execution(execution.id)
+    root = next(node for node in nodes if node.node_key == "node-0")
+    _complete_child(uow, root.child_run_id)  # type: ignore[arg-type]
+    nodes = ReconcileWorkflowExecution(factory, clock).execute(execution.id)
+    branches = [node for node in nodes if node.node_key in {"node-1", "node-2"}]
+    join = next(node for node in nodes if node.node_key == "node-3")
+    assert all(node.status is WorkflowNodeExecutionStatus.DISPATCHED for node in branches)
+    assert join.status is WorkflowNodeExecutionStatus.PENDING
+
+    _complete_child(uow, branches[0].child_run_id)  # type: ignore[arg-type]
+    ReconcileWorkflowExecution(factory, clock).execute(execution.id)
+    assert uow.workflow_node_executions.items[join.id].status is WorkflowNodeExecutionStatus.PENDING
+
+    _complete_child(uow, branches[1].child_run_id)  # type: ignore[arg-type]
+    nodes = ReconcileWorkflowExecution(factory, clock).execute(execution.id)
+    join = next(node for node in nodes if node.node_key == "node-3")
+    assert join.status is WorkflowNodeExecutionStatus.DISPATCHED
+
+
+def test_failed_predecessor_blocks_downstream_nodes() -> None:
+    uow, factory, clock, _, _, _, _, _, execution = _bootstrap(edges=[(0, 1), (1, 2)])
+    first = next(
+        node
+        for node in uow.workflow_node_executions.list_by_execution(execution.id)
+        if node.node_key == "node-0"
+    )
+    child = uow.runs.get(first.child_run_id)  # type: ignore[arg-type]
+    assert child is not None
+    child.start(T0)
+    from friday.domain import Failure, FailureCause
+
+    child.fail(T1, Failure("failed", "no", False, FailureCause.RUNTIME))
+    uow.runs.save(child)
+    nodes = ReconcileWorkflowExecution(factory, clock).execute(execution.id)
+    assert (
+        next(node for node in nodes if node.node_key == "node-1").status
+        is WorkflowNodeExecutionStatus.BLOCKED
+    )
+    assert (
+        next(node for node in nodes if node.node_key == "node-2").status
+        is WorkflowNodeExecutionStatus.BLOCKED
+    )

@@ -14,6 +14,7 @@ export type { CreateDelegationRequestBody } from "./wire/delegation";
 export type {
   CreateWorkflowBody,
   CreateWorkflowRevisionBody,
+  PutTaskWorkflowBody,
   WorkflowEdgeInput,
   WorkflowNodeInput,
 } from "./wire/workflow";
@@ -91,6 +92,7 @@ export type {
   SkillImprovementPolicy,
   StartRunResponse,
   TaskAgentBinding,
+  TaskWorkflowBinding,
   Task,
   TaskEvent,
   TaskEventType,
@@ -110,6 +112,7 @@ export {
   validateWorkflowRevision,
   validateWorkflowRevisions,
   validateTaskAgentBinding,
+  validateTaskWorkflowBinding,
   validateRunAgentResolution,
   validateDelegationRequest,
   validateDelegationRequests,

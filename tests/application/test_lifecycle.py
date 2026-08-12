@@ -50,6 +50,7 @@ from friday.domain.identifiers import (
     RunStepId,
     TaskId,
     ToolInvocationId,
+    WorkflowExecutionId,
 )
 from friday.domain.run import Run, RunStatus
 from friday.domain.step import RunStep, RunStepStatus
@@ -196,6 +197,8 @@ def _run_at(task_id: TaskId, status: RunStatus) -> Run:
         run.wait_for_approval(T0, ApprovalRequestId.new())
     elif status is RunStatus.WAITING_FOR_DELEGATION:
         run.wait_for_delegation(T0, DelegationRequestId.new())
+    elif status is RunStatus.WAITING_FOR_WORKFLOW:
+        run.wait_for_workflow(T0, WorkflowExecutionId.new())
     elif status is RunStatus.SUCCEEDED:
         run.succeed(T0)
     elif status is RunStatus.FAILED:

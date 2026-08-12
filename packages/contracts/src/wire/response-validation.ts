@@ -10,6 +10,7 @@ export {
   validateWorkflowRevision,
   validateWorkflowRevisions,
   validateTaskAgentBinding,
+  validateTaskWorkflowBinding,
   validateRunAgentResolution,
   validateDelegationRequest,
   validateDelegationRequests,

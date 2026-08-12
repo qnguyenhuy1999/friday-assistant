@@ -45,6 +45,7 @@ from friday.infrastructure.persistence.repositories import (
     RunSkillBindingRepository,
     RunSkillResolutionRepository,
     RunStepRepository,
+    RunWorkflowResolutionRepository,
     ScheduleDeliveryPolicyRepository,
     ScheduleFireDeliveryPlanRepository,
     ScheduleFireRepository,
@@ -68,7 +69,10 @@ from friday.infrastructure.persistence.repositories import (
     TaskEventStore,
     TaskRepository,
     TaskSkillBindingRepository,
+    TaskWorkflowBindingRepository,
     ToolInvocationRepository,
+    WorkflowExecutionRepository,
+    WorkflowNodeExecutionRepository,
     WorkflowRepository,
     WorkflowRevisionRepository,
 )
@@ -93,6 +97,10 @@ class SqlAlchemyUnitOfWork:
         self._agent_revisions = AgentRevisionRepository(session)
         self._workflows = WorkflowRepository(session)
         self._workflow_revisions = WorkflowRevisionRepository(session)
+        self._workflow_executions = WorkflowExecutionRepository(session)
+        self._workflow_node_executions = WorkflowNodeExecutionRepository(session)
+        self._run_workflow_resolutions = RunWorkflowResolutionRepository(session)
+        self._task_workflow_bindings = TaskWorkflowBindingRepository(session)
         self._task_agent_bindings = TaskAgentBindingRepository(session)
         self._run_agent_resolutions = RunAgentResolutionRepository(session)
         self._delegation_requests = DelegationRequestRepository(session)
@@ -152,6 +160,22 @@ class SqlAlchemyUnitOfWork:
     @property
     def workflow_revisions(self) -> WorkflowRevisionRepository:
         return self._workflow_revisions
+
+    @property
+    def workflow_executions(self) -> WorkflowExecutionRepository:
+        return self._workflow_executions
+
+    @property
+    def workflow_node_executions(self) -> WorkflowNodeExecutionRepository:
+        return self._workflow_node_executions
+
+    @property
+    def run_workflow_resolutions(self) -> RunWorkflowResolutionRepository:
+        return self._run_workflow_resolutions
+
+    @property
+    def task_workflow_bindings(self) -> TaskWorkflowBindingRepository:
+        return self._task_workflow_bindings
 
     @property
     def task_agent_bindings(self) -> TaskAgentBindingRepository:

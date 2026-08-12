@@ -366,12 +366,12 @@ def test_empty_phase21_downgrade_upgrade_cycle_is_compatible(tmp_path: Path) -> 
     command.downgrade(config, "0031")
     assert _revision(db_path) == "0031"
     command.upgrade(config, "head")
-    assert _revision(db_path) == "0034"
+    assert _revision(db_path) == "0035"
 
     command.downgrade(config, "0030")
     assert _revision(db_path) == "0030"
     command.upgrade(config, "head")
-    assert _revision(db_path) == "0034"
+    assert _revision(db_path) == "0035"
 
 
 def test_0032_populated_downgrade_refuses_before_schema_mutation(tmp_path: Path) -> None:

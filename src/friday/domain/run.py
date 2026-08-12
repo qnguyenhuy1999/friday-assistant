@@ -8,7 +8,13 @@ from enum import StrEnum
 
 from friday.domain.errors import DomainValidationError, InvalidStateTransition
 from friday.domain.failure import Failure
-from friday.domain.identifiers import ApprovalRequestId, DelegationRequestId, RunId, TaskId
+from friday.domain.identifiers import (
+    ApprovalRequestId,
+    DelegationRequestId,
+    RunId,
+    TaskId,
+    WorkflowExecutionId,
+)
 from friday.domain.time import ensure_utc
 
 
@@ -17,6 +23,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     WAITING_FOR_APPROVAL = "waiting_for_approval"
     WAITING_FOR_DELEGATION = "waiting_for_delegation"
+    WAITING_FOR_WORKFLOW = "waiting_for_workflow"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -37,6 +44,7 @@ class Run:
     _failure: Failure | None = field(default=None)
     _approval_request_id: ApprovalRequestId | None = field(default=None)
     _delegation_request_id: DelegationRequestId | None = field(default=None)
+    _workflow_execution_id: WorkflowExecutionId | None = field(default=None)
 
     @classmethod
     def new(
@@ -91,6 +99,10 @@ class Run:
     def delegation_request_id(self) -> DelegationRequestId | None:
         return self._delegation_request_id
 
+    @property
+    def workflow_execution_id(self) -> WorkflowExecutionId | None:
+        return self._workflow_execution_id
+
     def _require_status(self, *allowed: RunStatus, target: RunStatus) -> None:
         if self._status not in allowed:
             raise InvalidStateTransition("Run", self._status.value, target.value)
@@ -102,9 +114,9 @@ class Run:
 
     def wait_for_approval(self, at: datetime, approval_request_id: ApprovalRequestId) -> None:
         self._require_status(RunStatus.RUNNING, target=RunStatus.WAITING_FOR_APPROVAL)
-        if self._delegation_request_id is not None:
+        if self._delegation_request_id is not None or self._workflow_execution_id is not None:
             raise DomainValidationError(
-                "approval and delegation wait markers are mutually exclusive"
+                "approval, delegation, and workflow wait markers are mutually exclusive"
             )
         ensure_utc(at)
         self._approval_request_id = approval_request_id
@@ -112,13 +124,23 @@ class Run:
 
     def wait_for_delegation(self, at: datetime, delegation_request_id: DelegationRequestId) -> None:
         self._require_status(RunStatus.RUNNING, target=RunStatus.WAITING_FOR_DELEGATION)
-        if self._approval_request_id is not None:
+        if self._approval_request_id is not None or self._workflow_execution_id is not None:
             raise DomainValidationError(
-                "approval and delegation wait markers are mutually exclusive"
+                "approval, delegation, and workflow wait markers are mutually exclusive"
             )
         ensure_utc(at)
         self._delegation_request_id = delegation_request_id
         self._status = RunStatus.WAITING_FOR_DELEGATION
+
+    def wait_for_workflow(self, at: datetime, workflow_execution_id: WorkflowExecutionId) -> None:
+        self._require_status(RunStatus.RUNNING, target=RunStatus.WAITING_FOR_WORKFLOW)
+        if self._approval_request_id is not None or self._delegation_request_id is not None:
+            raise DomainValidationError("workflow and other wait markers are mutually exclusive")
+        if self._workflow_execution_id is not None:
+            raise DomainValidationError("Run already has a Workflow execution owner")
+        ensure_utc(at)
+        self._workflow_execution_id = workflow_execution_id
+        self._status = RunStatus.WAITING_FOR_WORKFLOW
 
     def resume(self, at: datetime) -> None:
         self._require_status(
@@ -138,12 +160,20 @@ class Run:
         self._status = RunStatus.RUNNING
 
     def succeed(self, at: datetime) -> None:
-        self._require_status(RunStatus.RUNNING, target=RunStatus.SUCCEEDED)
+        self._require_status(
+            RunStatus.RUNNING,
+            RunStatus.WAITING_FOR_WORKFLOW,
+            target=RunStatus.SUCCEEDED,
+        )
         self._ended_at = self._validated_end(at)
         self._status = RunStatus.SUCCEEDED
 
     def fail(self, at: datetime, failure: Failure) -> None:
-        self._require_status(RunStatus.RUNNING, target=RunStatus.FAILED)
+        self._require_status(
+            RunStatus.RUNNING,
+            RunStatus.WAITING_FOR_WORKFLOW,
+            target=RunStatus.FAILED,
+        )
         self._ended_at = self._validated_end(at)
         self._failure = failure
         self._status = RunStatus.FAILED
@@ -154,12 +184,25 @@ class Run:
             RunStatus.RUNNING,
             RunStatus.WAITING_FOR_APPROVAL,
             RunStatus.WAITING_FOR_DELEGATION,
+            RunStatus.WAITING_FOR_WORKFLOW,
             target=RunStatus.CANCELLED,
         )
         self._ended_at = self._validated_end(at)
         self._approval_request_id = None
         self._delegation_request_id = None
         self._status = RunStatus.CANCELLED
+
+    def succeed_workflow(self, at: datetime) -> None:
+        self._require_status(RunStatus.WAITING_FOR_WORKFLOW, target=RunStatus.SUCCEEDED)
+        self.succeed(at)
+
+    def fail_workflow(self, at: datetime, failure: Failure) -> None:
+        self._require_status(RunStatus.WAITING_FOR_WORKFLOW, target=RunStatus.FAILED)
+        self.fail(at, failure)
+
+    def cancel_workflow(self, at: datetime) -> None:
+        self._require_status(RunStatus.WAITING_FOR_WORKFLOW, target=RunStatus.CANCELLED)
+        self.cancel(at)
 
     def _validated_end(self, at: datetime) -> datetime:
         end = ensure_utc(at)

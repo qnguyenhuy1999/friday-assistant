@@ -10,6 +10,7 @@ from friday.application.errors import (
     RunNotFound,
     TaskNotFound,
     UnknownBrainRuntimeKind,
+    WorkflowBindingError,
 )
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.domain import (
@@ -176,6 +177,19 @@ class ReplaceTaskAgent:
         with self._uow_factory() as uow:
             if uow.tasks.get(task_id) is None:
                 raise TaskNotFound(task_id)
+            workflow_node_executions = getattr(uow, "workflow_node_executions", None)
+            get_by_child_task_id = getattr(workflow_node_executions, "get_by_child_task_id", None)
+            if callable(get_by_child_task_id) and get_by_child_task_id(task_id) is not None:
+                raise WorkflowBindingError("workflow child Task Agent binding is frozen")
+            workflow_bindings = getattr(uow, "task_workflow_bindings", None)
+            if (
+                agent_id is not None
+                and workflow_bindings is not None
+                and workflow_bindings.get_by_task_id(task_id) is not None
+            ):
+                raise WorkflowBindingError(
+                    "a Task cannot have both TaskAgentBinding and TaskWorkflowBinding"
+                )
             delegation = uow.delegation_requests.get_for_child_task(task_id)
             if delegation is not None and delegation.status in {
                 DelegationStatus.DISPATCHED,
@@ -234,7 +248,29 @@ class ResolveRunAgent:
                 incoming_delegation = uow.delegation_requests.get_for_child_execution(
                     run.execution_id
                 )
+                workflow_node_executions = getattr(uow, "workflow_node_executions", None)
+                get_by_child_execution_id = getattr(
+                    workflow_node_executions, "get_by_child_execution_id", None
+                )
+                workflow_node = (
+                    get_by_child_execution_id(run.execution_id)
+                    if callable(get_by_child_execution_id)
+                    else None
+                )
                 if existing is not None:
+                    if workflow_node is not None and (
+                        workflow_node.child_task_id != run.task_id
+                        or existing.agent_id != workflow_node.target_agent_id
+                        or existing.revision_id != workflow_node.target_agent_revision_id
+                    ):
+                        raise EntityConflict("workflow_target_agent_mismatch")
+                    if workflow_node is not None:
+                        existing_binding = uow.task_agent_bindings.get(run.task_id)
+                        if (
+                            existing_binding is None
+                            or existing_binding.agent_id != workflow_node.target_agent_id
+                        ):
+                            raise EntityConflict("workflow_target_agent_mismatch")
                     if (
                         incoming_delegation is not None
                         and existing.agent_id != incoming_delegation.target_agent_id
@@ -244,9 +280,55 @@ class ResolveRunAgent:
 
                 binding = uow.task_agent_bindings.get(run.task_id)
                 if binding is None:
+                    if workflow_node is not None:
+                        raise EntityConflict("workflow_child_agent_binding_missing")
                     if incoming_delegation is not None:
                         raise EntityConflict("delegated_child_agent_binding_missing")
                     return None
+                if workflow_node is not None:
+                    if (
+                        workflow_node.child_task_id != run.task_id
+                        or binding.agent_id != workflow_node.target_agent_id
+                    ):
+                        raise EntityConflict("workflow_target_agent_mismatch")
+                    try:
+                        revision = uow.agent_revisions.get(workflow_node.target_agent_revision_id)
+                    except DomainValidationError as exc:
+                        raise AgentIntegrityFailed() from exc
+                    if (
+                        revision is None
+                        or revision.agent_id != workflow_node.target_agent_id
+                        or revision.content_sha256 != workflow_node.target_agent_revision_sha256
+                    ):
+                        raise EntityConflict("workflow_target_revision_mismatch")
+                    if not self._runtime_registry.is_registered(revision.runtime_kind):
+                        raise UnknownBrainRuntimeKind(revision.runtime_kind)
+                    self._runtime_registry.validate_runtime_config(
+                        revision.runtime_kind, revision.runtime_config
+                    )
+                    resolution = RunAgentResolution(
+                        RunAgentResolutionId.new(),
+                        run.id,
+                        workflow_node.target_agent_id,
+                        revision.id,
+                        self._clock.now(),
+                    )
+                    if not uow.run_agent_resolutions.add_if_claimed(
+                        resolution,
+                        worker_id,
+                        claim_token,
+                        claim_generation,
+                        self._clock.now(),
+                    ):
+                        if uow.run_agent_resolutions.get(run.id) is not None:
+                            raise EntityConflict("another resolver won the freeze race")
+                        raise ClaimLost("agent resolution claim is stale or expired")
+                    if not uow.work_queue.is_claim_active(
+                        run.id, worker_id, claim_token, claim_generation, self._clock.now()
+                    ):
+                        raise ClaimLost("agent resolution claim expired before commit")
+                    uow.commit()
+                    return resolution
                 if (
                     incoming_delegation is not None
                     and binding.agent_id != incoming_delegation.target_agent_id
@@ -313,6 +395,9 @@ class ResolveRunAgent:
             if str(exc) in {
                 "delegation_target_agent_mismatch",
                 "delegated_child_agent_binding_missing",
+                "workflow_target_agent_mismatch",
+                "workflow_target_revision_mismatch",
+                "workflow_child_agent_binding_missing",
             }:
                 raise
             # Two valid resolvers may race on the unique resolution marker.

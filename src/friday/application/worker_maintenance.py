@@ -174,7 +174,11 @@ class RecoverExpiredLeases:
                     run is None
                     or run.status in TERMINAL_RUN_STATUSES
                     or run.status
-                    in {RunStatus.WAITING_FOR_APPROVAL, RunStatus.WAITING_FOR_DELEGATION}
+                    in {
+                        RunStatus.WAITING_FOR_APPROVAL,
+                        RunStatus.WAITING_FOR_DELEGATION,
+                        RunStatus.WAITING_FOR_WORKFLOW,
+                    }
                 ):
                     recovered += int(uow.work_queue.remove_if_lease_expired(item.run_id, now))
                 else:

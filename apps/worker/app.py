@@ -70,6 +70,10 @@ from friday.application.worker_maintenance import (
     MaterializeScheduledAnswerDeliveries,
     RecoverExpiredLeases,
 )
+from friday.application.workflow_execution_use_cases import (
+    ReconcileWorkflowExecution,
+    StartWorkflowExecution,
+)
 from friday.infrastructure.brain.claude_cli import (
     ClaudeCliBrainRuntime,
     ClaudeCliSettings,
@@ -473,6 +477,8 @@ def _compose_worker(
         memory_retriever=memory.retriever,
         conversation_context=ConversationContextAssembler(uow_factory),
     )
+    workflow_starter = StartWorkflowExecution(uow_factory, clock, brain_runtime_registry)
+    workflow_reconciler = ReconcileWorkflowExecution(uow_factory, clock)
 
     loop = WorkerLoop(
         claim_next_run=ClaimNextRun(
@@ -543,6 +549,9 @@ def _compose_worker(
         heartbeat_interval_seconds=settings.heartbeat_interval_seconds,
         maintenance_interval_seconds=settings.maintenance_interval_seconds,
         poll_interval_seconds=settings.poll_interval_seconds,
+        workflow_starter=workflow_starter,
+        workflow_reconciler=workflow_reconciler,
+        uow_factory=uow_factory,
     )
     worker = Worker(
         engine=engine,

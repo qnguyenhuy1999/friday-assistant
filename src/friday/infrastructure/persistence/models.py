@@ -967,23 +967,32 @@ class RunRow(Base):
         UniqueConstraint("id", "execution_id", name="uq_runs_id_execution"),
         CheckConstraint(
             "status IN ('queued', 'running', 'waiting_for_approval', "
-            "'waiting_for_delegation', 'succeeded', 'failed', "
+            "'waiting_for_delegation', 'waiting_for_workflow', 'succeeded', 'failed', "
             "'cancelled')",
             name="ck_runs_status",
         ),
         CheckConstraint(
             "((status = 'waiting_for_approval' AND approval_request_id IS NOT NULL "
-            "AND delegation_request_id IS NULL) OR "
+            "AND delegation_request_id IS NULL AND workflow_execution_id IS NULL) OR "
             "(status = 'waiting_for_delegation' AND delegation_request_id IS NOT NULL "
-            "AND approval_request_id IS NULL) OR "
-            "(status NOT IN ('waiting_for_approval', 'waiting_for_delegation') "
-            "AND approval_request_id IS NULL AND delegation_request_id IS NULL))",
+            "AND approval_request_id IS NULL AND workflow_execution_id IS NULL) OR "
+            "(status = 'waiting_for_workflow' AND workflow_execution_id IS NOT NULL "
+            "AND approval_request_id IS NULL AND delegation_request_id IS NULL) OR "
+            "(status NOT IN ('waiting_for_approval', 'waiting_for_delegation', "
+            "'waiting_for_workflow') AND approval_request_id IS NULL "
+            "AND delegation_request_id IS NULL AND "
+            "(workflow_execution_id IS NULL OR status IN ('succeeded', 'failed', 'cancelled'))))",
             name="ck_runs_wait_marker_shape",
         ),
         ForeignKeyConstraint(
             ["delegation_request_id", "id"],
             ["delegation_requests.id", "delegation_requests.parent_run_id"],
             name="fk_runs_delegation_parent_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["workflow_execution_id", "id"],
+            ["workflow_executions.id", "workflow_executions.root_run_id"],
+            name="fk_runs_workflow_execution_root_ownership",
         ),
     )
 
@@ -999,6 +1008,160 @@ class RunRow(Base):
     # ("Cross-reference columns without FK constraints").
     approval_request_id: Mapped[str | None] = mapped_column(index=True)
     delegation_request_id: Mapped[str | None] = mapped_column(index=True)
+    workflow_execution_id: Mapped[str | None] = mapped_column(index=True)
+
+
+class WorkflowExecutionRow(Base):
+    __tablename__ = "workflow_executions"
+    __table_args__ = (
+        Index("ix_workflow_executions_root_run_id", "root_run_id"),
+        UniqueConstraint("root_run_id", name="uq_workflow_executions_root_run_id"),
+        # This candidate key is the target of RunRow's composite ownership FK.
+        UniqueConstraint("id", "root_run_id", name="uq_workflow_executions_id_root_run"),
+        CheckConstraint(
+            "status IN ('running', 'succeeded', 'failed', 'cancelled')",
+            name="ck_workflow_executions_status",
+        ),
+        CheckConstraint(
+            "length(workflow_content_sha256) = 64 AND "
+            "workflow_content_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_workflow_executions_sha256",
+        ),
+        CheckConstraint(
+            "(status = 'running' AND completed_at IS NULL AND failure_code IS NULL "
+            "AND failure_message IS NULL) OR "
+            "(status = 'succeeded' AND completed_at IS NOT NULL AND failure_code IS NULL "
+            "AND failure_message IS NULL) OR "
+            "(status = 'failed' AND completed_at IS NOT NULL AND failure_code IS NOT NULL "
+            "AND failure_message IS NOT NULL) OR "
+            "(status = 'cancelled' AND completed_at IS NOT NULL AND failure_code IS NULL)",
+            name="ck_workflow_executions_state_shape",
+        ),
+        ForeignKeyConstraint(
+            ["workflow_id", "workflow_revision_id"],
+            ["workflow_revisions.workflow_id", "workflow_revisions.id"],
+            name="fk_workflow_executions_revision_ownership",
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    root_run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("workflows.id"))
+    workflow_revision_id: Mapped[str]
+    workflow_content_sha256: Mapped[str]
+    status: Mapped[str]
+    started_at: Mapped[datetime]
+    completed_at: Mapped[datetime | None]
+    failure_code: Mapped[str | None]
+    failure_message: Mapped[str | None]
+
+
+class WorkflowNodeExecutionRow(Base):
+    __tablename__ = "workflow_node_executions"
+    __table_args__ = (
+        Index("ix_workflow_node_executions_workflow_execution_id", "workflow_execution_id"),
+        Index("ix_workflow_node_executions_child_execution_id", "child_execution_id"),
+        UniqueConstraint(
+            "workflow_execution_id",
+            "workflow_node_id",
+            name="uq_workflow_node_executions_execution_node",
+        ),
+        # SQLite's UNIQUE semantics permit multiple NULLs, which gives the
+        # required "where non-null" behavior for pending nodes.
+        UniqueConstraint("child_task_id", name="uq_workflow_node_executions_child_task_id"),
+        UniqueConstraint("child_run_id", name="uq_workflow_node_executions_child_run_id"),
+        CheckConstraint(
+            "status IN ('pending', 'dispatched', 'succeeded', 'failed', 'cancelled', 'blocked')",
+            name="ck_workflow_node_executions_status",
+        ),
+        CheckConstraint(
+            "length(target_agent_revision_sha256) = 64 AND "
+            "target_agent_revision_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_workflow_node_executions_sha256",
+        ),
+        CheckConstraint(
+            "(status = 'pending' AND child_task_id IS NULL AND child_run_id IS NULL "
+            "AND child_execution_id IS NULL AND started_at IS NULL AND completed_at IS NULL "
+            "AND failure_code IS NULL AND failure_message IS NULL) OR "
+            "(status = 'dispatched' AND child_task_id IS NOT NULL AND child_run_id IS NOT NULL "
+            "AND child_execution_id IS NOT NULL AND started_at IS NOT NULL "
+            "AND completed_at IS NULL "
+            "AND failure_code IS NULL AND failure_message IS NULL) OR "
+            "(status = 'succeeded' AND child_task_id IS NOT NULL AND child_run_id IS NOT NULL "
+            "AND child_execution_id IS NOT NULL AND started_at IS NOT NULL "
+            "AND completed_at IS NOT NULL AND failure_code IS NULL AND failure_message IS NULL) OR "
+            "(status = 'failed' AND child_task_id IS NOT NULL AND child_run_id IS NOT NULL "
+            "AND child_execution_id IS NOT NULL AND started_at IS NOT NULL "
+            "AND completed_at IS NOT NULL AND failure_code IS NOT NULL "
+            "AND failure_message IS NOT NULL) OR "
+            "(status = 'cancelled' AND completed_at IS NOT NULL AND failure_code IS NULL "
+            "AND failure_message IS NULL AND "
+            "((child_task_id IS NULL AND child_run_id IS NULL AND child_execution_id IS NULL "
+            "AND started_at IS NULL) OR "
+            "(child_task_id IS NOT NULL AND child_run_id IS NOT NULL "
+            "AND child_execution_id IS NOT NULL AND started_at IS NOT NULL))) OR "
+            "(status = 'blocked' AND completed_at IS NOT NULL AND child_task_id IS NULL "
+            "AND child_run_id IS NULL AND child_execution_id IS NULL "
+            "AND failure_code IS NOT NULL AND failure_message IS NOT NULL)",
+            name="ck_workflow_node_executions_state_shape",
+        ),
+        ForeignKeyConstraint(
+            ["target_agent_id", "target_agent_revision_id"],
+            ["agent_revisions.agent_id", "agent_revisions.id"],
+            name="fk_workflow_node_executions_revision_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["child_task_id", "target_agent_id"],
+            ["task_agent_bindings.task_id", "task_agent_bindings.agent_id"],
+            name="fk_workflow_node_executions_child_agent_ownership",
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    workflow_execution_id: Mapped[str] = mapped_column(ForeignKey("workflow_executions.id"))
+    workflow_node_id: Mapped[str] = mapped_column(ForeignKey("workflow_nodes.id"))
+    node_key: Mapped[str]
+    target_agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"))
+    target_agent_revision_id: Mapped[str]
+    target_agent_revision_sha256: Mapped[str]
+    status: Mapped[str]
+    child_task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id"))
+    child_run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"))
+    child_execution_id: Mapped[str | None]
+    result_payload: Mapped[object | None] = mapped_column(JSON)
+    failure_code: Mapped[str | None]
+    failure_message: Mapped[str | None]
+    created_at: Mapped[datetime]
+    started_at: Mapped[datetime | None]
+    completed_at: Mapped[datetime | None]
+
+
+class RunWorkflowResolutionRow(Base):
+    __tablename__ = "run_workflow_resolutions"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_run_workflow_resolutions_run_id"),
+        CheckConstraint(
+            "length(content_sha256) = 64 AND content_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="ck_run_workflow_resolutions_sha256",
+        ),
+        ForeignKeyConstraint(
+            ["workflow_id", "workflow_revision_id"],
+            ["workflow_revisions.workflow_id", "workflow_revisions.id"],
+            name="fk_run_workflow_resolutions_revision_ownership",
+        ),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("workflows.id"))
+    workflow_revision_id: Mapped[str]
+    content_sha256: Mapped[str]
+    resolved_at: Mapped[datetime]
+
+
+class TaskWorkflowBindingRow(Base):
+    __tablename__ = "task_workflow_bindings"
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("workflows.id"))
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
 
 
 class ScheduleRow(Base):

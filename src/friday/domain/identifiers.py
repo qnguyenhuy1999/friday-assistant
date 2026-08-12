@@ -187,3 +187,15 @@ class WorkflowNodeId(_Id):
 
 class WorkflowEdgeId(_Id):
     pass
+
+
+class WorkflowExecutionId(_Id):
+    pass
+
+
+class WorkflowNodeExecutionId(_Id):
+    pass
+
+
+class RunWorkflowResolutionId(_Id):
+    pass

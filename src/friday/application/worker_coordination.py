@@ -73,7 +73,11 @@ class ClaimNextRun:
                     run is None
                     or run.status in TERMINAL_RUN_STATUSES
                     or run.status
-                    in {RunStatus.WAITING_FOR_APPROVAL, RunStatus.WAITING_FOR_DELEGATION}
+                    in {
+                        RunStatus.WAITING_FOR_APPROVAL,
+                        RunStatus.WAITING_FOR_DELEGATION,
+                        RunStatus.WAITING_FOR_WORKFLOW,
+                    }
                 ):
                     # Stale work item left behind by a state change that
                     # predates this claim; there is nothing to run.

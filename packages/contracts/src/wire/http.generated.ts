@@ -35,6 +35,7 @@ export interface Run {
     | "running"
     | "waiting_for_approval"
     | "waiting_for_delegation"
+    | "waiting_for_workflow"
     | "succeeded"
     | "failed"
     | "cancelled";
@@ -290,6 +291,13 @@ export interface TaskAgentBinding {
   task_id: string;
   agent_id: string;
   created_at: string;
+}
+
+export interface TaskWorkflowBinding {
+  task_id: string;
+  workflow_id: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface RunAgentResolution {
@@ -678,6 +686,7 @@ const schema = {
             "running",
             "waiting_for_approval",
             "waiting_for_delegation",
+            "waiting_for_workflow",
             "succeeded",
             "failed",
             "cancelled",
@@ -1444,6 +1453,25 @@ const schema = {
           type: "string",
         },
         created_at: {
+          type: "string",
+        },
+      },
+    },
+    TaskWorkflowBinding: {
+      type: "object",
+      additionalProperties: false,
+      required: ["task_id", "workflow_id", "created_at", "updated_at"],
+      properties: {
+        task_id: {
+          type: "string",
+        },
+        workflow_id: {
+          type: "string",
+        },
+        created_at: {
+          type: "string",
+        },
+        updated_at: {
           type: "string",
         },
       },
@@ -2485,6 +2513,16 @@ const schema = {
         },
       ],
     },
+    taskWorkflowBinding: {
+      anyOf: [
+        {
+          $ref: "#/definitions/TaskWorkflowBinding",
+        },
+        {
+          type: "null",
+        },
+      ],
+    },
     runAgentResolution: {
       $ref: "#/definitions/RunAgentResolution",
     },
@@ -2836,6 +2874,8 @@ export const validateAgentRevisions: WireValidator = (value, path) =>
   assertWire("agentRevisions", value, path);
 export const validateTaskAgentBinding: WireValidator = (value, path) =>
   assertWire("taskAgentBinding", value, path);
+export const validateTaskWorkflowBinding: WireValidator = (value, path) =>
+  assertWire("taskWorkflowBinding", value, path);
 export const validateRunAgentResolution: WireValidator = (value, path) =>
   assertWire("runAgentResolution", value, path);
 export const validateDelegationRequest: WireValidator = (value, path) =>

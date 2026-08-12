@@ -69,6 +69,7 @@
             "running",
             "waiting_for_approval",
             "waiting_for_delegation",
+            "waiting_for_workflow",
             "succeeded",
             "failed",
             "cancelled"
@@ -565,6 +566,17 @@
         "task_id": { "type": "string" },
         "agent_id": { "type": "string" },
         "created_at": { "type": "string" }
+      }
+    },
+    "TaskWorkflowBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "workflow_id", "created_at", "updated_at"],
+      "properties": {
+        "task_id": { "type": "string" },
+        "workflow_id": { "type": "string" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
       }
     },
     "RunAgentResolution": {
@@ -1227,6 +1239,12 @@
     "taskAgentBinding": {
       "anyOf": [
         { "$ref": "#/definitions/TaskAgentBinding" },
+        { "type": "null" }
+      ]
+    },
+    "taskWorkflowBinding": {
+      "anyOf": [
+        { "$ref": "#/definitions/TaskWorkflowBinding" },
         { "type": "null" }
       ]
     },

@@ -131,6 +131,153 @@ def test_resolution_and_binding_are_immutable_values_with_utc_invariants() -> No
         TaskWorkflowBinding(binding.task_id, binding.workflow_id, T1, T0)
 
 
+def test_workflow_execution_construction_rejects_invalid_shapes() -> None:
+    def _make(**overrides: object) -> WorkflowExecution:
+        base = dict(
+            id=WorkflowExecutionId.new(),
+            root_run_id=RunId.new(),
+            workflow_id=WorkflowId.new(),
+            workflow_revision_id=WorkflowRevisionId.new(),
+            workflow_content_sha256=SHA,
+            status=WorkflowExecutionStatus.RUNNING,
+            started_at=T0,
+        )
+        base.update(overrides)
+        return WorkflowExecution(**base)  # type: ignore[arg-type]
+
+    with pytest.raises(DomainValidationError):
+        _make(completed_at=T0.replace(year=2025))  # completed_at precedes started_at
+    with pytest.raises(DomainValidationError):
+        _make(status=WorkflowExecutionStatus.RUNNING, completed_at=T1)
+    with pytest.raises(DomainValidationError):
+        _make(status=WorkflowExecutionStatus.RUNNING, failure_code="x", failure_message="y")
+    with pytest.raises(DomainValidationError):
+        _make(status=WorkflowExecutionStatus.SUCCEEDED)  # terminal requires completed_at
+    with pytest.raises(DomainValidationError):
+        _make(
+            status=WorkflowExecutionStatus.SUCCEEDED,
+            completed_at=T1,
+            failure_code="x",
+            failure_message="y",
+        )
+    with pytest.raises(DomainValidationError):
+        _make(status=WorkflowExecutionStatus.CANCELLED, completed_at=T1, failure_code="x")
+
+
+def test_workflow_execution_methods_reject_out_of_order_timestamps() -> None:
+    before = T0.replace(year=2025)
+    with pytest.raises(DomainValidationError):
+        _execution().succeed(before)
+    with pytest.raises(DomainValidationError):
+        _execution().fail(before, "code", "message")
+    with pytest.raises(DomainValidationError):
+        _execution().cancel(before)
+    with pytest.raises(DomainValidationError):
+        _execution().cancel(T1, message="   ")
+
+
+def test_node_execution_construction_rejects_invalid_shapes() -> None:
+    execution = _execution()
+
+    def _make(**overrides: object) -> WorkflowNodeExecution:
+        base = dict(
+            id=WorkflowNodeExecutionId.new(),
+            workflow_execution_id=execution.id,
+            workflow_node_id=WorkflowNodeId.new(),
+            workflow_revision_id=execution.workflow_revision_id,
+            node_key="node-a",
+            target_agent_id=AgentId.new(),
+            target_agent_revision_id=AgentRevisionId.new(),
+            target_agent_revision_sha256=SHA,
+            status=WorkflowNodeExecutionStatus.PENDING,
+            created_at=T0,
+        )
+        base.update(overrides)
+        return WorkflowNodeExecution(**base)  # type: ignore[arg-type]
+
+    with pytest.raises(DomainValidationError):
+        _make(node_key="")
+    with pytest.raises(DomainValidationError):
+        _make(failure_code="   ")  # whitespace-only code is rejected before status-shape checks
+    with pytest.raises(DomainValidationError):
+        _make(failure_message="   ")
+    with pytest.raises(DomainValidationError):
+        _make(started_at=T0.replace(year=2025))  # started_at precedes created_at
+    with pytest.raises(DomainValidationError):
+        _make(completed_at=T0.replace(year=2025))  # completed_at precedes creation
+    with pytest.raises(DomainValidationError):
+        _make(started_at=T0)  # pending cannot have a timestamp
+    with pytest.raises(DomainValidationError):
+        _make(failure_code="x", failure_message="y")  # pending cannot have a failure
+    with pytest.raises(DomainValidationError):
+        _make(status=WorkflowNodeExecutionStatus.DISPATCHED)  # missing required child shape
+    with pytest.raises(DomainValidationError):
+        _make(
+            status=WorkflowNodeExecutionStatus.DISPATCHED,
+            child_task_id=TaskId.new(),
+            child_run_id=RunId.new(),
+            child_execution_id=RunId.new(),
+            started_at=T0,
+            failure_code="x",
+            failure_message="y",
+        )
+    with pytest.raises(DomainValidationError):
+        _make(status=WorkflowNodeExecutionStatus.SUCCEEDED)  # missing required child shape
+    with pytest.raises(DomainValidationError):
+        _make(
+            status=WorkflowNodeExecutionStatus.SUCCEEDED,
+            child_task_id=TaskId.new(),
+            child_run_id=RunId.new(),
+            child_execution_id=RunId.new(),
+            started_at=T0,
+            completed_at=T1,
+            failure_code="x",
+            failure_message="y",
+        )
+    with pytest.raises(DomainValidationError):
+        _make(status=WorkflowNodeExecutionStatus.FAILED)  # missing required child shape and failure
+    with pytest.raises(DomainValidationError):
+        _make(status=WorkflowNodeExecutionStatus.CANCELLED)  # requires completed_at
+    with pytest.raises(DomainValidationError):
+        _make(
+            status=WorkflowNodeExecutionStatus.CANCELLED,
+            completed_at=T1,
+            failure_code="x",
+            failure_message="y",
+        )
+    with pytest.raises(DomainValidationError):
+        _make(status=WorkflowNodeExecutionStatus.BLOCKED)  # requires completed_at
+    with pytest.raises(DomainValidationError):
+        _make(
+            status=WorkflowNodeExecutionStatus.BLOCKED,
+            completed_at=T1,
+            child_task_id=TaskId.new(),
+        )
+    with pytest.raises(DomainValidationError):
+        _make(status=WorkflowNodeExecutionStatus.BLOCKED, completed_at=T1)  # requires failure
+
+
+def test_node_execution_methods_reject_invalid_transitions_and_timestamps() -> None:
+    before = T0.replace(year=2025)
+
+    dispatched = _node()
+    dispatched.dispatch(TaskId.new(), RunId.new(), RunId.new(), T0)
+    with pytest.raises(InvalidStateTransition):
+        dispatched.dispatch(TaskId.new(), RunId.new(), RunId.new(), T0)  # not PENDING anymore
+
+    with pytest.raises(DomainValidationError):
+        _node().dispatch(TaskId.new(), RunId.new(), RunId.new(), before)
+
+    with pytest.raises(DomainValidationError):
+        dispatched.succeed(before)
+    with pytest.raises(DomainValidationError):
+        dispatched.fail(before, "code", "message")
+    with pytest.raises(DomainValidationError):
+        dispatched.cancel(before)
+    with pytest.raises(DomainValidationError):
+        _node().block(before)
+
+
 def test_root_run_has_separate_workflow_wait_ownership() -> None:
     run = Run.new(id=RunId.new(), task_id=TaskId.new(), created_at=T0)
     run.start(T0)

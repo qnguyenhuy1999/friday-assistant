@@ -373,6 +373,69 @@ def test_reconcile_rejects_raw_sql_node_provenance_corruption(
         ReconcileWorkflowExecution(factory, _Clock()).execute(execution.id)
 
 
+def test_reconcile_rejects_raw_sql_agent_revision_snapshot_corruption(
+    tmp_path: Path,
+) -> None:
+    factory = _factory(tmp_path)
+    task, run, agent, workflow, revision = _seed(factory)
+    node = revision.nodes[0]
+    agent_revision_id = active_agent_revision_id(factory, agent.id)
+    execution = WorkflowExecution(
+        id=WorkflowExecutionId.new(),
+        root_run_id=run.id,
+        workflow_id=workflow.id,
+        workflow_revision_id=revision.id,
+        workflow_content_sha256=revision.content_sha256,
+        status=WorkflowExecutionStatus.RUNNING,
+        started_at=AT,
+    )
+    node_execution = WorkflowNodeExecution(
+        id=WorkflowNodeExecutionId.new(),
+        workflow_execution_id=execution.id,
+        workflow_node_id=node.id,
+        workflow_revision_id=revision.id,
+        node_key=node.node_key,
+        target_agent_id=agent.id,
+        target_agent_revision_id=agent_revision_id,
+        target_agent_revision_sha256=agent_revision_sha(factory, agent_revision_id),
+        status=WorkflowNodeExecutionStatus.PENDING,
+        created_at=AT,
+    )
+    resolution = RunWorkflowResolution(
+        id=RunWorkflowResolutionId.new(),
+        run_id=run.id,
+        workflow_id=workflow.id,
+        workflow_revision_id=revision.id,
+        content_sha256=revision.content_sha256,
+        resolved_at=AT,
+    )
+    run.wait_for_workflow(AT, execution.id)
+    with factory() as uow:
+        uow.run_workflow_resolutions.create(resolution)
+        uow.workflow_executions.create(execution)
+        uow.workflow_node_executions.create(node_execution)
+        uow.runs.save(run)
+        uow.commit()
+
+    # Corrupt the frozen Agent-revision snapshot in place: the node
+    # execution's recorded target_agent_revision_id no longer matches the
+    # sha256 it froze, so the immutable Agent snapshot proof must fail
+    # closed instead of trusting a tampered row.
+    engine = create_engine(f"sqlite:///{tmp_path / 'workflow-execution.db'}")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE workflow_node_executions SET target_agent_revision_sha256=:sha WHERE id=:id"
+            ),
+            {"sha": "b" * 64, "id": str(node_execution.id)},
+        )
+
+    from friday.application.errors import WorkflowIntegrityError
+
+    with pytest.raises(WorkflowIntegrityError):
+        ReconcileWorkflowExecution(factory, _Clock()).execute(execution.id)
+
+
 def test_sqlite_terminal_publication_is_idempotent(
     tmp_path: Path,
 ) -> None:

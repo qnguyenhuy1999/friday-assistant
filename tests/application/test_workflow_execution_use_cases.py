@@ -481,3 +481,71 @@ def test_start_workflow_execution_is_idempotent_for_existing_execution() -> None
     )
     assert result.id == execution.id
     assert result.workflow_revision_id == execution.workflow_revision_id
+
+
+def test_start_fails_closed_when_node_targets_an_unregistered_agent() -> None:
+    uow = FakeUnitOfWork()
+    factory = CountingUnitOfWorkFactory(uow)
+    clock = FakeClock(T0)
+    # Build a Workflow revision whose node targets an AgentId that was never
+    # added to the Agent registry -- this must fail closed rather than
+    # dispatch a node with no resolvable authority.
+    missing_agent_id = AgentId.new()
+    workflow = Workflow.new(
+        id=WorkflowId.new(),
+        key="workflow.missing-agent",
+        display_name="Missing Agent Target",
+        description="",
+        created_at=T0,
+    )
+    uow.workflows.add(workflow)
+    revision_id = WorkflowRevisionId.new()
+    node = WorkflowNode(
+        id=WorkflowNodeId.new(),
+        revision_id=revision_id,
+        node_key="node-0",
+        target_agent_id=missing_agent_id,
+        objective="objective",
+        input_payload={},
+        expected_output_contract="result",
+        created_at=T0,
+    )
+    revision = WorkflowRevision.new(
+        id=revision_id,
+        workflow_id=workflow.id,
+        version=1,
+        nodes=[node],
+        edges=[],
+        source_kind=WorkflowRevisionSourceKind.OPERATOR,
+        created_at=T0,
+    )
+    uow.workflow_revisions.add(revision)
+    workflow.activate(revision, T0)
+    uow.workflows.save(workflow)
+    task, run, generation = _root(uow, factory, workflow)
+
+    with pytest.raises(WorkflowExecutionError, match="target Agent is missing"):
+        StartWorkflowExecution(factory, clock, _runtime_registry()).execute(
+            run.id, workflow.id, WORKER, TOKEN, generation
+        )
+    assert not uow.workflow_executions.items
+
+
+def test_start_fails_closed_for_archived_workflow_resolved_after_binding() -> None:
+    uow = FakeUnitOfWork()
+    factory = CountingUnitOfWorkFactory(uow)
+    clock = FakeClock(T0)
+    agent = _agent(uow, key="archived-target")
+    workflow, _, _ = _workflow(uow, [agent], [])
+    task, run, generation = _root(uow, factory, workflow)
+    # Archive the Workflow directly (bypassing ArchiveWorkflow's own use-case
+    # checks) to simulate the Workflow being archived in the window between
+    # binding and this Run's freeze/bootstrap.
+    workflow.archive(T0)
+    uow.workflows.save(workflow)
+
+    with pytest.raises(WorkflowBindingError, match="archived"):
+        StartWorkflowExecution(factory, clock, _runtime_registry()).execute(
+            run.id, workflow.id, WORKER, TOKEN, generation
+        )
+    assert not uow.workflow_executions.items

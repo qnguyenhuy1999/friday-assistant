@@ -397,4 +397,143 @@ def test_terminal_workflow_rejects_stale_reconciliation_and_dispatches_nothing_f
         assert after_run.status is RunStatus.SUCCEEDED
         after_events = list(uow.events.list_for_run(run.id))
         assert len(after_events) == len(before_events)
+
+
+def test_workflow_execution_status_update_race_is_idempotent_or_conflict_free(
+    tmp_path: Path,
+) -> None:
+    from friday.application.errors import ConcurrencyConflict
+    from friday.infrastructure.persistence.repositories import WorkflowExecutionRepository
+
+    factory = _factory(tmp_path)
+    _, run, _, workflow_id = _seed_graph(factory, edges=[], node_keys=["root"])
+    claim = ClaimNextRun(
+        factory, _Clock(), worker_id="worker-a", lease_duration=LEASE, candidate_limit=10
+    ).execute()
+    assert claim is not None
+    workflow_id_parsed = WorkflowId.parse(workflow_id)
+    execution = StartWorkflowExecution(factory, _Clock(), _runtime_registry()).execute(
+        run.id, workflow_id_parsed, claim.worker_id, claim.claim_token, claim.claim_generation
+    )
+
+    database_url = f"sqlite:///{tmp_path / 'workflow-concurrency.db'}"
+    session_factory = create_session_factory(create_engine(database_url))
+    session_a, session_b, session_c = session_factory(), session_factory(), session_factory()
+    try:
+        WorkflowExecutionRepository(session_a).update_status(
+            execution.id, WorkflowExecutionStatus.SUCCEEDED, completed_at=AT
+        )
+        session_a.commit()
+
+        # A second, independent session racing to apply the exact same
+        # already-applied transition observes it already happened and
+        # returns without raising (idempotent, not a lost race).
+        WorkflowExecutionRepository(session_b).update_status(
+            execution.id, WorkflowExecutionStatus.SUCCEEDED, completed_at=AT
+        )
+        session_b.commit()
+
+        # A third, independent session racing to apply a *different*
+        # transition than the one that already won must fail closed rather
+        # than silently overwrite the durable outcome.
+        try:
+            WorkflowExecutionRepository(session_c).update_status(
+                execution.id,
+                WorkflowExecutionStatus.FAILED,
+                completed_at=AT,
+                failure_code="late",
+                failure_message="lost the race",
+            )
+            raised = False
+        except ConcurrencyConflict:
+            raised = True
+        session_c.rollback()
+        assert raised
+    finally:
+        session_a.close()
+        session_b.close()
+        session_c.close()
+
+    with factory() as uow:
+        final = uow.workflow_executions.get(execution.id)
+        assert final is not None
+        assert final.status is WorkflowExecutionStatus.SUCCEEDED
+
+
+def test_workflow_node_execution_status_update_race_is_idempotent_or_conflict_free(
+    tmp_path: Path,
+) -> None:
+    from friday.application.errors import ConcurrencyConflict
+    from friday.infrastructure.persistence.repositories import WorkflowNodeExecutionRepository
+
+    factory = _factory(tmp_path)
+    _, run, _, workflow_id = _seed_graph(factory, edges=[], node_keys=["root"])
+    claim = ClaimNextRun(
+        factory, _Clock(), worker_id="worker-a", lease_duration=LEASE, candidate_limit=10
+    ).execute()
+    assert claim is not None
+    workflow_id_parsed = WorkflowId.parse(workflow_id)
+    execution = StartWorkflowExecution(factory, _Clock(), _runtime_registry()).execute(
+        run.id, workflow_id_parsed, claim.worker_id, claim.claim_token, claim.claim_generation
+    )
+    with factory() as uow:
+        node = uow.workflow_node_executions.list_by_execution(execution.id)[0]
+        node_id = node.id
+        child_task_id, child_run_id, child_execution_id = (
+            node.child_task_id,
+            node.child_run_id,
+            node.child_execution_id,
+        )
+
+    database_url = f"sqlite:///{tmp_path / 'workflow-concurrency.db'}"
+    session_factory = create_session_factory(create_engine(database_url))
+    session_a, session_b, session_c = session_factory(), session_factory(), session_factory()
+    try:
+        common_kwargs = {
+            "child_task_id": child_task_id,
+            "child_run_id": child_run_id,
+            "child_execution_id": child_execution_id,
+            "started_at": AT,
+        }
+        WorkflowNodeExecutionRepository(session_a).update_status(
+            node_id,
+            WorkflowNodeExecutionStatus.SUCCEEDED,
+            completed_at=AT,
+            **common_kwargs,  # type: ignore[arg-type]
+        )
+        session_a.commit()
+
+        # Idempotent: a second session racing to apply the same transition
+        # observes it already happened.
+        WorkflowNodeExecutionRepository(session_b).update_status(
+            node_id,
+            WorkflowNodeExecutionStatus.SUCCEEDED,
+            completed_at=AT,
+            **common_kwargs,  # type: ignore[arg-type]
+        )
+        session_b.commit()
+
+        try:
+            WorkflowNodeExecutionRepository(session_c).update_status(
+                node_id,
+                WorkflowNodeExecutionStatus.FAILED,
+                completed_at=AT,
+                failure_code="late",
+                failure_message="lost the race",
+                **common_kwargs,  # type: ignore[arg-type]
+            )
+            raised = False
+        except ConcurrencyConflict:
+            raised = True
+        session_c.rollback()
+        assert raised
+    finally:
+        session_a.close()
+        session_b.close()
+        session_c.close()
+
+    with factory() as uow:
+        final = uow.workflow_node_executions.get(node_id)
+        assert final is not None
+        assert final.status is WorkflowNodeExecutionStatus.SUCCEEDED
         assert uow.work_queue.get(run.id) is None

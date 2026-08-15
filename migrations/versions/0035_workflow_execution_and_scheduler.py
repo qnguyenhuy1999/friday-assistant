@@ -48,6 +48,52 @@ _WORKFLOW_NODE_EXECUTION_STATE_SHAPE = (
 
 
 def upgrade() -> None:
+    # 0034 owns the immutable Workflow registry.
+    # Step-4 owns the Run marker and state changes.
+    with op.batch_alter_table("runs") as batch:
+        batch.add_column(
+            sa.Column(
+                "workflow_execution_id",
+                sa.String(),
+                nullable=True,
+            )
+        )
+        batch.create_index(
+            "ix_runs_workflow_execution_id",
+            ["workflow_execution_id"],
+        )
+        batch.drop_constraint("ck_runs_status", type_="check")
+        batch.drop_constraint("ck_runs_wait_marker_shape", type_="check")
+        batch.create_check_constraint(
+            "ck_runs_status",
+            "status IN ("
+            "'queued', 'running', "
+            "'waiting_for_approval', "
+            "'waiting_for_delegation', "
+            "'waiting_for_workflow', "
+            "'succeeded', 'failed', 'cancelled')",
+        )
+        batch.create_check_constraint(
+            "ck_runs_wait_marker_shape",
+            "((status = 'waiting_for_approval' AND "
+            "approval_request_id IS NOT NULL AND "
+            "delegation_request_id IS NULL AND "
+            "workflow_execution_id IS NULL) OR "
+            "(status = 'waiting_for_delegation' AND "
+            "delegation_request_id IS NOT NULL AND "
+            "approval_request_id IS NULL AND "
+            "workflow_execution_id IS NULL) OR "
+            "(status = 'waiting_for_workflow' AND "
+            "workflow_execution_id IS NOT NULL AND "
+            "approval_request_id IS NULL AND "
+            "delegation_request_id IS NULL) OR "
+            "(status NOT IN ('waiting_for_approval', "
+            "'waiting_for_delegation', 'waiting_for_workflow') AND "
+            "approval_request_id IS NULL AND "
+            "delegation_request_id IS NULL AND "
+            "(workflow_execution_id IS NULL OR status IN "
+            "('succeeded', 'failed', 'cancelled'))))",
+        )
     op.create_table(
         "workflow_executions",
         sa.Column("id", sa.String(), primary_key=True),
@@ -65,6 +111,11 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "status IN ('running', 'succeeded', 'failed', 'cancelled')",
             name="ck_workflow_executions_status",
+        ),
+        # Candidate key targeted by WorkflowNodeExecution's composite
+        # frozen-revision ownership FK.
+        sa.UniqueConstraint(
+            "id", "workflow_revision_id", name="uq_workflow_executions_id_revision"
         ),
         sa.CheckConstraint(
             "length(workflow_content_sha256) = 64 AND "
@@ -106,6 +157,7 @@ def upgrade() -> None:
         sa.Column(
             "workflow_node_id", sa.String(), sa.ForeignKey("workflow_nodes.id"), nullable=False
         ),
+        sa.Column("workflow_revision_id", sa.String(), nullable=False),
         sa.Column("node_key", sa.String(128), nullable=False),
         sa.Column("target_agent_id", sa.String(), sa.ForeignKey("agents.id"), nullable=False),
         sa.Column("target_agent_revision_id", sa.String(), nullable=False),
@@ -149,6 +201,19 @@ def upgrade() -> None:
             ["child_task_id", "target_agent_id"],
             ["task_agent_bindings.task_id", "task_agent_bindings.agent_id"],
             name="fk_workflow_node_executions_child_agent_ownership",
+        ),
+        # Structural ownership proof: the node must belong to the exact frozen
+        # revision recorded by this execution, and that revision must be the
+        # one the owning WorkflowExecution froze.
+        sa.ForeignKeyConstraint(
+            ["workflow_revision_id", "workflow_node_id"],
+            ["workflow_nodes.revision_id", "workflow_nodes.id"],
+            name="fk_workflow_node_executions_node_revision_ownership",
+        ),
+        sa.ForeignKeyConstraint(
+            ["workflow_execution_id", "workflow_revision_id"],
+            ["workflow_executions.id", "workflow_executions.workflow_revision_id"],
+            name="fk_workflow_node_executions_execution_revision_ownership",
         ),
     )
     op.create_index(
@@ -228,3 +293,29 @@ def downgrade() -> None:
     op.drop_table("task_workflow_bindings")
     op.drop_index("ix_workflow_executions_root_run_id", table_name="workflow_executions")
     op.drop_table("workflow_executions")
+    with op.batch_alter_table("runs") as batch:
+        batch.drop_constraint("ck_runs_wait_marker_shape", type_="check")
+        batch.drop_constraint("ck_runs_status", type_="check")
+        batch.create_check_constraint(
+            "ck_runs_status",
+            "status IN ("
+            "'queued', 'running', "
+            "'waiting_for_approval', "
+            "'waiting_for_delegation', "
+            "'succeeded', 'failed', 'cancelled')",
+        )
+        batch.create_check_constraint(
+            "ck_runs_wait_marker_shape",
+            "((status = 'waiting_for_approval' AND "
+            "approval_request_id IS NOT NULL AND "
+            "delegation_request_id IS NULL) OR "
+            "(status = 'waiting_for_delegation' AND "
+            "delegation_request_id IS NOT NULL AND "
+            "approval_request_id IS NULL) OR "
+            "(status NOT IN ('waiting_for_approval', "
+            "'waiting_for_delegation') AND "
+            "approval_request_id IS NULL AND "
+            "delegation_request_id IS NULL))",
+        )
+        batch.drop_index("ix_runs_workflow_execution_id")
+        batch.drop_column("workflow_execution_id")

@@ -177,6 +177,10 @@ class WorkflowNodeExecution:
     id: WorkflowNodeExecutionId
     workflow_execution_id: WorkflowExecutionId
     workflow_node_id: WorkflowNodeId
+    # Frozen structural ownership: the exact Workflow revision this node
+    # execution's node must belong to (must equal the owning WorkflowExecution's
+    # frozen workflow_revision_id).
+    workflow_revision_id: WorkflowRevisionId
     node_key: str
     target_agent_id: AgentId
     target_agent_revision_id: AgentRevisionId

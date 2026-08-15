@@ -24,6 +24,7 @@ from friday.application.errors import (
     WorkflowNotFound,
     WorkflowRevisionNotFound,
 )
+from friday.application.lifecycle_events import LifecycleEvents
 from friday.application.ports import (
     Clock,
     UnitOfWork,
@@ -54,6 +55,7 @@ from friday.domain import (
 )
 from friday.domain.agent import AgentRevision
 from friday.domain.errors import DomainValidationError
+from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.identifiers import (
     AgentId,
@@ -62,6 +64,7 @@ from friday.domain.identifiers import (
     WorkflowNodeId,
     WorkflowRevisionId,
 )
+from friday.domain.json_value import JsonValue
 from friday.domain.run import Run, RunStatus
 from friday.domain.workflow import WorkflowEdge, validate_workflow_revision_ownership
 
@@ -212,6 +215,70 @@ def _persist_execution(uow: UnitOfWork, execution: WorkflowExecution) -> None:
     )
 
 
+def _emit_workflow_event(
+    uow: UnitOfWork,
+    execution: WorkflowExecution,
+    event_type: RunEventType,
+    payload: dict[str, object],
+    now: datetime,
+) -> None:
+    root_run = uow.runs.get(execution.root_run_id)
+    if root_run is None:
+        return
+    marker = payload.get("node_execution_id", payload.get("workflow_execution_id"))
+    if marker is not None and any(
+        event.type is event_type
+        and isinstance(event.payload, dict)
+        and event.payload.get("node_execution_id", event.payload.get("workflow_execution_id"))
+        == marker
+        for event in uow.events.list_for_run(root_run.id)
+    ):
+        return
+    LifecycleEvents.append_run_events(
+        uow,
+        root_run,
+        now,
+        [(event_type, cast(JsonValue, payload), None)],
+    )
+
+
+def _emit_node_event(
+    uow: UnitOfWork,
+    node: WorkflowNodeExecution,
+    event_type: RunEventType,
+    now: datetime,
+) -> None:
+    execution = _workflow_uow(uow).workflow_executions.get(node.workflow_execution_id)
+    if execution is not None:
+        payload = {
+            "workflow_execution_id": str(execution.id),
+            "node_execution_id": str(node.id),
+            "node_key": node.node_key,
+        }
+        _emit_workflow_event(uow, execution, event_type, cast(dict[str, object], payload), now)
+
+
+def _root_workflow_result(
+    execution: WorkflowExecution,
+    workflow: Workflow,
+    revision: WorkflowRevision,
+    nodes: Iterable[WorkflowNodeExecution],
+) -> dict[str, object]:
+    ordered = sorted(
+        nodes,
+        key=lambda value: (value.node_key, str(value.id)),
+    )
+    return {
+        "workflow_execution_id": str(execution.id),
+        "workflow_id": str(workflow.id),
+        "workflow_key": workflow.key,
+        "workflow_revision_id": str(revision.id),
+        "workflow_revision_version": revision.version,
+        "workflow_revision_sha256": execution.workflow_content_sha256,
+        "nodes": {node.node_key: node.result_payload for node in ordered},
+    }
+
+
 def _dispatch_node(
     uow: UnitOfWork,
     node_execution: WorkflowNodeExecution,
@@ -247,6 +314,12 @@ def _dispatch_node(
         now,
     )
     _persist_node(uow, node_execution)
+    _emit_node_event(
+        uow,
+        node_execution,
+        RunEventType.WORKFLOW_NODE_DISPATCHED,
+        now,
+    )
 
 
 def _require_binding_exclusive(uow: UnitOfWork, task_id: TaskId) -> None:
@@ -347,7 +420,14 @@ class ResolveRunWorkflow:
                 digest,
                 now,
             )
-            workflow_uow.run_workflow_resolutions.create(resolution)
+            if not workflow_uow.run_workflow_resolutions.add_if_claimed(
+                resolution,
+                worker_id,
+                claim_token,
+                claim_generation,
+                now,
+            ):
+                raise ClaimLost("workflow resolution claim was lost before publication")
             if not uow.work_queue.is_claim_active(
                 run.id, worker_id, claim_token, claim_generation, self._clock.now()
             ):
@@ -482,6 +562,13 @@ class StartWorkflowExecution:
                 started_at=now,
             )
             workflow_uow.workflow_executions.create(execution)
+            _emit_workflow_event(
+                uow,
+                execution,
+                RunEventType.WORKFLOW_EXECUTION_STARTED,
+                {"workflow_execution_id": str(execution.id)},
+                now,
+            )
 
             node_executions: dict[WorkflowNodeId, WorkflowNodeExecution] = {}
             for node in sorted(revision.nodes, key=lambda value: (value.node_key, str(value.id))):
@@ -490,6 +577,7 @@ class StartWorkflowExecution:
                     id=WorkflowNodeExecutionId.new(),
                     workflow_execution_id=execution.id,
                     workflow_node_id=node.id,
+                    workflow_revision_id=revision.id,
                     node_key=node.node_key,
                     target_agent_id=node.target_agent_id,
                     target_agent_revision_id=agent_revision.id,
@@ -535,6 +623,29 @@ def _failure_from_child(run: Run) -> tuple[str, str]:
     return "child_run_failed", "Workflow child Run failed"
 
 
+def _bounded_child_result(
+    uow: UnitOfWork, child_run: Run, completed_at: datetime
+) -> dict[str, object]:
+    event = uow.events.latest_of_type_for_run(child_run.id, RunEventType.AGENT_FINISHED)
+    summary = ""
+    details: object = None
+    if event is not None and isinstance(event.payload, dict):
+        raw_summary = event.payload.get("summary")
+        summary = raw_summary if isinstance(raw_summary, str) else ""
+        details = event.payload.get("details")
+    result: dict[str, object] = {
+        "child_run_id": str(child_run.id),
+        "child_execution_id": str(child_run.execution_id),
+        "completed_at": (child_run.ended_at or completed_at).isoformat(),
+        "summary": summary[:4000],
+    }
+    if details is not None:
+        result["details"] = details
+    if len(json.dumps(result, sort_keys=True, separators=(",", ":"))) > 8000:
+        result.pop("details", None)
+    return result
+
+
 class ReconcileWorkflowExecution:
     """Advance a Workflow DAG to a durable fixed point after child outcomes."""
 
@@ -574,6 +685,10 @@ class ReconcileWorkflowExecution:
             if any(node.workflow_execution_id != execution.id for node in nodes):
                 raise WorkflowIntegrityError("Workflow node execution ownership mismatch")
             for node_execution in nodes:
+                if node_execution.workflow_revision_id != execution.workflow_revision_id:
+                    raise WorkflowIntegrityError(
+                        "Workflow node execution frozen revision ownership mismatch"
+                    )
                 definition = by_node_id[node_execution.workflow_node_id]
                 if (
                     node_execution.node_key != definition.node_key
@@ -596,6 +711,25 @@ class ReconcileWorkflowExecution:
                     or agent_revision.content_sha256 != node_execution.target_agent_revision_sha256
                 ):
                     raise WorkflowIntegrityError("Workflow node Agent revision snapshot is invalid")
+                if node_execution.child_task_id is not None:
+                    child_binding = uow.task_agent_bindings.get(node_execution.child_task_id)
+                    if (
+                        child_binding is None
+                        or child_binding.agent_id != node_execution.target_agent_id
+                    ):
+                        raise WorkflowIntegrityError("Workflow node child Task binding mismatch")
+                if (
+                    node_execution.child_task_id is not None
+                    and node_execution.child_run_id is not None
+                    and node_execution.child_execution_id is not None
+                ):
+                    child_run = uow.runs.get(node_execution.child_run_id)
+                    if (
+                        child_run is None
+                        or child_run.execution_id != node_execution.child_execution_id
+                        or child_run.task_id != node_execution.child_task_id
+                    ):
+                        raise WorkflowIntegrityError("Workflow node child Run lineage mismatch")
             node_executions = {node.workflow_node_id: node for node in nodes}
             now = self._clock.now()
 
@@ -622,15 +756,33 @@ class ReconcileWorkflowExecution:
             if child_run is None:
                 continue
             if child_run.status is RunStatus.SUCCEEDED:
-                node.succeed(now)
+                node.succeed(now, cast(JsonValue, _bounded_child_result(uow, child_run, now)))
                 _persist_node(uow, node)
+                _emit_node_event(
+                    uow,
+                    node,
+                    RunEventType.WORKFLOW_NODE_SUCCEEDED,
+                    now,
+                )
             elif child_run.status is RunStatus.FAILED:
                 code, message = _failure_from_child(child_run)
                 node.fail(now, code, message)
                 _persist_node(uow, node)
+                _emit_node_event(
+                    uow,
+                    node,
+                    RunEventType.WORKFLOW_NODE_FAILED,
+                    now,
+                )
             elif child_run.status is RunStatus.CANCELLED:
                 node.cancel(now)
                 _persist_node(uow, node)
+                _emit_node_event(
+                    uow,
+                    node,
+                    RunEventType.WORKFLOW_NODE_CANCELLED,
+                    now,
+                )
 
     @staticmethod
     def _schedule_to_fixed_point(
@@ -663,6 +815,12 @@ class ReconcileWorkflowExecution:
                 ):
                     node_execution.block(now)
                     _persist_node(uow, node_execution)
+                    _emit_node_event(
+                        uow,
+                        node_execution,
+                        RunEventType.WORKFLOW_NODE_BLOCKED,
+                        now,
+                    )
                     changed = True
                 elif all(
                     status is WorkflowNodeExecutionStatus.SUCCEEDED
@@ -690,8 +848,22 @@ class ReconcileWorkflowExecution:
         ):
             raise WorkflowIntegrityError("root Run Workflow ownership marker mismatch")
         if all(node.status is WorkflowNodeExecutionStatus.SUCCEEDED for node in nodes):
+            workflow, revision = _load_frozen_revision(
+                uow,
+                execution.workflow_id,
+                execution.workflow_revision_id,
+                execution.workflow_content_sha256,
+            )
+            result = _root_workflow_result(execution, workflow, revision, nodes)
             execution.succeed(now)
             _persist_execution(uow, execution)
+            _emit_workflow_event(
+                uow,
+                execution,
+                RunEventType.WORKFLOW_EXECUTION_SUCCEEDED,
+                result,
+                now,
+            )
             if root_run is not None and root_run.status is RunStatus.WAITING_FOR_WORKFLOW:
                 root_run.succeed_workflow(now)
                 uow.runs.save(root_run)
@@ -711,6 +883,17 @@ class ReconcileWorkflowExecution:
             message = failed.failure_message or "A Workflow node failed"
             execution.fail(now, code, message)
             _persist_execution(uow, execution)
+            _emit_workflow_event(
+                uow,
+                execution,
+                RunEventType.WORKFLOW_EXECUTION_FAILED,
+                {
+                    "workflow_execution_id": str(execution.id),
+                    "failure_code": code,
+                    "failure_message": message,
+                },
+                now,
+            )
             if root_run is not None and root_run.status is RunStatus.WAITING_FOR_WORKFLOW:
                 root_run.fail_workflow(now, Failure(code, message, False, FailureCause.RUNTIME))
                 uow.runs.save(root_run)
@@ -718,6 +901,17 @@ class ReconcileWorkflowExecution:
         elif cancelled is not None:
             execution.cancel(now, "A Workflow node was cancelled")
             _persist_execution(uow, execution)
+            _emit_workflow_event(
+                uow,
+                execution,
+                RunEventType.WORKFLOW_EXECUTION_FAILED,
+                {
+                    "workflow_execution_id": str(execution.id),
+                    "failure_code": "workflow_node_cancelled",
+                    "failure_message": "A Workflow node was cancelled",
+                },
+                now,
+            )
             if root_run is not None and root_run.status is RunStatus.WAITING_FOR_WORKFLOW:
                 root_run.cancel_workflow(now)
                 uow.runs.save(root_run)
@@ -727,6 +921,17 @@ class ReconcileWorkflowExecution:
             message = "A Workflow node was blocked by a predecessor"
             execution.fail(now, code, message)
             _persist_execution(uow, execution)
+            _emit_workflow_event(
+                uow,
+                execution,
+                RunEventType.WORKFLOW_EXECUTION_FAILED,
+                {
+                    "workflow_execution_id": str(execution.id),
+                    "failure_code": code,
+                    "failure_message": message,
+                },
+                now,
+            )
             if root_run is not None and root_run.status is RunStatus.WAITING_FOR_WORKFLOW:
                 root_run.fail_workflow(now, Failure(code, message, False, FailureCause.RUNTIME))
                 uow.runs.save(root_run)

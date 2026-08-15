@@ -532,6 +532,78 @@
         "created_at": { "type": "string" }
       }
     },
+    "WorkflowExecutionInspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root_run_id",
+        "workflow_execution_id",
+        "workflow_id",
+        "workflow_revision_id",
+        "workflow_revision_sha256",
+        "status",
+        "started_at",
+        "completed_at",
+        "failure_code",
+        "failure_message"
+      ],
+      "properties": {
+        "root_run_id": { "type": "string" },
+        "workflow_execution_id": { "type": "string" },
+        "workflow_id": { "type": "string" },
+        "workflow_revision_id": { "type": "string" },
+        "workflow_revision_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "status": { "type": "string" },
+        "started_at": { "type": "string" },
+        "completed_at": { "type": ["string", "null"] },
+        "failure_code": { "type": ["string", "null"] },
+        "failure_message": { "type": ["string", "null"] }
+      }
+    },
+    "WorkflowNodeExecutionInspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_execution_id",
+        "node_key",
+        "target_agent_id",
+        "target_agent_revision_id",
+        "target_agent_revision_sha256",
+        "status",
+        "child_task_id",
+        "child_run_id",
+        "child_execution_id",
+        "result_payload",
+        "failure_code",
+        "failure_message",
+        "created_at",
+        "started_at",
+        "completed_at"
+      ],
+      "properties": {
+        "node_execution_id": { "type": "string" },
+        "node_key": { "type": "string" },
+        "target_agent_id": { "type": "string" },
+        "target_agent_revision_id": { "type": "string" },
+        "target_agent_revision_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "status": { "type": "string" },
+        "child_task_id": { "type": ["string", "null"] },
+        "child_run_id": { "type": ["string", "null"] },
+        "child_execution_id": { "type": ["string", "null"] },
+        "result_payload": {},
+        "failure_code": { "type": ["string", "null"] },
+        "failure_message": { "type": ["string", "null"] },
+        "created_at": { "type": "string" },
+        "started_at": { "type": ["string", "null"] },
+        "completed_at": { "type": ["string", "null"] }
+      }
+    },
     "AgentRevision": {
       "type": "object",
       "additionalProperties": false,
@@ -1218,6 +1290,17 @@
     "workflowRevisions": {
       "type": "array",
       "items": { "$ref": "#/definitions/WorkflowRevision" }
+    },
+    "workflowExecutionInspection": {
+      "$ref": "#/definitions/WorkflowExecutionInspection"
+    },
+    "workflowNodeExecutionInspection": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/WorkflowNodeExecutionInspection" }
+    },
+    "workflowNodeExecutionInspections": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/WorkflowNodeExecutionInspection" }
     },
     "agentPage": {
       "type": "object",

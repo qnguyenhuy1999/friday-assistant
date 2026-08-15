@@ -1018,6 +1018,9 @@ class WorkflowExecutionRow(Base):
         UniqueConstraint("root_run_id", name="uq_workflow_executions_root_run_id"),
         # This candidate key is the target of RunRow's composite ownership FK.
         UniqueConstraint("id", "root_run_id", name="uq_workflow_executions_id_root_run"),
+        # This candidate key is the target of WorkflowNodeExecutionRow's
+        # composite frozen-revision ownership FK.
+        UniqueConstraint("id", "workflow_revision_id", name="uq_workflow_executions_id_revision"),
         CheckConstraint(
             "status IN ('running', 'succeeded', 'failed', 'cancelled')",
             name="ck_workflow_executions_status",
@@ -1114,10 +1117,24 @@ class WorkflowNodeExecutionRow(Base):
             ["task_agent_bindings.task_id", "task_agent_bindings.agent_id"],
             name="fk_workflow_node_executions_child_agent_ownership",
         ),
+        # Structural ownership proof: the node must belong to the exact frozen
+        # revision recorded by this execution, and that revision must be the
+        # one the owning WorkflowExecution froze.
+        ForeignKeyConstraint(
+            ["workflow_revision_id", "workflow_node_id"],
+            ["workflow_nodes.revision_id", "workflow_nodes.id"],
+            name="fk_workflow_node_executions_node_revision_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["workflow_execution_id", "workflow_revision_id"],
+            ["workflow_executions.id", "workflow_executions.workflow_revision_id"],
+            name="fk_workflow_node_executions_execution_revision_ownership",
+        ),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
     workflow_execution_id: Mapped[str] = mapped_column(ForeignKey("workflow_executions.id"))
     workflow_node_id: Mapped[str] = mapped_column(ForeignKey("workflow_nodes.id"))
+    workflow_revision_id: Mapped[str]
     node_key: Mapped[str]
     target_agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"))
     target_agent_revision_id: Mapped[str]

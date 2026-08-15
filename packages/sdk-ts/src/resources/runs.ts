@@ -2,6 +2,8 @@ import {
   validateRun,
   validateRunAgentResolution,
   validateRunPage,
+  validateWorkflowExecutionInspection,
+  validateWorkflowNodeExecutionInspection,
   validateDelegationRequest,
   validateDelegationRequests,
   type CreateDelegationRequestBody,
@@ -11,6 +13,8 @@ import {
   type Run,
   type RunAgentResolution,
   type RunResult,
+  type WorkflowExecutionInspection,
+  type WorkflowNodeExecutionInspection,
   type RunSkillBinding,
   type SkillFeedback,
   validateRunResult,
@@ -81,6 +85,20 @@ export class RunsResource {
       method: "GET",
       path: `/v1/runs/${runId}/skills/${skillId}/feedback`,
       validate: validateSkillFeedback,
+    });
+  }
+  getWorkflow(runId: string) {
+    return this.http.requestJson<WorkflowExecutionInspection>({
+      method: "GET",
+      path: `/v1/runs/${runId}/workflow`,
+      validate: validateWorkflowExecutionInspection,
+    });
+  }
+  getWorkflowNodes(runId: string) {
+    return this.http.requestJson<WorkflowNodeExecutionInspection[]>({
+      method: "GET",
+      path: `/v1/runs/${runId}/workflow/nodes`,
+      validate: validateWorkflowNodeExecutionInspection,
     });
   }
   getAgent(runId: string) {

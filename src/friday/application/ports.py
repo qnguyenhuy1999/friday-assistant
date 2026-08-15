@@ -283,6 +283,9 @@ class IWorkflowNodeExecutionRepository(Protocol):
     ) -> list[WorkflowNodeExecution]: ...
 
     def get_by_child_task_id(self, child_task_id: TaskId) -> WorkflowNodeExecution | None: ...
+    def get_by_child_execution_id(
+        self, child_execution_id: RunId
+    ) -> WorkflowNodeExecution | None: ...
 
     def update_by_child_execution_id(
         self,
@@ -299,6 +302,14 @@ class IWorkflowNodeExecutionRepository(Protocol):
 class IRunWorkflowResolutionRepository(Protocol):
     def create(self, resolution: RunWorkflowResolution) -> None: ...
     def get_by_run_id(self, run_id: RunId) -> RunWorkflowResolution | None: ...
+    def add_if_claimed(
+        self,
+        resolution: RunWorkflowResolution,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool: ...
 
 
 class ITaskWorkflowBindingRepository(Protocol):

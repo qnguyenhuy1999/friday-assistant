@@ -398,3 +398,86 @@ def test_failed_predecessor_blocks_downstream_nodes() -> None:
         next(node for node in nodes if node.node_key == "node-2").status
         is WorkflowNodeExecutionStatus.BLOCKED
     )
+
+
+def test_reconcile_failed_child_fails_root_and_execution() -> None:
+    uow, factory, clock, _, _, _, _, run, execution = _bootstrap(edges=[(0, 1)])
+    first = next(
+        node
+        for node in uow.workflow_node_executions.list_by_execution(execution.id)
+        if node.node_key == "node-0"
+    )
+    child = uow.runs.get(first.child_run_id)  # type: ignore[arg-type]
+    assert child is not None
+    child.start(T0)
+    child.fail(
+        T1,
+        __import__("friday.domain", fromlist=["Failure"]).Failure(
+            "child_failed",
+            "failure",
+            False,
+            __import__("friday.domain", fromlist=["FailureCause"]).FailureCause.RUNTIME,
+        ),
+    )
+    uow.runs.save(child)
+    nodes = ReconcileWorkflowExecution(factory, clock).execute(execution.id)
+    assert (
+        next(n for n in nodes if n.node_key == "node-0").status
+        is WorkflowNodeExecutionStatus.FAILED
+    )
+    assert (
+        next(n for n in nodes if n.node_key == "node-1").status
+        is WorkflowNodeExecutionStatus.BLOCKED
+    )
+    assert uow.workflow_executions.get(execution.id).status is WorkflowExecutionStatus.FAILED  # type: ignore[union-attr]
+    assert uow.runs.get(run.id).status is RunStatus.FAILED  # type: ignore[union-attr]
+
+
+def test_reconcile_cancelled_child_cancels_root_and_execution() -> None:
+    uow, factory, clock, _, _, _, _, run, execution = _bootstrap(edges=[])
+    node = uow.workflow_node_executions.list_by_execution(execution.id)[0]
+    child = uow.runs.get(node.child_run_id)  # type: ignore[arg-type]
+    assert child is not None
+    child.cancel(T1)
+    uow.runs.save(child)
+    ReconcileWorkflowExecution(factory, clock).execute(execution.id)
+    assert uow.workflow_executions.get(execution.id).status is WorkflowExecutionStatus.CANCELLED  # type: ignore[union-attr]
+    assert uow.runs.get(run.id).status is RunStatus.CANCELLED  # type: ignore[union-attr]
+
+
+def test_reconcile_success_is_idempotent_and_root_result_is_deterministic() -> None:
+    uow, factory, clock, _, _, _, _, run, execution = _bootstrap(edges=[])
+    node = uow.workflow_node_executions.list_by_execution(execution.id)[0]
+    child = uow.runs.get(node.child_run_id)  # type: ignore[arg-type]
+    assert child is not None
+    child.start(T0)
+    child.succeed(T1)
+    uow.runs.save(child)
+    ReconcileWorkflowExecution(factory, clock).execute(execution.id)
+    before = list(uow.events.list_for_run(run.id))
+    ReconcileWorkflowExecution(factory, clock).execute(execution.id)
+    after = list(uow.events.list_for_run(run.id))
+    assert len(after) == len(before)
+    from friday.domain.event import RunEventType
+
+    succeeded = [e for e in after if e.type is RunEventType.WORKFLOW_EXECUTION_SUCCEEDED]
+    assert len(succeeded) == 1
+    assert isinstance(succeeded[0].payload, dict)
+    assert succeeded[0].payload["workflow_execution_id"] == str(execution.id)
+
+
+def test_start_workflow_execution_is_idempotent_for_existing_execution() -> None:
+    uow, factory, _, workflow, _, _, _, root_run, execution = _bootstrap(edges=[])
+    result = StartWorkflowExecution(
+        uow_factory=factory,
+        clock=FakeClock(T1),
+        runtime_registry=_runtime_registry(),
+    ).execute(
+        root_run_id=root_run.id,
+        workflow_id=workflow.id,
+        worker_id="worker-1",
+        claim_token="claim-token",
+        claim_generation=1,
+    )
+    assert result.id == execution.id
+    assert result.workflow_revision_id == execution.workflow_revision_id

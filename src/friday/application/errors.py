@@ -236,6 +236,16 @@ class DelegatedManualRetryForbidden(EntityConflict):
         super().__init__("delegated_manual_retry_forbidden")
 
 
+class WorkflowNodeManualRetryForbidden(EntityConflict):
+    def __init__(self) -> None:
+        super().__init__("workflow_node_manual_retry_forbidden")
+
+
+class WorkflowCancelNotSupportedWhileActive(EntityConflict):
+    def __init__(self) -> None:
+        super().__init__("workflow_cancel_not_supported_while_active")
+
+
 class ConcurrencyConflict(ApplicationError):
     """A write lost an optimistic-concurrency or stale-data race."""
 

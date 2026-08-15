@@ -106,34 +106,6 @@ def upgrade() -> None:
     )
     op.create_index("ix_workflow_edges_revision_id", "workflow_edges", ["revision_id"])
 
-    # The execution table is introduced by 0035, so 0034 owns only the
-    # nullable marker and the Run state/check shape.  0035 adds the FK back to
-    # the execution table once its target exists.
-    with op.batch_alter_table("runs") as batch:
-        batch.add_column(sa.Column("workflow_execution_id", sa.String(), nullable=True))
-        batch.create_index("ix_runs_workflow_execution_id", ["workflow_execution_id"])
-        batch.drop_constraint("ck_runs_status", type_="check")
-        batch.drop_constraint("ck_runs_wait_marker_shape", type_="check")
-        batch.create_check_constraint(
-            "ck_runs_status",
-            "status IN ('queued', 'running', 'waiting_for_approval', "
-            "'waiting_for_delegation', 'waiting_for_workflow', 'succeeded', 'failed', "
-            "'cancelled')",
-        )
-        batch.create_check_constraint(
-            "ck_runs_wait_marker_shape",
-            "((status = 'waiting_for_approval' AND approval_request_id IS NOT NULL "
-            "AND delegation_request_id IS NULL AND workflow_execution_id IS NULL) OR "
-            "(status = 'waiting_for_delegation' AND delegation_request_id IS NOT NULL "
-            "AND approval_request_id IS NULL AND workflow_execution_id IS NULL) OR "
-            "(status = 'waiting_for_workflow' AND workflow_execution_id IS NOT NULL "
-            "AND approval_request_id IS NULL AND delegation_request_id IS NULL) OR "
-            "(status NOT IN ('waiting_for_approval', 'waiting_for_delegation', "
-            "'waiting_for_workflow') AND approval_request_id IS NULL "
-            "AND delegation_request_id IS NULL AND "
-            "(workflow_execution_id IS NULL OR status IN ('succeeded', 'failed', 'cancelled'))))",
-        )
-
 
 def _reject() -> None:
     bind = op.get_bind()
@@ -144,25 +116,6 @@ def _reject() -> None:
 
 def downgrade() -> None:
     _reject()
-    with op.batch_alter_table("runs") as batch:
-        batch.drop_constraint("ck_runs_wait_marker_shape", type_="check")
-        batch.drop_constraint("ck_runs_status", type_="check")
-        batch.create_check_constraint(
-            "ck_runs_status",
-            "status IN ('queued', 'running', 'waiting_for_approval', "
-            "'waiting_for_delegation', 'succeeded', 'failed', 'cancelled')",
-        )
-        batch.create_check_constraint(
-            "ck_runs_wait_marker_shape",
-            "((status = 'waiting_for_approval' AND approval_request_id IS NOT NULL "
-            "AND delegation_request_id IS NULL) OR "
-            "(status = 'waiting_for_delegation' AND delegation_request_id IS NOT NULL "
-            "AND approval_request_id IS NULL) OR "
-            "(status NOT IN ('waiting_for_approval', 'waiting_for_delegation') "
-            "AND approval_request_id IS NULL AND delegation_request_id IS NULL))",
-        )
-        batch.drop_index("ix_runs_workflow_execution_id")
-        batch.drop_column("workflow_execution_id")
     op.drop_index("ix_workflow_edges_revision_id", table_name="workflow_edges")
     op.drop_table("workflow_edges")
     op.drop_index("ix_workflow_nodes_revision_id", table_name="workflow_nodes")

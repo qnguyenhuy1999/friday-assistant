@@ -5,8 +5,12 @@
   "description": "An append-only fact emitted during Run execution, ordered by sequence. Mirrors friday.domain.event.RunEvent. Memory event payloads are bounded metadata only and must not contain note bodies, query text, absolute paths, Graphify stderr, or model prompts.",
   "type": "object",
   "properties": {
-    "id": { "$ref": "../definitions/identifier.json" },
-    "run_id": { "$ref": "../definitions/identifier.json" },
+    "id": {
+      "$ref": "../definitions/identifier.json"
+    },
+    "run_id": {
+      "$ref": "../definitions/identifier.json"
+    },
     "type": {
       "enum": [
         "run_created",
@@ -41,16 +45,35 @@
         "memory_write_requested",
         "memory_write_committed",
         "memory_write_conflicted",
-        "memory_index_marked_stale"
+        "memory_index_marked_stale",
+        "workflow_execution_started",
+        "workflow_node_dispatched",
+        "workflow_node_succeeded",
+        "workflow_node_failed",
+        "workflow_node_cancelled",
+        "workflow_node_blocked",
+        "workflow_execution_succeeded",
+        "workflow_execution_failed"
       ]
     },
-    "sequence": { "type": "integer", "minimum": 1 },
-    "occurred_at": { "$ref": "../definitions/timestamp.json" },
-    "payload": { "$ref": "../definitions/json_value.json" },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "occurred_at": {
+      "$ref": "../definitions/timestamp.json"
+    },
+    "payload": {
+      "$ref": "../definitions/json_value.json"
+    },
     "step_id": {
       "anyOf": [
-        { "$ref": "../definitions/identifier.json" },
-        { "type": "null" }
+        {
+          "$ref": "../definitions/identifier.json"
+        },
+        {
+          "type": "null"
+        }
       ]
     }
   },
@@ -84,28 +107,57 @@
         "properties": {
           "payload": {
             "anyOf": [
-              { "type": "null" },
+              {
+                "type": "null"
+              },
               {
                 "type": "object",
                 "properties": {
-                  "record_id": { "type": "string", "maxLength": 256 },
+                  "record_id": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
                   "record_ids": {
                     "type": "array",
-                    "items": { "type": "string", "maxLength": 256 },
+                    "items": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
                     "maxItems": 5000
                   },
-                  "candidate_count": { "type": "integer", "minimum": 0 },
-                  "excerpt_count": { "type": "integer", "minimum": 0 },
-                  "count": { "type": "integer", "minimum": 0 },
+                  "candidate_count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "excerpt_count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
                   "vault_relative_path": {
                     "type": "string",
                     "maxLength": 1024,
                     "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).*$"
                   },
-                  "source_snapshot_id": { "type": "string", "maxLength": 256 },
-                  "index_snapshot_id": { "type": "string", "maxLength": 256 },
-                  "failure_code": { "type": "string", "maxLength": 128 },
-                  "retrieval_mode": { "type": "string", "maxLength": 128 }
+                  "source_snapshot_id": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "index_snapshot_id": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "failure_code": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "retrieval_mode": {
+                    "type": "string",
+                    "maxLength": 128
+                  }
                 },
                 "additionalProperties": false
               }

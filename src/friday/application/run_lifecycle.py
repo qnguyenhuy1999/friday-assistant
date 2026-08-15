@@ -17,6 +17,8 @@ from friday.application.errors import (
     EntityConflict,
     RunNotFound,
     TaskNotFound,
+    WorkflowCancelNotSupportedWhileActive,
+    WorkflowNodeManualRetryForbidden,
 )
 from friday.application.lifecycle_events import LifecycleEvents, run_result
 from friday.application.ports import UnitOfWork
@@ -35,6 +37,7 @@ from friday.domain.run import TERMINAL_RUN_STATUSES, Run, RunStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
 from friday.domain.task import TaskStatus
 from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
+from friday.domain.workflow_execution import WorkflowExecutionStatus
 
 
 def _fail_run_event_specs(
@@ -237,6 +240,13 @@ class CancelRun(_RunCancellation):
                     uow.commit()
                     return run_result(latest)
                 raise EntityConflict("run is terminal")
+            active_workflows = [
+                execution
+                for execution in uow.workflow_executions.list_by_root_run_id(run.id)
+                if execution.status is WorkflowExecutionStatus.RUNNING
+            ]
+            if active_workflows and run.status is RunStatus.WAITING_FOR_WORKFLOW:
+                raise WorkflowCancelNotSupportedWhileActive()
             self._cancel_run(uow, run, self._clock.now())
             uow.commit()
             return run_result(run)
@@ -269,6 +279,11 @@ class RetryFailedRun(LifecycleEvents):
                 raise RunNotFound(command.run_id)
             if source.status is not RunStatus.FAILED:
                 raise EntityConflict("only failed runs may be retried")
+            if (
+                uow.workflow_node_executions.get_by_child_execution_id(source.execution_id)
+                is not None
+            ):
+                raise WorkflowNodeManualRetryForbidden()
             if uow.delegation_requests.get_for_child_execution(source.execution_id) is not None:
                 raise DelegatedManualRetryForbidden()
             task = uow.tasks.get(source.task_id)

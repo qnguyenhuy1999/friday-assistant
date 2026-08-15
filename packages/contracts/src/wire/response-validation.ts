@@ -9,6 +9,8 @@ export {
   validateWorkflowPage,
   validateWorkflowRevision,
   validateWorkflowRevisions,
+  validateWorkflowExecutionInspection,
+  validateWorkflowNodeExecutionInspection,
   validateTaskAgentBinding,
   validateTaskWorkflowBinding,
   validateRunAgentResolution,

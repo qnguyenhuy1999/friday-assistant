@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import text
 
 from friday.application.agent_registry import (
     ActivateAgentRevision,
@@ -17,6 +18,10 @@ from friday.application.agent_registry import (
 from friday.application.brain_runtime_registry import BrainRuntimeRegistry
 from friday.application.errors import EntityConflict
 from friday.application.ports import UnitOfWorkFactory
+from friday.application.workflow_execution_use_cases import (
+    ReconcileWorkflowExecution,
+    StartWorkflowExecution,
+)
 from friday.application.workflow_registry import (
     ActivateWorkflowRevision,
     CreateWorkflow,
@@ -26,6 +31,7 @@ from friday.domain import (
     Agent,
     AgentRevisionSourceKind,
     Run,
+    RunStatus,
     RunWorkflowResolution,
     RunWorkflowResolutionId,
     Task,
@@ -137,6 +143,7 @@ def test_workflow_execution_and_node_round_trip_preserves_frozen_provenance(
         id=WorkflowNodeExecutionId.new(),
         workflow_execution_id=execution.id,
         workflow_node_id=node.id,
+        workflow_revision_id=revision.id,
         node_key=node.node_key,
         target_agent_id=agent.id,
         target_agent_revision_id=agent_revision_id,
@@ -208,6 +215,7 @@ def test_unique_run_resolution_and_workflow_node_identity_are_database_enforced(
         WorkflowNodeExecutionId.new(),
         execution.id,
         node.id,
+        revision.id,
         node.node_key,
         agent.id,
         agent_revision_id := active_agent_revision_id(factory, agent.id),
@@ -233,6 +241,7 @@ def test_unique_run_resolution_and_workflow_node_identity_are_database_enforced(
         WorkflowNodeExecutionId.new(),
         execution.id,
         node.id,
+        revision.id,
         node.node_key,
         agent.id,
         agent_revision_id,
@@ -253,3 +262,159 @@ def active_agent_revision_id(factory: UnitOfWorkFactory, agent_id: object) -> Ag
         agent = uow.agents.get(agent_id)  # type: ignore[arg-type]
         assert agent is not None and agent.active_revision_id is not None
         return agent.active_revision_id
+
+
+def test_workflow_resolution_rejects_stale_claim_and_accepts_current_claim(
+    tmp_path: Path,
+) -> None:
+    factory = _factory(tmp_path)
+    _, run, _, workflow, revision = _seed(factory)
+    with factory() as uow:
+        uow.work_queue.enqueue(run.id, AT, AT)
+        uow.commit()
+    with factory() as stale:
+        assert stale.work_queue.try_claim(run.id, "worker-a", "token-a", AT, AT.replace(hour=13))
+        item = stale.work_queue.get(run.id)
+        assert item is not None
+        generation = item.claim_generation
+        stale.commit()
+    now = AT.replace(hour=14)
+    with factory() as current:
+        assert current.work_queue.try_claim(
+            run.id, "worker-b", "token-b", now, now.replace(hour=15)
+        )
+        current_item = current.work_queue.get(run.id)
+        assert current_item is not None
+        resolution = RunWorkflowResolution(
+            RunWorkflowResolutionId.new(),
+            run.id,
+            workflow.id,
+            revision.id,
+            revision.content_sha256,
+            now,
+        )
+        assert current.run_workflow_resolutions.add_if_claimed(
+            resolution,
+            "worker-b",
+            "token-b",
+            current_item.claim_generation,
+            now,
+        )
+        current.commit()
+    with factory() as stale_retry:
+        assert not stale_retry.run_workflow_resolutions.add_if_claimed(
+            resolution, "worker-a", "token-a", generation, now
+        )
+        stale_retry.commit()
+    with factory() as uow:
+        assert uow.run_workflow_resolutions.get_by_run_id(run.id) == resolution
+
+
+def test_reconcile_rejects_raw_sql_node_provenance_corruption(
+    tmp_path: Path,
+) -> None:
+    factory = _factory(tmp_path)
+    task, run, agent, workflow, revision = _seed(factory)
+    node = revision.nodes[0]
+    agent_revision_id = active_agent_revision_id(factory, agent.id)
+    execution = WorkflowExecution(
+        id=WorkflowExecutionId.new(),
+        root_run_id=run.id,
+        workflow_id=workflow.id,
+        workflow_revision_id=revision.id,
+        workflow_content_sha256=revision.content_sha256,
+        status=WorkflowExecutionStatus.RUNNING,
+        started_at=AT,
+    )
+    node_execution = WorkflowNodeExecution(
+        id=WorkflowNodeExecutionId.new(),
+        workflow_execution_id=execution.id,
+        workflow_node_id=node.id,
+        workflow_revision_id=revision.id,
+        node_key=node.node_key,
+        target_agent_id=agent.id,
+        target_agent_revision_id=agent_revision_id,
+        target_agent_revision_sha256=agent_revision_sha(factory, agent_revision_id),
+        status=WorkflowNodeExecutionStatus.PENDING,
+        created_at=AT,
+    )
+    resolution = RunWorkflowResolution(
+        id=RunWorkflowResolutionId.new(),
+        run_id=run.id,
+        workflow_id=workflow.id,
+        workflow_revision_id=revision.id,
+        content_sha256=revision.content_sha256,
+        resolved_at=AT,
+    )
+    run.wait_for_workflow(AT, execution.id)
+    with factory() as uow:
+        uow.run_workflow_resolutions.create(resolution)
+        uow.workflow_executions.create(execution)
+        uow.workflow_node_executions.create(node_execution)
+        uow.runs.save(run)
+        uow.commit()
+    with factory() as uow:
+        uow._session.execute(
+            text("UPDATE workflow_node_executions SET node_key='corrupt' WHERE id=:id"),
+            {"id": str(node_execution.id)},
+        )
+        uow.commit()
+    from friday.application.errors import WorkflowIntegrityError
+
+    with pytest.raises(WorkflowIntegrityError):
+        ReconcileWorkflowExecution(factory, _Clock()).execute(execution.id)
+
+
+def test_sqlite_terminal_publication_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    factory = _factory(tmp_path)
+    task, run, _, workflow, _ = _seed(factory)
+
+    with factory() as uow:
+        uow.task_workflow_bindings.bind(
+            TaskWorkflowBinding.new(task_id=task.id, workflow_id=workflow.id, at=AT)
+        )
+        uow.work_queue.enqueue(run.id, AT, AT)
+        uow.commit()
+
+    with factory() as uow:
+        assert uow.work_queue.try_claim(run.id, "worker-a", "token-a", AT, AT.replace(hour=13))
+        item = uow.work_queue.get(run.id)
+        assert item is not None
+        claim_generation = item.claim_generation
+        uow.commit()
+
+    execution = StartWorkflowExecution(factory, _Clock(), _runtime_registry()).execute(
+        run.id, workflow.id, "worker-a", "token-a", claim_generation
+    )
+
+    with factory() as uow:
+        nodes = uow.workflow_node_executions.list_by_execution(execution.id)
+        assert len(nodes) == 1
+        child_run_id = nodes[0].child_run_id
+        assert child_run_id is not None
+
+    # Complete the real dispatched child in a separate transaction.  This
+    # proves the reconciler observes durable state rather than a process-local
+    # mutation or synthetic foreign-key values.
+    with factory() as uow:
+        child_run = uow.runs.get(child_run_id)
+        assert child_run is not None
+        child_run.start(AT)
+        child_run.succeed(AT)
+        uow.runs.save(child_run)
+        uow.commit()
+
+    first = ReconcileWorkflowExecution(factory, _Clock()).execute(execution.id)
+    second = ReconcileWorkflowExecution(factory, _Clock()).execute(execution.id)
+
+    assert first[0].status is WorkflowNodeExecutionStatus.SUCCEEDED
+    assert second[0].status is WorkflowNodeExecutionStatus.SUCCEEDED
+    with factory() as uow:
+        loaded_execution = uow.workflow_executions.get(execution.id)
+        loaded_run = uow.runs.get(run.id)
+        assert loaded_execution is not None
+        assert loaded_run is not None
+        assert loaded_execution.status is WorkflowExecutionStatus.SUCCEEDED
+        assert loaded_run.status is RunStatus.SUCCEEDED

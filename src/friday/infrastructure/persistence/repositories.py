@@ -626,6 +626,48 @@ class RunWorkflowResolutionRepository:
     def create(self, resolution: RunWorkflowResolution) -> None:
         self._session.add(run_workflow_resolution_to_row(resolution))
 
+    def add_if_claimed(
+        self,
+        resolution: RunWorkflowResolution,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        from friday.infrastructure.persistence.models import RunWorkItemRow
+
+        statement = (
+            insert(RunWorkflowResolutionRow)
+            .from_select(
+                [
+                    "id",
+                    "run_id",
+                    "workflow_id",
+                    "workflow_revision_id",
+                    "content_sha256",
+                    "resolved_at",
+                ],
+                select(
+                    literal(str(resolution.id)),
+                    literal(str(resolution.run_id)),
+                    literal(str(resolution.workflow_id)),
+                    literal(str(resolution.workflow_revision_id)),
+                    literal(resolution.content_sha256),
+                    literal(resolution.resolved_at),
+                ).where(
+                    RunWorkItemRow.run_id == str(resolution.run_id),
+                    RunWorkItemRow.claimed_by == worker_id,
+                    RunWorkItemRow.claim_token == claim_token,
+                    RunWorkItemRow.claim_generation == claim_generation,
+                    RunWorkItemRow.lease_expires_at.is_not(None),
+                    RunWorkItemRow.lease_expires_at > now,
+                ),
+            )
+            .on_conflict_do_nothing(index_elements=["run_id"])
+        )
+        result = cast(CursorResult[Any], self._session.execute(statement))
+        return bool(result.rowcount)
+
     def get_by_run_id(self, run_id: RunId) -> RunWorkflowResolution | None:
         row = self._session.scalar(
             select(RunWorkflowResolutionRow).where(RunWorkflowResolutionRow.run_id == str(run_id))

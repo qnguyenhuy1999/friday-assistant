@@ -48,6 +48,7 @@ def _node(execution: WorkflowExecution | None = None) -> WorkflowNodeExecution:
         id=WorkflowNodeExecutionId.new(),
         workflow_execution_id=execution.id,
         workflow_node_id=WorkflowNodeId.new(),
+        workflow_revision_id=execution.workflow_revision_id,
         node_key="node-a",
         target_agent_id=AgentId.new(),
         target_agent_revision_id=AgentRevisionId.new(),

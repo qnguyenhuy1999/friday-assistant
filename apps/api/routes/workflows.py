@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from apps.api.dependencies import get_clock, get_uow_factory
 from apps.api.pagination import (
@@ -17,13 +17,15 @@ from apps.api.schemas.workflows import (
     CreateWorkflowBody,
     CreateWorkflowRevisionBody,
     WorkflowEdgeResponse,
+    WorkflowExecutionInspectionResponse,
+    WorkflowNodeExecutionInspectionResponse,
     WorkflowNodeResponse,
     WorkflowPageResponse,
     WorkflowResponse,
     WorkflowRevisionResponse,
 )
 from friday.application.errors import WorkflowRevisionNotFound
-from friday.application.ports import Clock, UnitOfWorkFactory
+from friday.application.ports import Clock, UnitOfWorkFactory, WorkflowExecutionUnitOfWork
 from friday.application.workflow_registry import (
     ActivateWorkflowRevision,
     ArchiveWorkflow,
@@ -35,10 +37,17 @@ from friday.application.workflow_registry import (
     WorkflowEdgeInput,
     WorkflowNodeInput,
 )
-from friday.domain import Workflow, WorkflowRevision, WorkflowRevisionSourceKind
-from friday.domain.identifiers import WorkflowId, WorkflowRevisionId
+from friday.domain import (
+    Workflow,
+    WorkflowExecution,
+    WorkflowNodeExecution,
+    WorkflowRevision,
+    WorkflowRevisionSourceKind,
+)
+from friday.domain.identifiers import RunId, WorkflowId, WorkflowRevisionId
 
 router = APIRouter(prefix="/v1/workflows", tags=["workflows"])
+workflow_inspection_router = APIRouter(prefix="/v1/runs", tags=["runs"])
 Uow = Annotated[UnitOfWorkFactory, Depends(get_uow_factory)]
 ClockDep = Annotated[Clock, Depends(get_clock)]
 
@@ -218,3 +227,74 @@ def disable(workflow_id: UUID, uow: Uow, clock: ClockDep) -> WorkflowResponse:
 )
 def archive(workflow_id: UUID, uow: Uow, clock: ClockDep) -> WorkflowResponse:
     return _workflow(ArchiveWorkflow(uow, clock).execute(WorkflowId.parse(str(workflow_id))))
+
+
+def _workflow_execution_inspection(x: WorkflowExecution) -> WorkflowExecutionInspectionResponse:
+    return WorkflowExecutionInspectionResponse(
+        root_run_id=str(x.root_run_id),
+        workflow_execution_id=str(x.id),
+        workflow_id=str(x.workflow_id),
+        workflow_revision_id=str(x.workflow_revision_id),
+        workflow_revision_sha256=x.workflow_content_sha256,
+        status=x.status.value,
+        started_at=x.started_at,
+        completed_at=x.completed_at,
+        failure_code=x.failure_code,
+        failure_message=x.failure_message,
+    )
+
+
+def _workflow_node_inspection(
+    x: WorkflowNodeExecution,
+) -> WorkflowNodeExecutionInspectionResponse:
+    return WorkflowNodeExecutionInspectionResponse(
+        node_execution_id=str(x.id),
+        node_key=x.node_key,
+        target_agent_id=str(x.target_agent_id),
+        target_agent_revision_id=str(x.target_agent_revision_id),
+        target_agent_revision_sha256=x.target_agent_revision_sha256,
+        status=x.status.value,
+        child_task_id=str(x.child_task_id) if x.child_task_id else None,
+        child_run_id=str(x.child_run_id) if x.child_run_id else None,
+        child_execution_id=str(x.child_execution_id) if x.child_execution_id else None,
+        result_payload=x.result_payload,
+        failure_code=x.failure_code,
+        failure_message=x.failure_message,
+        created_at=x.created_at,
+        started_at=x.started_at,
+        completed_at=x.completed_at,
+    )
+
+
+def _workflow_execution_for_run(session: object, run_id: UUID) -> WorkflowExecution:
+    wf = cast(WorkflowExecutionUnitOfWork, session)
+    items = wf.workflow_executions.list_by_root_run_id(RunId.parse(str(run_id)))
+    if not items:
+        raise HTTPException(404, "workflow_execution_not_found")
+    return items[-1]
+
+
+@workflow_inspection_router.get(
+    "/{run_id}/workflow",
+    response_model=WorkflowExecutionInspectionResponse,
+    operation_id="getRunWorkflowExecution",
+)
+def get_run_workflow(run_id: UUID, uow: Uow) -> WorkflowExecutionInspectionResponse:
+    with uow() as session:
+        value = _workflow_execution_for_run(session, run_id)
+        return _workflow_execution_inspection(value)
+
+
+@workflow_inspection_router.get(
+    "/{run_id}/workflow/nodes",
+    response_model=list[WorkflowNodeExecutionInspectionResponse],
+    operation_id="listRunWorkflowNodes",
+)
+def list_run_workflow_nodes(
+    run_id: UUID, uow: Uow
+) -> list[WorkflowNodeExecutionInspectionResponse]:
+    with uow() as session:
+        execution = _workflow_execution_for_run(session, run_id)
+        wf = cast(WorkflowExecutionUnitOfWork, session)
+        nodes = wf.workflow_node_executions.list_by_execution(execution.id)
+        return [_workflow_node_inspection(node) for node in nodes]

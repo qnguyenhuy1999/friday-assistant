@@ -8,7 +8,7 @@ import time
 from typing import Protocol
 
 from apps.worker.operational_logging import lifecycle_log
-from friday.application.errors import ClaimLost
+from friday.application.errors import ClaimLost, WorkflowIntegrityError
 from friday.application.materialize_due_schedule import MaterializeDueSchedules
 from friday.application.ports import Clock, UnitOfWorkFactory
 from friday.application.run_processor import ClaimContext, ProcessingOutcome, RunProcessor
@@ -32,8 +32,7 @@ from friday.application.workflow_execution_use_cases import (
     StartWorkflowExecution,
 )
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import RunId, TaskId
-from friday.domain.workflow_execution import TaskWorkflowBinding
+from friday.domain.identifiers import RunId, TaskId, WorkflowId
 
 logger = logging.getLogger(__name__)
 
@@ -117,8 +116,29 @@ class WorkerLoop:
         }
         lifecycle_log(logger, logging.INFO, "worker.claimed_run", **fields)
 
-        workflow_binding = self._workflow_binding_for_task(claim.task_id)
-        if workflow_binding is not None:
+        try:
+            frozen_workflow_id = self._frozen_workflow_id_for_run(claim.run_id, claim.task_id)
+        except Exception:  # noqa: BLE001 - fail closed without invoking a brain
+            lifecycle_log(logger, logging.ERROR, "worker.workflow_routing_conflict", **fields)
+            try:
+                self._apply_failed.execute(
+                    claim.run_id,
+                    claim.worker_id,
+                    claim.claim_token,
+                    claim.claim_generation,
+                    Failure(
+                        code="workflow_routing_conflict",
+                        message="Run Workflow routing state is inconsistent.",
+                        retryable=False,
+                        cause=FailureCause.RUNTIME,
+                    ),
+                )
+            except ClaimLost:
+                lifecycle_log(
+                    logger, logging.INFO, "worker.workflow_bootstrap_failure_fenced", **fields
+                )
+            return True
+        if frozen_workflow_id is not None:
             if self._workflow_starter is None:
                 lifecycle_log(
                     logger, logging.ERROR, "worker.workflow_bootstrap_not_configured", **fields
@@ -144,7 +164,7 @@ class WorkerLoop:
             try:
                 self._workflow_starter.execute(
                     claim.run_id,
-                    workflow_binding.workflow_id,
+                    frozen_workflow_id,
                     claim.worker_id,
                     claim.claim_token,
                     claim.claim_generation,
@@ -335,13 +355,27 @@ class WorkerLoop:
             lifecycle_log(logger, logging.INFO, f"worker.outcome_{outcome.kind}", **fields)
         return True
 
-    def _workflow_binding_for_task(self, task_id: TaskId) -> TaskWorkflowBinding | None:
+    def _frozen_workflow_id_for_run(self, run_id: RunId, task_id: TaskId) -> WorkflowId | None:
+        """Route by durable frozen state first: an existing
+        RunWorkflowResolution is the exact frozen Workflow and always wins
+        over the Task's current (mutable) WorkflowBinding, so rebinding or
+        unbinding the Task after a Run is frozen can never make that Run
+        fall through to ordinary Agent processing or resolve a different
+        Workflow. A resolution that disagrees with a still-present binding
+        is treated as corruption and rejected before any dispatch."""
         if self._uow_factory is None:
             return None
         with self._uow_factory() as uow:
+            resolution = uow.run_workflow_resolutions.get_by_run_id(run_id)
             binding = uow.task_workflow_bindings.get_by_task_id(task_id)
             uow.commit()
-            return binding
+        if resolution is not None:
+            if binding is not None and binding.workflow_id != resolution.workflow_id:
+                raise WorkflowIntegrityError(
+                    "Run Workflow resolution disagrees with the current Task Workflow binding"
+                )
+            return resolution.workflow_id
+        return binding.workflow_id if binding is not None else None
 
     def _reconcile_workflow_child(self, run_id: RunId) -> None:
         if self._uow_factory is None or self._workflow_reconciler is None:

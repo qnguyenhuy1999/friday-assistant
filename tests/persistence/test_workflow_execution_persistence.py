@@ -16,8 +16,14 @@ from friday.application.agent_registry import (
     CreateAgentRevision,
 )
 from friday.application.brain_runtime_registry import BrainRuntimeRegistry
-from friday.application.errors import EntityConflict
+from friday.application.commands import CancelRunCommand, RetryFailedRunCommand
+from friday.application.errors import (
+    EntityConflict,
+    WorkflowCancelNotSupportedWhileActive,
+    WorkflowNodeManualRetryForbidden,
+)
 from friday.application.ports import UnitOfWorkFactory
+from friday.application.run_lifecycle import CancelRun, RetryFailedRun
 from friday.application.workflow_execution_use_cases import (
     ReconcileWorkflowExecution,
     StartWorkflowExecution,
@@ -46,6 +52,8 @@ from friday.domain import (
     WorkflowRevision,
     WorkflowRevisionSourceKind,
 )
+from friday.domain.event import RunEventType
+from friday.domain.failure import Failure, FailureCause
 from friday.domain.identifiers import AgentRevisionId, RunId, TaskId
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
@@ -418,3 +426,182 @@ def test_sqlite_terminal_publication_is_idempotent(
         assert loaded_run is not None
         assert loaded_execution.status is WorkflowExecutionStatus.SUCCEEDED
         assert loaded_run.status is RunStatus.SUCCEEDED
+
+
+def _dispatch_single_node_workflow(
+    factory: UnitOfWorkFactory,
+) -> tuple[Task, Run, Workflow, WorkflowExecution, RunId]:
+    task, run, _, workflow, _ = _seed(factory)
+    with factory() as uow:
+        uow.task_workflow_bindings.bind(
+            TaskWorkflowBinding.new(task_id=task.id, workflow_id=workflow.id, at=AT)
+        )
+        uow.work_queue.enqueue(run.id, AT, AT)
+        uow.commit()
+    with factory() as uow:
+        assert uow.work_queue.try_claim(run.id, "worker-a", "token-a", AT, AT.replace(hour=13))
+        item = uow.work_queue.get(run.id)
+        assert item is not None
+        claim_generation = item.claim_generation
+        uow.commit()
+    execution = StartWorkflowExecution(factory, _Clock(), _runtime_registry()).execute(
+        run.id, workflow.id, "worker-a", "token-a", claim_generation
+    )
+    with factory() as uow:
+        nodes = uow.workflow_node_executions.list_by_execution(execution.id)
+        assert len(nodes) == 1
+        child_run_id = nodes[0].child_run_id
+        assert child_run_id is not None
+    return task, run, workflow, execution, child_run_id
+
+
+def test_manual_retry_of_workflow_owned_child_execution_is_rejected(
+    tmp_path: Path,
+) -> None:
+    factory = _factory(tmp_path)
+    _, _, _, _, child_run_id = _dispatch_single_node_workflow(factory)
+
+    with factory() as uow:
+        child_run = uow.runs.get(child_run_id)
+        assert child_run is not None
+        child_run.start(AT)
+        child_run.fail(
+            AT, Failure("worker_timeout", "worker timed out", True, FailureCause.TIMEOUT)
+        )
+        uow.runs.save(child_run)
+        uow.commit()
+
+    with factory() as uow:
+        before_runs = [(r.id, r.status) for r in uow.runs.list_for_execution(child_run_id)]
+        before_queue = uow.work_queue.get(child_run_id)
+        before_node = uow.workflow_node_executions.get_by_child_execution_id(child_run_id)
+        assert before_node is not None
+        before_node_status = before_node.status
+
+    with pytest.raises(
+        WorkflowNodeManualRetryForbidden, match="workflow_node_manual_retry_forbidden"
+    ):
+        RetryFailedRun(factory, _Clock()).execute(RetryFailedRunCommand(child_run_id))
+
+    with factory() as uow:
+        after_runs = [(r.id, r.status) for r in uow.runs.list_for_execution(child_run_id)]
+        after_queue = uow.work_queue.get(child_run_id)
+        after_node = uow.workflow_node_executions.get_by_child_execution_id(child_run_id)
+        assert after_runs == before_runs
+        assert after_queue == before_queue
+        assert after_node is not None and after_node.status == before_node_status
+
+
+def test_manual_cancel_of_active_workflow_root_is_rejected(
+    tmp_path: Path,
+) -> None:
+    factory = _factory(tmp_path)
+    _, run, _, execution, child_run_id = _dispatch_single_node_workflow(factory)
+
+    with factory() as uow:
+        before_run = uow.runs.get(run.id)
+        assert before_run is not None
+        before_status = before_run.status
+        before_execution_id = before_run.workflow_execution_id
+        before_child = uow.runs.get(child_run_id)
+        assert before_child is not None
+        before_child_status = before_child.status
+
+    with pytest.raises(
+        WorkflowCancelNotSupportedWhileActive,
+        match="workflow_cancel_not_supported_while_active",
+    ):
+        CancelRun(factory, _Clock()).execute(CancelRunCommand(run.id))
+
+    with factory() as uow:
+        after_run = uow.runs.get(run.id)
+        assert after_run is not None
+        assert after_run.status == before_status == RunStatus.WAITING_FOR_WORKFLOW
+        assert after_run.workflow_execution_id == before_execution_id
+        after_child = uow.runs.get(child_run_id)
+        assert after_child is not None
+        assert after_child.status == before_child_status
+        loaded_execution = uow.workflow_executions.get(execution.id)
+        assert loaded_execution is not None
+        assert loaded_execution.status is WorkflowExecutionStatus.RUNNING
+
+
+def test_child_cancellation_terminalizes_workflow_without_parent_propagation(
+    tmp_path: Path,
+) -> None:
+    factory = _factory(tmp_path)
+    _, run, _, execution, child_run_id = _dispatch_single_node_workflow(factory)
+
+    with factory() as uow:
+        child_run = uow.runs.get(child_run_id)
+        assert child_run is not None
+        child_run.start(AT)
+        child_run.cancel(AT)
+        uow.runs.save(child_run)
+        uow.commit()
+
+    nodes = ReconcileWorkflowExecution(factory, _Clock()).execute(execution.id)
+
+    assert nodes[0].status is WorkflowNodeExecutionStatus.CANCELLED
+    with factory() as uow:
+        loaded_execution = uow.workflow_executions.get(execution.id)
+        loaded_run = uow.runs.get(run.id)
+        assert loaded_execution is not None
+        assert loaded_run is not None
+        assert loaded_execution.status is WorkflowExecutionStatus.CANCELLED
+        assert loaded_run.status is RunStatus.CANCELLED
+
+
+def test_root_workflow_result_is_deterministic_durable_and_authority_free(
+    tmp_path: Path,
+) -> None:
+    factory = _factory(tmp_path)
+    _, run, workflow, execution, child_run_id = _dispatch_single_node_workflow(factory)
+
+    with factory() as uow:
+        child_run = uow.runs.get(child_run_id)
+        assert child_run is not None
+        child_run.start(AT)
+        child_run.succeed(AT)
+        uow.runs.save(child_run)
+        uow.commit()
+
+    ReconcileWorkflowExecution(factory, _Clock()).execute(execution.id)
+
+    # Simulate a process restart: open a brand-new UnitOfWorkFactory against
+    # the same sqlite file instead of reusing the one already in scope.
+    restarted_factory = create_unit_of_work_factory(
+        create_session_factory(create_engine(f"sqlite:///{tmp_path / 'workflow-execution.db'}"))
+    )
+    with restarted_factory() as uow:
+        events = uow.events.list_for_run(run.id)
+        succeeded = next(
+            event for event in events if event.type is RunEventType.WORKFLOW_EXECUTION_SUCCEEDED
+        )
+        result = succeeded.payload
+        assert isinstance(result, dict)
+        assert result["workflow_id"] == str(workflow.id)
+        assert result["workflow_key"] == workflow.key
+        assert result["workflow_execution_id"] == str(execution.id)
+        nodes = result["nodes"]
+        assert isinstance(nodes, dict)
+        assert set(nodes.keys()) == {"root"}
+        root_result = nodes["root"]
+        assert isinstance(root_result, dict)
+        assert root_result["child_run_id"] == str(child_run_id)
+
+        # Re-running reconciliation must not emit a second success event.
+        ReconcileWorkflowExecution(restarted_factory, _Clock()).execute(execution.id)
+        assert (
+            len(
+                [
+                    event
+                    for event in uow.events.list_for_run(run.id)
+                    if event.type is RunEventType.WORKFLOW_EXECUTION_SUCCEEDED
+                ]
+            )
+            == 1
+        )
+
+        assert uow.approvals.list_for_run(run.id) == []
+        assert uow.tool_invocations.list_for_run(run.id) == []

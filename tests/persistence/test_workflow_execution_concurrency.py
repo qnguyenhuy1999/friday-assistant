@@ -59,11 +59,21 @@ class _Clock:
 
 
 class _LaterClock:
-    """Used only to claim a retry Run whose available_at is offset by the
-    retry policy's backoff delay past AT."""
+    """A retry's created_at must be unambiguously later than its source's --
+    get_latest_for_execution breaks created_at ties by (random) id -- and a
+    retry's available_at is offset from its creation time by the retry
+    policy's backoff delay."""
 
     def now(self) -> datetime:
         return AT + timedelta(minutes=1)
+
+
+class _EvenLaterClock:
+    """Used to claim a retry Run created via _LaterClock, whose
+    available_at is further offset by the retry policy's backoff delay."""
+
+    def now(self) -> datetime:
+        return AT + timedelta(minutes=2)
 
 
 def _factory(tmp_path: Path) -> UnitOfWorkFactory:
@@ -290,9 +300,14 @@ def test_automatic_retry_keeps_node_dispatched_and_inherits_frozen_agent_revisio
     assert resolution is not None
     assert str(resolution.agent_id) == agent_ids["a"]
 
+    # get_latest_for_execution breaks created_at ties by id, which is a
+    # random UUID -- advance the clock so the retry's created_at is
+    # unambiguously later than the source's, exactly like the existing
+    # delegation retry proof (test_phase21_step2_real_sqlite.py) already
+    # does for the same reason.
     ApplyFailedOutcome(
         factory,
-        _Clock(),
+        _LaterClock(),
         retry_policy=RetryPolicy(2, timedelta(seconds=1), 1, timedelta(seconds=1)),
     ).execute(
         child_claim.run_id,
@@ -319,13 +334,17 @@ def test_automatic_retry_keeps_node_dispatched_and_inherits_frozen_agent_revisio
         assert str(retry_resolution.agent_id) == agent_ids["a"]
 
     retry_claim = ClaimNextRun(
-        factory, _LaterClock(), worker_id="worker-retry", lease_duration=LEASE, candidate_limit=10
+        factory,
+        _EvenLaterClock(),
+        worker_id="worker-retry",
+        lease_duration=LEASE,
+        candidate_limit=10,
     ).execute()
     assert retry_claim is not None
     with factory() as uow:
         retried_run = uow.runs.get(retry_claim.run_id)
         assert retried_run is not None
-        retried_run.succeed(_LaterClock().now())
+        retried_run.succeed(_EvenLaterClock().now())
         uow.runs.save(retried_run)
         uow.commit()
 

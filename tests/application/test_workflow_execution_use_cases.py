@@ -6,7 +6,12 @@ import pytest
 
 from friday.application.agent_registry import ReplaceTaskAgent
 from friday.application.brain_runtime_registry import BrainRuntimeRegistry
-from friday.application.errors import WorkflowBindingError, WorkflowExecutionError
+from friday.application.errors import (
+    ClaimLost,
+    WorkflowBindingError,
+    WorkflowExecutionError,
+    WorkflowNotFound,
+)
 from friday.application.workflow_execution_use_cases import (
     BindTaskWorkflow,
     ReconcileWorkflowExecution,
@@ -549,3 +554,46 @@ def test_start_fails_closed_for_archived_workflow_resolved_after_binding() -> No
             run.id, workflow.id, WORKER, TOKEN, generation
         )
     assert not uow.workflow_executions.items
+
+
+def test_resolve_rejects_stale_claim() -> None:
+    uow = FakeUnitOfWork()
+    factory = CountingUnitOfWorkFactory(uow)
+    clock = FakeClock(T0)
+    agent = _agent(uow, key="claim-check")
+    workflow, _, _ = _workflow(uow, [agent], [])
+    task, run, generation = _root(uow, factory, workflow)
+
+    with pytest.raises(ClaimLost):
+        ResolveRunWorkflow(factory, clock).execute(
+            run.id, workflow.id, WORKER, "wrong-token", generation
+        )
+
+
+def test_resolve_fails_closed_when_workflow_disappears_after_binding() -> None:
+    uow = FakeUnitOfWork()
+    factory = CountingUnitOfWorkFactory(uow)
+    clock = FakeClock(T0)
+    agent = _agent(uow, key="vanishing-target")
+    workflow, _, _ = _workflow(uow, [agent], [])
+    task, run, generation = _root(uow, factory, workflow)
+    # Remove the Workflow entirely after the Task was already bound to it,
+    # simulating durable state that disagrees with the binding.
+    del uow.workflow_repo.items[workflow.id]
+
+    with pytest.raises(WorkflowNotFound):
+        ResolveRunWorkflow(factory, clock).execute(run.id, workflow.id, WORKER, TOKEN, generation)
+
+
+def test_resolve_fails_closed_when_workflow_is_disabled() -> None:
+    uow = FakeUnitOfWork()
+    factory = CountingUnitOfWorkFactory(uow)
+    clock = FakeClock(T0)
+    agent = _agent(uow, key="disabled-target")
+    workflow, _, _ = _workflow(uow, [agent], [])
+    task, run, generation = _root(uow, factory, workflow)
+    workflow.disable(T0)
+    uow.workflows.save(workflow)
+
+    with pytest.raises(WorkflowBindingError, match="active"):
+        ResolveRunWorkflow(factory, clock).execute(run.id, workflow.id, WORKER, TOKEN, generation)

@@ -353,12 +353,12 @@ def test_reconcile_rejects_raw_sql_node_provenance_corruption(
         uow.workflow_node_executions.create(node_execution)
         uow.runs.save(run)
         uow.commit()
-    with factory() as uow:
-        uow._session.execute(
+    engine = create_engine(f"sqlite:///{tmp_path / 'workflow-execution.db'}")
+    with engine.begin() as connection:
+        connection.execute(
             text("UPDATE workflow_node_executions SET node_key='corrupt' WHERE id=:id"),
             {"id": str(node_execution.id)},
         )
-        uow.commit()
     from friday.application.errors import WorkflowIntegrityError
 
     with pytest.raises(WorkflowIntegrityError):

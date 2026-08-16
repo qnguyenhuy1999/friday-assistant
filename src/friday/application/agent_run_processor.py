@@ -39,7 +39,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from friday.application.agent_registry import ResolveRunAgent
 from friday.application.brain_runtime import BrainRequest, BrainResponse, BrainRuntime
@@ -79,7 +79,7 @@ from friday.application.memory.query_builder import (
 from friday.application.memory.query_builder import (
     RunSnapshot as MemoryRunSnapshot,
 )
-from friday.application.ports import Clock, UnitOfWorkFactory
+from friday.application.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from friday.application.run_processor import ClaimContext, ProcessingOutcome
 from friday.application.runtime_actions import (
     BrainAction,
@@ -106,6 +106,7 @@ from friday.application.tool_authorization import (
 )
 from friday.application.tool_gateway import ToolCall, ToolGateway, ToolRiskAssessment
 from friday.application.worker_coordination import VerifyRunClaim
+from friday.application.workflow_context import build_workflow_node_context
 from friday.domain.errors import DomainValidationError
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
@@ -835,72 +836,17 @@ class AgentRunProcessor:
 
 def _workflow_context_for_run(uow: object, execution_id: object) -> str | None:
     nodes_repo = getattr(uow, "workflow_node_executions", None)
-    executions_repo = getattr(uow, "workflow_executions", None)
-    revisions_repo = getattr(uow, "workflow_revisions", None)
-    workflows_repo = getattr(uow, "workflows", None)
     if (
         nodes_repo is None
-        or executions_repo is None
-        or revisions_repo is None
-        or workflows_repo is None
+        or getattr(uow, "workflow_executions", None) is None
+        or getattr(uow, "workflow_revisions", None) is None
+        or getattr(uow, "workflows", None) is None
     ):
         return None
     node_execution = nodes_repo.get_by_child_execution_id(execution_id)
     if node_execution is None:
         return None
-    execution = executions_repo.get(node_execution.workflow_execution_id)
-    if execution is None:
-        raise ValueError("workflow_execution_context_missing")
-    revision = revisions_repo.get(execution.workflow_revision_id)
-    workflow = workflows_repo.get(execution.workflow_id)
-    if revision is None or workflow is None or revision.workflow_id != workflow.id:
-        raise ValueError("workflow_execution_context_invalid")
-    definition = next(
-        (node for node in revision.nodes if node.id == node_execution.workflow_node_id), None
-    )
-    if definition is None or definition.node_key != node_execution.node_key:
-        raise ValueError("workflow_node_context_invalid")
-    payload_json = json.dumps(definition.input_payload, sort_keys=True, separators=(",", ":"))
-    lines = [
-        "# WORKFLOW NODE",
-        f"workflow_key: {workflow.key}",
-        f"workflow_revision_version: {revision.version}",
-        f"workflow_revision_sha256: {execution.workflow_content_sha256}",
-        f"node_key: {definition.node_key}",
-        f"objective: {definition.objective}",
-        f"input_payload: {payload_json}",
-        f"expected_output_contract: {definition.expected_output_contract}",
-    ]
-    predecessors = sorted(
-        (edge.from_node_id for edge in revision.edges if edge.to_node_id == definition.id),
-        key=lambda value: next(node.node_key for node in revision.nodes if node.id == value),
-    )
-    if predecessors:
-        all_nodes = {
-            item.workflow_node_id: item for item in nodes_repo.list_by_execution(execution.id)
-        }
-        lines.append("# WORKFLOW PREDECESSORS")
-        for predecessor_id in predecessors:
-            predecessor = all_nodes.get(predecessor_id)
-            if (
-                predecessor is None
-                or predecessor.status.value != "succeeded"
-                or predecessor.result_payload is None
-            ):
-                raise ValueError("workflow_predecessor_context_unavailable")
-            predecessor_definition = next(
-                node for node in revision.nodes if node.id == predecessor_id
-            )
-            result = json.dumps(
-                predecessor.result_payload,
-                sort_keys=True,
-                separators=(",", ":"),
-            )[:2000]
-            lines.append(f"- {predecessor_definition.node_key}: {result}")
-    rendered = "\n".join(lines)
-    if len(rendered) > 6000:
-        raise ValueError("workflow_context_too_large")
-    return rendered
+    return build_workflow_node_context(cast(UnitOfWork, uow), node_execution)
 
 
 def _bounded_read(repository: object, run_id: object, limit: int) -> Any:

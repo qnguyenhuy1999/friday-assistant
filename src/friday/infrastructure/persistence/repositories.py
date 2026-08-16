@@ -559,7 +559,16 @@ class WorkflowNodeExecutionRepository:
         if result.rowcount:
             return
         current = self._session.get(WorkflowNodeExecutionRow, str(node_execution_id))
-        if current is not None and current.status == status.value:
+        # Terminal outcome transitions (succeeded/failed/cancelled/blocked)
+        # re-apply the same durable value idempotently.  DISPATCHED is the one
+        # transition that materializes a child Task/Run/queue item, so a stale
+        # dispatcher must fail closed and roll back its orphan tree rather than
+        # silently treat a lost dispatch race as success.
+        if (
+            current is not None
+            and current.status == status.value
+            and status is not WorkflowNodeExecutionStatus.DISPATCHED
+        ):
             return
         raise ConcurrencyConflict("Workflow node execution status transition raced")
 

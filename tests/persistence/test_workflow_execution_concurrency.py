@@ -2,14 +2,18 @@
 Workflow scheduler, per PR #28 review item F11. No process-local locks are
 used as correctness primitives anywhere here -- every guarantee comes from
 the database (claim fencing, unique constraints) or from the reconciler's
-own idempotent fixed-point logic.
+own idempotent fixed-point logic.  Races are genuine: threads are released
+by a barrier only once both independent sessions have reached the same
+pre-write boundary, so they overlap before either publishes.
 """
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config
 
@@ -20,7 +24,7 @@ from friday.application.agent_registry import (
     ResolveRunAgent,
 )
 from friday.application.brain_runtime_registry import BrainRuntimeRegistry
-from friday.application.ports import UnitOfWorkFactory
+from friday.application.ports import UnitOfWork, UnitOfWorkFactory
 from friday.application.retry_policy import RetryPolicy
 from friday.application.worker_coordination import ApplyFailedOutcome, ClaimNextRun
 from friday.application.workflow_execution_use_cases import (
@@ -35,9 +39,11 @@ from friday.application.workflow_registry import (
 from friday.domain import (
     AgentRevisionSourceKind,
     Run,
+    RunWorkflowResolution,
     Task,
     TaskWorkflowBinding,
     WorkflowExecutionStatus,
+    WorkflowNodeExecution,
     WorkflowNodeExecutionStatus,
     WorkflowRevisionSourceKind,
 )
@@ -537,3 +543,170 @@ def test_workflow_node_execution_status_update_race_is_idempotent_or_conflict_fr
         assert final is not None
         assert final.status is WorkflowNodeExecutionStatus.SUCCEEDED
         assert uow.work_queue.get(run.id) is None
+
+
+def test_two_bootstrap_sessions_racing_before_publication_converge_to_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two independent StartWorkflowExecution sessions overlap before either
+    publishes (a barrier releases them at the same pre-write boundary) and
+    the durable DB converges to exactly one resolution/execution/node set and
+    root dispatch.  The loser of the write race fails and rolls back."""
+    from friday.infrastructure.persistence.repositories import RunWorkflowResolutionRepository
+
+    factory = _factory(tmp_path)
+    _, run, _, workflow_id = _seed_graph(factory, edges=[], node_keys=["root"])
+    claim = ClaimNextRun(
+        factory, _Clock(), worker_id="worker-a", lease_duration=LEASE, candidate_limit=10
+    ).execute()
+    assert claim is not None
+    workflow_id_parsed = WorkflowId.parse(workflow_id)
+
+    barrier = threading.Barrier(2)
+    original_create = RunWorkflowResolutionRepository.create
+
+    def synchronized_create(
+        self: RunWorkflowResolutionRepository, resolution: RunWorkflowResolution
+    ) -> None:
+        barrier.wait(timeout=10)
+        original_create(self, resolution)
+
+    monkeypatch.setattr(RunWorkflowResolutionRepository, "create", synchronized_create)
+
+    def attempt(index: int) -> None:
+        try:
+            execution = StartWorkflowExecution(factory, _Clock(), _runtime_registry()).execute(
+                run.id,
+                workflow_id_parsed,
+                claim.worker_id,
+                claim.claim_token,
+                claim.claim_generation,
+            )
+            outcomes.append(str(execution.id))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    outcomes: list[str] = []
+    errors: list[BaseException] = []
+    threads = [threading.Thread(target=attempt, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+    assert not any(thread.is_alive() for thread in threads)
+    # The barrier forces both sessions to have read the not-yet-published
+    # state, so exactly one may win the write race; the other must fail and
+    # roll back.  A no-op sequential replay would instead return idempotently.
+    assert len(outcomes) == 1
+    assert len(errors) == 1
+
+    with factory() as uow:
+        executions = uow.workflow_executions.list_by_root_run_id(run.id)
+        assert len(executions) == 1
+        node_executions = uow.workflow_node_executions.list_by_execution(executions[0].id)
+        assert len(node_executions) == 1
+        node = node_executions[0]
+        assert node.status is WorkflowNodeExecutionStatus.DISPATCHED
+        assert node.child_run_id is not None
+        assert node.child_execution_id is not None
+        assert uow.run_workflow_resolutions.get_by_run_id(run.id) is not None
+        root = uow.runs.get(run.id)
+        assert root is not None and root.status is RunStatus.WAITING_FOR_WORKFLOW
+        assert len(uow.runs.list_for_execution(node.child_execution_id)) == 1
+        assert uow.work_queue.get(node.child_run_id) is not None
+
+
+def test_two_reconcilers_racing_fanin_schedule_converge_to_one_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two independent ReconcileWorkflowExecution sessions discover the join
+    node at the same moment (both predecessors terminal) and overlap before
+    either publishes its dispatch -- the durable DB converges to exactly one
+    child Task, one Run, one queue item, and one dispatch event for the join."""
+    import friday.application.workflow_execution_use_cases as use_cases
+
+    factory = _factory(tmp_path)
+    _, run, _, workflow_id = _seed_graph(
+        factory,
+        edges=[("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")],
+        node_keys=["a", "b", "c", "d"],
+    )
+    claim = ClaimNextRun(
+        factory, _Clock(), worker_id="worker-a", lease_duration=LEASE, candidate_limit=10
+    ).execute()
+    assert claim is not None
+    workflow_id_parsed = WorkflowId.parse(workflow_id)
+    execution = StartWorkflowExecution(factory, _Clock(), _runtime_registry()).execute(
+        run.id, workflow_id_parsed, claim.worker_id, claim.claim_token, claim.claim_generation
+    )
+
+    def _node(node_key: str) -> WorkflowNodeExecution:
+        with factory() as uow:
+            nodes = uow.workflow_node_executions.list_by_execution(execution.id)
+            return next(n for n in nodes if n.node_key == node_key)
+
+    node_a = _node("a")
+    assert node_a.child_run_id is not None
+    _succeed_child(factory, node_a.child_run_id)
+    ReconcileWorkflowExecution(factory, _Clock()).execute(execution.id)
+    node_b, node_c = _node("b"), _node("c")
+    assert node_b.child_run_id is not None
+    assert node_c.child_run_id is not None
+    _succeed_child(factory, node_b.child_run_id)
+    _succeed_child(factory, node_c.child_run_id)
+
+    barrier = threading.Barrier(2)
+    original_persist = use_cases._persist_node
+
+    def synchronized_persist(uow: UnitOfWork, node_execution: WorkflowNodeExecution) -> None:
+        # The very first durable transition a reconcile makes is predecessor
+        # "b" going DISPATCHED -> SUCCEEDED.  Syncing both sessions there puts
+        # the two reconcilers at the same pre-write boundary: each has already
+        # concluded that all of "d"'s predecessors are terminal and that "d"
+        # is dispatchable.  One session then wins the write race; the other
+        # fails closed and rolls back before ever publishing a second "d".
+        if node_execution.node_key == "b":
+            barrier.wait(timeout=10)
+        return original_persist(uow, node_execution)
+
+    monkeypatch.setattr(use_cases, "_persist_node", synchronized_persist)
+
+    def attempt(index: int) -> None:
+        try:
+            outcomes.append(
+                len(ReconcileWorkflowExecution(factory, _Clock()).execute(execution.id))
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    outcomes: list[int] = []
+    errors: list[BaseException] = []
+    threads = [threading.Thread(target=attempt, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+    assert not any(thread.is_alive() for thread in threads)
+    assert len(outcomes) == 1
+    assert len(errors) == 1
+
+    with factory() as uow:
+        node_d = next(
+            n
+            for n in uow.workflow_node_executions.list_by_execution(execution.id)
+            if n.node_key == "d"
+        )
+        assert node_d.status is WorkflowNodeExecutionStatus.DISPATCHED
+        assert node_d.child_task_id is not None
+        assert node_d.child_run_id is not None
+        assert node_d.child_execution_id is not None
+        assert len(uow.runs.list_for_execution(node_d.child_execution_id)) == 1
+        assert uow.work_queue.get(node_d.child_run_id) is not None
+        dispatch_events = [
+            e
+            for e in uow.events.list_for_run(run.id)
+            if e.type is RunEventType.WORKFLOW_NODE_DISPATCHED
+            and isinstance(e.payload, dict)
+            and e.payload.get("node_key") == "d"
+        ]
+        assert len(dispatch_events) == 1

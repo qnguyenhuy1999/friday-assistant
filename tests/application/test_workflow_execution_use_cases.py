@@ -405,6 +405,77 @@ def test_failed_predecessor_blocks_downstream_nodes() -> None:
     )
 
 
+def test_oversized_predecessor_result_blocks_dependent_before_child_creation() -> None:
+    from typing import cast
+
+    from friday.domain.json_value import JsonValue
+
+    uow, factory, clock, _, _, _, _, run, execution = _bootstrap(edges=[(0, 1)])
+    nodes = uow.workflow_node_executions.list_by_execution(execution.id)
+    first = next(node for node in nodes if node.node_key == "node-0")
+    child = uow.runs.get(first.child_run_id)  # type: ignore[arg-type]
+    assert child is not None
+    child.start(T0)
+    child.succeed(T1)
+    uow.runs.save(child)
+    # An oversized durable predecessor result (per-result bound is exceeded)
+    # must fail the dependent node closed at dispatch time -- never truncated.
+    first.succeed(T1, cast(JsonValue, {"blob": "x" * 4000}))
+    reconciled = ReconcileWorkflowExecution(factory, clock).execute(execution.id)
+    dependent = next(node for node in reconciled if node.node_key == "node-1")
+    assert dependent.status is WorkflowNodeExecutionStatus.BLOCKED
+    assert dependent.failure_code == "workflow_context_too_large"
+    assert dependent.child_task_id is None
+    assert dependent.child_run_id is None
+    assert dependent.child_execution_id is None
+    # Only node-0's own child remains queued — the dependent was never
+    # dispatched, so no BrainRuntime execution could have been started.
+    assert len(uow.work_queue_repo.items) == 1
+    assert not any(
+        task.title.startswith("Workflow: node-1") for task in uow.task_repo.items.values()
+    )
+    completed = uow.workflow_executions.get(execution.id)
+    assert completed is not None
+    assert completed.status is WorkflowExecutionStatus.FAILED
+    assert completed.failure_code == "workflow_context_too_large"
+    assert uow.runs.get(run.id).status is RunStatus.FAILED  # type: ignore[union-attr]
+
+
+def test_aggregate_predecessor_context_over_bound_blocks_dependent() -> None:
+    from typing import cast
+
+    from friday.application.workflow_execution_use_cases import _persist_node
+    from friday.domain.json_value import JsonValue
+
+    uow, factory, clock, _, _, _, _, run, execution = _bootstrap(
+        edges=[(0, 1), (0, 2), (0, 3), (1, 4), (2, 4), (3, 4)], agent_count=5
+    )
+    nodes = uow.workflow_node_executions.list_by_execution(execution.id)
+    root = next(node for node in nodes if node.node_key == "node-0")
+    child = uow.runs.get(root.child_run_id)  # type: ignore[arg-type]
+    assert child is not None
+    child.start(T0)
+    child.succeed(T1)
+    uow.runs.save(child)
+    nodes = ReconcileWorkflowExecution(factory, clock).execute(execution.id)
+    branches = [node for node in nodes if node.node_key in {"node-1", "node-2", "node-3"}]
+    for node in branches:
+        payload = cast(JsonValue, {"branch": node.node_key, "payload": "y" * 1900})
+        assert len(__import__("json").dumps(payload, sort_keys=True, separators=(",", ":"))) <= 2000
+        node.succeed(T1, payload)
+        _persist_node(uow, node)
+    reconciled = ReconcileWorkflowExecution(factory, clock).execute(execution.id)
+    join = next(node for node in reconciled if node.node_key == "node-4")
+    assert join.status is WorkflowNodeExecutionStatus.BLOCKED
+    assert join.failure_code == "workflow_context_too_large"
+    assert join.child_task_id is None and join.child_run_id is None
+    completed = uow.workflow_executions.get(execution.id)
+    assert completed is not None
+    assert completed.status is WorkflowExecutionStatus.FAILED
+    assert completed.failure_code == "workflow_context_too_large"
+    assert uow.runs.get(run.id).status is RunStatus.FAILED  # type: ignore[union-attr]
+
+
 def test_reconcile_failed_child_fails_root_and_execution() -> None:
     uow, factory, clock, _, _, _, _, run, execution = _bootstrap(edges=[(0, 1)])
     first = next(

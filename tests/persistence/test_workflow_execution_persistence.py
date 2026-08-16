@@ -16,7 +16,11 @@ from friday.application.agent_registry import (
     CreateAgentRevision,
 )
 from friday.application.brain_runtime_registry import BrainRuntimeRegistry
-from friday.application.commands import CancelRunCommand, RetryFailedRunCommand
+from friday.application.commands import (
+    CancelRunCommand,
+    CancelTaskCommand,
+    RetryFailedRunCommand,
+)
 from friday.application.errors import (
     EntityConflict,
     WorkflowCancelNotSupportedWhileActive,
@@ -24,6 +28,7 @@ from friday.application.errors import (
 )
 from friday.application.ports import UnitOfWorkFactory
 from friday.application.run_lifecycle import CancelRun, RetryFailedRun
+from friday.application.task_lifecycle import CancelTask
 from friday.application.workflow_execution_use_cases import (
     ReconcileWorkflowExecution,
     StartWorkflowExecution,
@@ -55,6 +60,7 @@ from friday.domain import (
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
 from friday.domain.identifiers import AgentRevisionId, RunId, TaskId
+from friday.domain.task import TaskStatus
 from friday.infrastructure.persistence.database import create_engine, create_session_factory
 from friday.infrastructure.persistence.unit_of_work import create_unit_of_work_factory
 
@@ -587,6 +593,64 @@ def test_manual_cancel_of_active_workflow_root_is_rejected(
         loaded_execution = uow.workflow_executions.get(execution.id)
         assert loaded_execution is not None
         assert loaded_execution.status is WorkflowExecutionStatus.RUNNING
+
+
+def test_manual_cancel_of_task_with_active_workflow_is_rejected_with_full_rollback(
+    tmp_path: Path,
+) -> None:
+    """CancelTask must preflight the Workflow boundary before mutating the
+    Task or any Run: an active Workflow execution cannot be cancelled through
+    the Task path (only the Workflow owns that transition), and the rejected
+    call must leave every durable row and event untouched."""
+    factory = _factory(tmp_path)
+    task, run, _, execution, child_run_id = _dispatch_single_node_workflow(factory)
+
+    with factory() as uow:
+        before_task = uow.tasks.get(task.id)
+        assert before_task is not None
+        before_task_status = before_task.status
+        assert before_task_status is TaskStatus.ACTIVE
+        before_root = uow.runs.get(run.id)
+        assert before_root is not None
+        before_root_execution_id = before_root.workflow_execution_id
+        before_child = uow.runs.get(child_run_id)
+        assert before_child is not None
+        before_node_shape = [
+            (n.node_key, n.status)
+            for n in uow.workflow_node_executions.list_by_execution(execution.id)
+        ]
+        before_queue = uow.work_queue.get(child_run_id)
+        before_root_events = [e.type for e in uow.events.list_for_run(run.id)]
+        before_child_events = [e.type for e in uow.events.list_for_run(child_run_id)]
+
+    with pytest.raises(
+        WorkflowCancelNotSupportedWhileActive,
+        match="workflow_cancel_not_supported_while_active",
+    ):
+        CancelTask(factory, _Clock()).execute(CancelTaskCommand(task.id))
+
+    with factory() as uow:
+        after_task = uow.tasks.get(task.id)
+        assert after_task is not None
+        assert after_task.status is TaskStatus.ACTIVE
+        root = uow.runs.get(run.id)
+        assert root is not None
+        assert root.status is RunStatus.WAITING_FOR_WORKFLOW
+        assert root.workflow_execution_id == before_root_execution_id
+        child = uow.runs.get(child_run_id)
+        assert child is not None
+        assert child.status == before_child.status
+        assert (
+            uow.workflow_executions.get(execution.id).status  # type: ignore[union-attr]
+            is WorkflowExecutionStatus.RUNNING
+        )
+        assert [
+            (n.node_key, n.status)
+            for n in uow.workflow_node_executions.list_by_execution(execution.id)
+        ] == before_node_shape
+        assert uow.work_queue.get(child_run_id) == before_queue
+        assert [e.type for e in uow.events.list_for_run(run.id)] == before_root_events
+        assert [e.type for e in uow.events.list_for_run(child_run_id)] == before_child_events
 
 
 def test_child_cancellation_terminalizes_workflow_without_parent_propagation(

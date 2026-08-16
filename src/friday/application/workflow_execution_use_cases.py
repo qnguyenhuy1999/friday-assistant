@@ -32,6 +32,10 @@ from friday.application.ports import (
     WorkflowExecutionUnitOfWork,
 )
 from friday.application.start_run import StartRun
+from friday.application.workflow_context import (
+    WorkflowNodeContextTooLarge,
+    build_workflow_node_context,
+)
 from friday.domain import (
     AgentStatus,
     RunWorkflowResolution,
@@ -286,6 +290,23 @@ def _dispatch_node(
     now: datetime,
 ) -> None:
     if node_execution.status is not WorkflowNodeExecutionStatus.PENDING:
+        return
+    # Fail closed before any child Task/Run creation: the dependent node's
+    # complete deterministic predecessor context must fit the durable bound.
+    # An oversized result or aggregate must never be silently truncated (that
+    # would hand the brain corrupted JSON), so the node is marked BLOCKED and
+    # the Workflow eventually fails deterministically.
+    try:
+        build_workflow_node_context(uow, node_execution)
+    except WorkflowNodeContextTooLarge as exc:
+        node_execution.block(now, "workflow_context_too_large", str(exc))
+        _persist_node(uow, node_execution)
+        _emit_node_event(
+            uow,
+            node_execution,
+            RunEventType.WORKFLOW_NODE_BLOCKED,
+            now,
+        )
         return
     child_task = Task.new(
         id=TaskId.new(),
@@ -917,8 +938,16 @@ class ReconcileWorkflowExecution:
                 uow.runs.save(root_run)
                 uow.work_queue.remove(root_run.id)
         else:
-            code = "workflow_node_blocked"
-            message = "A Workflow node was blocked by a predecessor"
+            blocked = next(
+                (node for node in nodes if node.status is WorkflowNodeExecutionStatus.BLOCKED),
+                None,
+            )
+            if blocked is not None and blocked.failure_code != "blocked_by_predecessor":
+                code = blocked.failure_code or "workflow_node_blocked"
+                message = blocked.failure_message or "A Workflow node was blocked by a predecessor"
+            else:
+                code = "workflow_node_blocked"
+                message = "A Workflow node was blocked by a predecessor"
             execution.fail(now, code, message)
             _persist_execution(uow, execution)
             _emit_workflow_event(

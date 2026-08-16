@@ -1,10 +1,18 @@
 """Real SQLite closure proofs for Phase 21 / Step 5A — bounded nested
 delegation.
 
-Only the BrainRuntime is scripted.  Migrated SQLite, the real UnitOfWork,
-work queue, ClaimNextRun (claim fencing included), DispatchDelegation,
-ResolveRunAgent / RunAgentResolution, AgentRunProcessor, delegation
-reconciliation, and the outcome appliers are all production code.
+Two levels of proof live here.
+
+The primary E2E (``test_worker_loop_real_sqlite_nested_chain_...`` and the
+worker-driven depth-exhaustion proof) drives every hop through the production
+WorkerLoop with one shared AgentRunProcessor: ClaimNextRun, claim fencing,
+DispatchDelegation, ResolveRunAgent / RunAgentResolution, normal outcome
+application, and delegation reconciliation all run through the same
+orchestration a deployed worker uses. Only the BrainRuntime is scripted.
+
+The remaining tests are focused integration proofs that compose the same
+production components directly (migrated SQLite, the real UnitOfWork, work
+queue, AgentRunProcessor, and the outcome appliers) without the loop.
 
 Chain under test:
 
@@ -26,6 +34,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, func, select, text
 
+from apps.worker.worker_loop import WorkerLoop
 from friday.application.agent_registry import (
     ActivateAgentRevision,
     CreateAgent,
@@ -42,15 +51,29 @@ from friday.application.delegation_reconciliation import reconcile_child_termina
 from friday.application.errors import ClaimLost
 from friday.application.ports import UnitOfWorkFactory
 from friday.application.results import RunClaimResult
+from friday.application.retry_policy import RetryPolicy
 from friday.application.run_processor import ClaimContext, ProcessingOutcome
-from friday.application.runtime_actions import DelegateAction, FinishAction
+from friday.application.runtime_actions import DelegateAction, FinishAction, YieldAction
 from friday.application.start_run import StartRun
 from friday.application.tool_authorization import RequestToolApproval
 from friday.application.worker_coordination import (
+    ApplyFailedOutcome,
     ApplySucceededOutcome,
     ApplyWaitingForDelegationOutcome,
+    ApplyWaitingOutcome,
     ClaimNextRun,
+    RenewRunLease,
+    RequeueClaimedRun,
     VerifyRunClaim,
+)
+from friday.application.worker_maintenance import (
+    ExpireDueApprovals,
+    MaterializeScheduledAnswerDeliveries,
+    RecoverExpiredLeases,
+)
+from friday.application.workflow_execution_use_cases import (
+    ReconcileWorkflowExecution,
+    StartWorkflowExecution,
 )
 from friday.domain.agent import Agent, AgentRevision, AgentRevisionSourceKind
 from friday.domain.delegation import MAX_DELEGATION_DEPTH
@@ -91,6 +114,34 @@ class ScriptedBrain:
         action = self._actions.pop(0)
         assert isinstance(action, (DelegateAction, FinishAction))
         return BrainResponse(action=action)
+
+
+class WorkerScriptedBrain:
+    """Per-run deterministic BrainRuntime for the production worker path.
+
+    Child Run IDs only exist once DispatchDelegation materializes them, so the
+    test scripts each Run's actions as they become known between worker
+    iterations; an unscripted or over-called Run fails loudly. Every durable
+    effect stays with the WorkerLoop, AgentRunProcessor, and appliers."""
+
+    def __init__(self) -> None:
+        self._scripts: dict[RunId, list[object]] = {}
+        self.requests: list[BrainRequest] = []
+
+    def script(self, run_id: RunId, *actions: object) -> None:
+        self._scripts[run_id] = list(actions)
+
+    def next_action(self, request: BrainRequest) -> BrainResponse:
+        self.requests.append(request)
+        actions = self._scripts.get(request.run_id)
+        if not actions:
+            raise AssertionError(f"brain called beyond its script for run {request.run_id}")
+        action = actions.pop(0)
+        assert isinstance(action, (DelegateAction, FinishAction, YieldAction))
+        return BrainResponse(action=action)
+
+    def requests_for(self, run_id: RunId) -> list[BrainRequest]:
+        return [request for request in self.requests if request.run_id == run_id]
 
 
 def _registry() -> BrainRuntimeRegistry:
@@ -195,6 +246,82 @@ def _context(claim: RunClaimResult) -> ClaimContext:
         attempt_number=claim.attempt_number,
         is_lease_lost=lambda: False,
     )
+
+
+def _worker_harness(
+    factory: UnitOfWorkFactory,
+    clock: FixedClock,
+    registry: BrainRuntimeRegistry,
+    brain: WorkerScriptedBrain,
+    gateway: WorkspaceToolGateway,
+) -> tuple[WorkerLoop, AgentRunProcessor]:
+    """The production apps.worker.app composition with only the BrainRuntime
+    scripted: one shared AgentRunProcessor and one WorkerLoop drive every
+    claim, outcome application, and delegation reconciliation in the chain."""
+    processor = AgentRunProcessor(
+        uow_factory=factory,
+        clock=clock,
+        brain=brain,
+        runtime_registry=registry,
+        gateway=gateway,
+        verify_claim=VerifyRunClaim(factory, clock),
+        request_tool_approval=RequestToolApproval(factory, clock),
+        execute_tool_action=ExecuteToolAction(factory, clock, gateway),
+        limits=RuntimeLimits(
+            max_turns_per_claim=8,
+            max_tool_calls_per_claim=4,
+            max_context_chars=60_000,
+            max_response_bytes=65_536,
+            max_yield_seconds=3600,
+            max_processing_seconds=60,
+            max_delegation_depth=MAX_DELEGATION_DEPTH,
+        ),
+    )
+    loop = WorkerLoop(
+        claim_next_run=ClaimNextRun(
+            factory,
+            clock,
+            worker_id="step5-worker-loop",
+            lease_duration=LEASE,
+            candidate_limit=20,
+        ),
+        renew_lease=RenewRunLease(factory, clock, lease_duration=LEASE),
+        requeue_claimed_run=RequeueClaimedRun(factory, clock),
+        apply_failed=ApplyFailedOutcome(
+            factory,
+            clock,
+            retry_policy=RetryPolicy(3, timedelta(seconds=1), 2.0, timedelta(seconds=10)),
+        ),
+        apply_succeeded=ApplySucceededOutcome(factory, clock),
+        apply_waiting=ApplyWaitingOutcome(factory, clock),
+        apply_waiting_for_delegation=ApplyWaitingForDelegationOutcome(factory, clock),
+        recover_expired_leases=RecoverExpiredLeases(factory, clock, batch_size=20),
+        expire_due_approvals=ExpireDueApprovals(factory, clock, batch_size=20),
+        materialize_scheduled_answers=MaterializeScheduledAnswerDeliveries(
+            factory, clock, batch_size=20
+        ),
+        clock=clock,
+        heartbeat_interval_seconds=3600.0,
+        maintenance_interval_seconds=3600.0,
+        poll_interval_seconds=0.001,
+        workflow_starter=StartWorkflowExecution(factory, clock, registry),
+        workflow_reconciler=ReconcileWorkflowExecution(factory, clock),
+        uow_factory=factory,
+    )
+    return loop, processor
+
+
+def _dispatched_child(
+    factory: UnitOfWorkFactory, parent_run_id: RunId
+) -> tuple[DelegationRequestId, RunId]:
+    """Read back exactly one dispatched hop's request and child Run."""
+    with factory() as uow:
+        requests = uow.delegation_requests.list_for_run(parent_run_id)
+        assert len(requests) == 1
+        assert requests[0].child_run_id is not None
+        pair = (requests[0].id, requests[0].child_run_id)
+        uow.commit()
+    return pair
 
 
 def _dispatch_via_processor(
@@ -680,5 +807,321 @@ def test_real_sqlite_depth_boundary_fails_closed_at_the_configured_limit(
             assert d_item is not None and d_item.claimed_by == "d-worker"
             assert uow.delegation_requests.list_for_run(d_claim.run_id) == []
             uow.commit()
+    finally:
+        engine.dispose()
+
+
+def test_worker_loop_real_sqlite_nested_chain_closes_through_production_worker_path(
+    tmp_path: Path,
+) -> None:
+    """Primary Step-5A E2E: the full A -> B -> C chain is driven by the
+    production WorkerLoop with one shared AgentRunProcessor. Only the
+    BrainRuntime is scripted — claiming, outcome application, and delegation
+    reconciliation all run through the deployed-worker orchestration."""
+    engine = _migrated_engine(tmp_path, "phase21-step5-worker-loop.db")
+    try:
+        factory = create_unit_of_work_factory(create_session_factory(engine))
+        clock = FixedClock()
+        registry = _registry()
+        gateway = _gateway(tmp_path)
+        brain = WorkerScriptedBrain()
+        loop, processor = _worker_harness(factory, clock, registry, brain, gateway)
+
+        root_task = CreateTask(factory, clock).execute(
+            CreateTaskCommand("A worker-path orchestration", "step-5 worker chain")
+        )
+        started = StartRun(factory, clock).execute(StartRunCommand(root_task.task_id))
+        assert started.run_id is not None
+        run_a = started.run_id
+        agent_b, revision_b = _active_agent(
+            factory,
+            clock,
+            registry,
+            key="step5.wloop.b",
+            instructions="Mid-chain agent: consume the child result, then finish.",
+        )
+        agent_c, revision_c = _active_agent(
+            factory,
+            clock,
+            registry,
+            key="step5.wloop.c",
+            instructions="Leaf agent: finish with the bounded result.",
+        )
+        brain.script(
+            run_a,
+            DelegateAction(
+                target_agent_key=agent_b.key,
+                objective="A delegates to B",
+                input_payload={"hop": "ab"},
+                expected_output_contract="Return the bounded result.",
+                reason="nested chain hop",
+            ),
+            FinishAction(summary="a consumed b result", details={"from": "b"}),
+        )
+
+        # A is claimed by the worker, proposes the delegation, and the normal
+        # worker path materializes AB and parks A.
+        assert loop.run_once(processor) is True
+        ab_id, run_b = _dispatched_child(factory, run_a)
+        brain.script(
+            run_b,
+            DelegateAction(
+                target_agent_key=agent_c.key,
+                objective="B delegates to C",
+                input_payload={"hop": "bc"},
+                expected_output_contract="Return the bounded result.",
+                reason="nested chain hop",
+            ),
+            FinishAction(summary="b consumed c result", details={"from": "c"}),
+        )
+
+        # B is claimed through the worker and the same normal path
+        # materializes BC and parks B.
+        assert loop.run_once(processor) is True
+        bc_id, run_c = _dispatched_child(factory, run_b)
+        # C's first claim yields through the normal worker outcome so the
+        # durable state below is observed while C is genuinely active.
+        brain.script(
+            run_c,
+            YieldAction(delay_seconds=0, reason="leaf hop warm-up"),
+            FinishAction(summary="c evidence complete", details={"from": "c"}),
+        )
+
+        # C is claimed through the worker; the yield outcome requeues it while
+        # it stays RUNNING.
+        assert loop.run_once(processor) is True
+
+        # Required durable state while C is active: each Run waits only on its
+        # own immediate DelegationRequest.
+        with factory() as uow:
+            row_a = uow.runs.get(run_a)
+            row_b = uow.runs.get(run_b)
+            row_c = uow.runs.get(run_c)
+            assert row_a is not None and row_a.status is RunStatus.WAITING_FOR_DELEGATION
+            assert row_a.delegation_request_id == ab_id
+            assert row_b is not None and row_b.status is RunStatus.WAITING_FOR_DELEGATION
+            assert row_b.delegation_request_id == bc_id
+            assert row_c is not None and row_c.status is RunStatus.RUNNING
+            assert uow.work_queue.get(run_c) is not None
+            uow.commit()
+
+        # C finishes normally; normal outcome application terminalizes it and
+        # normal reconciliation resolves BC and resumes/enqueues B.
+        assert loop.run_once(processor) is True
+        with factory() as uow:
+            bc = uow.delegation_requests.get(bc_id)
+            row_a = uow.runs.get(run_a)
+            row_b = uow.runs.get(run_b)
+            row_c = uow.runs.get(run_c)
+            assert bc is not None and bc.status.value == "succeeded"
+            assert row_c is not None and row_c.status is RunStatus.SUCCEEDED
+            assert row_b is not None and row_b.status is RunStatus.RUNNING
+            assert row_b.delegation_request_id is None
+            assert uow.work_queue.get(run_b) is not None
+            # A is untouched until B terminalizes.
+            assert row_a is not None and row_a.status is RunStatus.WAITING_FOR_DELEGATION
+            assert row_a.delegation_request_id == ab_id
+            assert uow.work_queue.get(run_a) is None
+            uow.commit()
+
+        # B is claimed again through the worker, receives C's durable bounded
+        # result in its normal runtime context, and finishes normally.
+        assert loop.run_once(processor) is True
+        b_requests = brain.requests_for(run_b)
+        assert len(b_requests) == 2
+        assert "# DELEGATIONS" in b_requests[-1].context
+        assert "summary=c evidence complete" in b_requests[-1].context
+
+        # Only after B terminalizes does AB resolve and A resume.
+        with factory() as uow:
+            ab = uow.delegation_requests.get(ab_id)
+            row_a = uow.runs.get(run_a)
+            row_b = uow.runs.get(run_b)
+            assert ab is not None and ab.status.value == "succeeded"
+            assert row_b is not None and row_b.status is RunStatus.SUCCEEDED
+            assert row_a is not None and row_a.status is RunStatus.RUNNING
+            assert row_a.delegation_request_id is None
+            assert uow.work_queue.get(run_a) is not None
+            uow.commit()
+
+        # A is claimed again through the worker, receives B's durable bounded
+        # result, and finishes normally. The queue then drains.
+        assert loop.run_once(processor) is True
+        a_requests = brain.requests_for(run_a)
+        assert len(a_requests) == 2
+        assert "# DELEGATIONS" in a_requests[-1].context
+        assert "summary=b consumed c result" in a_requests[-1].context
+        assert loop.run_once(processor) is False
+
+        # C's own first request carried its delegated input context.
+        c_requests = brain.requests_for(run_c)
+        assert len(c_requests) == 2
+        assert "# DELEGATED WORK" in c_requests[0].context
+
+        with factory() as uow:
+            ab = uow.delegation_requests.get(ab_id)
+            bc = uow.delegation_requests.get(bc_id)
+            assert ab is not None and bc is not None
+            assert ab.parent_run_id == run_a
+            assert bc.parent_run_id == run_b
+            assert ab.depth == 1 and ab.root_delegation_id == ab.id
+            assert bc.depth == 2 and bc.root_delegation_id == ab.id
+            assert ab.status.value == "succeeded" and bc.status.value == "succeeded"
+            assert ab.child_run_id == run_b and bc.child_run_id == run_c
+            assert uow.delegation_requests.list_for_run(run_a) == [ab]
+            assert uow.delegation_requests.list_for_run(run_b) == [bc]
+            assert uow.delegation_requests.list_for_run(run_c) == []
+            # Exact Agent freeze exists for each delegated child.
+            b_resolution = uow.run_agent_resolutions.get(run_b)
+            c_resolution = uow.run_agent_resolutions.get(run_c)
+            assert b_resolution is not None
+            assert b_resolution.agent_id == agent_b.id
+            assert b_resolution.revision_id == revision_b.id
+            assert c_resolution is not None
+            assert c_resolution.agent_id == agent_c.id
+            assert c_resolution.revision_id == revision_c.id
+            # Nothing survives in the queue: terminal runs have no items.
+            assert uow.work_queue.get(run_a) is None
+            assert uow.work_queue.get(run_b) is None
+            assert uow.work_queue.get(run_c) is None
+            uow.commit()
+        with engine.connect() as connection:
+            queue_items = connection.scalar(text("SELECT count(*) FROM run_work_items"))
+        assert queue_items == 0
+
+        # Exactly one request per hop, one delegated child Task/Run per hop.
+        tasks, runs, delegations = _counts(engine)
+        assert (tasks, runs, delegations) == (3, 3, 2)
+
+        # No duplicated lifecycle transitions anywhere in the chain.
+        a_events = _event_types(factory, run_a)
+        b_events = _event_types(factory, run_b)
+        c_events = _event_types(factory, run_c)
+        for events in (a_events, b_events):
+            assert events.count("run_started") == 1
+            assert events.count("delegation_dispatched") == 1
+            assert events.count("run_waiting_for_delegation") == 1
+            assert events.count("delegation_succeeded") == 1
+            assert events.count("run_resumed") == 1
+            assert events.count("agent_finished") == 1
+            assert events.count("run_succeeded") == 1
+        assert c_events.count("run_started") == 1
+        assert c_events.count("delegation_dispatched") == 0
+        assert c_events.count("run_resumed") == 0
+        assert c_events.count("agent_finished") == 1
+        assert c_events.count("run_succeeded") == 1
+    finally:
+        engine.dispose()
+
+
+def test_worker_loop_real_sqlite_depth_exhaustion_fails_closed_through_worker_path(
+    tmp_path: Path,
+) -> None:
+    """Depth exhaustion is driven through the worker too: D's failed
+    processing outcome is applied by the normal worker path, so the durable
+    Run terminalizes instead of lingering RUNNING, and zero E state is
+    materialized."""
+    engine = _migrated_engine(tmp_path, "phase21-step5-worker-depth.db")
+    try:
+        factory = create_unit_of_work_factory(create_session_factory(engine))
+        clock = FixedClock()
+        registry = _registry()
+        gateway = _gateway(tmp_path)
+        brain = WorkerScriptedBrain()
+        loop, processor = _worker_harness(factory, clock, registry, brain, gateway)
+        assert MAX_DELEGATION_DEPTH == 3
+
+        root_task = CreateTask(factory, clock).execute(
+            CreateTaskCommand("A worker-path depth", "step-5 worker depth boundary")
+        )
+        started = StartRun(factory, clock).execute(StartRunCommand(root_task.task_id))
+        assert started.run_id is not None
+        run_a = started.run_id
+        agents = [
+            _active_agent(
+                factory,
+                clock,
+                registry,
+                key=f"step5.wdepth.{name}",
+                instructions=f"{name} hop",
+            )[0]
+            for name in ("b", "c", "d", "e")
+        ]
+
+        def _delegate_to(agent: object) -> DelegateAction:
+            assert isinstance(agent, Agent)
+            return DelegateAction(
+                target_agent_key=agent.key,
+                objective=f"chain hop to {agent.key}",
+                input_payload={},
+                expected_output_contract="bounded result",
+                reason="depth chain hop",
+            )
+
+        brain.script(run_a, _delegate_to(agents[0]))
+        assert loop.run_once(processor) is True
+        ab_id, run_b = _dispatched_child(factory, run_a)
+        brain.script(run_b, _delegate_to(agents[1]))
+        assert loop.run_once(processor) is True
+        bc_id, run_c = _dispatched_child(factory, run_b)
+        brain.script(run_c, _delegate_to(agents[2]))
+        assert loop.run_once(processor) is True
+        cd_id, run_d = _dispatched_child(factory, run_c)
+        with factory() as uow:
+            for request_id, depth in ((ab_id, 1), (bc_id, 2), (cd_id, 3)):
+                request = uow.delegation_requests.get(request_id)
+                assert request is not None
+                assert request.depth == depth
+                assert request.root_delegation_id == ab_id
+            uow.commit()
+
+        # D -> E exceeds the bound: the worker claims D, the ordinary
+        # processor path fails closed, and the normal worker path applies the
+        # failure so the durable Run state reflects production behavior.
+        brain.script(
+            run_d,
+            DelegateAction(
+                target_agent_key=agents[3].key,
+                objective="D delegates to E beyond the bound",
+                input_payload={},
+                expected_output_contract="never",
+                reason="one hop too deep",
+            ),
+        )
+        assert loop.run_once(processor) is True
+
+        with factory() as uow:
+            row_d = uow.runs.get(run_d)
+            assert row_d is not None
+            assert row_d.status is RunStatus.FAILED
+            assert row_d.failure is not None
+            assert row_d.failure.code == "delegation_depth_exhausted"
+            assert row_d.failure.retryable is False
+            assert uow.work_queue.get(run_d) is None
+            assert uow.delegation_requests.list_for_run(run_d) == []
+            cd = uow.delegation_requests.get(cd_id)
+            assert cd is not None
+            assert cd.status.value == "failed"
+            assert cd.failure_code == "delegation_depth_exhausted"
+            # Normal reconciliation resolved CD and resumed C.
+            row_c = uow.runs.get(run_c)
+            assert row_c is not None and row_c.status is RunStatus.RUNNING
+            assert row_c.delegation_request_id is None
+            assert uow.work_queue.get(run_c) is not None
+            # A is still parked on AB: only B terminalizing can wake it.
+            row_a = uow.runs.get(run_a)
+            assert row_a is not None and row_a.status is RunStatus.WAITING_FOR_DELEGATION
+            assert row_a.delegation_request_id == ab_id
+            assert uow.work_queue.get(run_a) is None
+            uow.commit()
+
+        # Zero E materialization: no fourth delegated Task/Run/request.
+        tasks, runs, delegations = _counts(engine)
+        assert (tasks, runs, delegations) == (4, 4, 3)
+        d_events = _event_types(factory, run_d)
+        assert d_events.count("run_failed") == 1
+        c_events = _event_types(factory, run_c)
+        assert c_events.count("delegation_failed") == 1
+        assert c_events.count("run_resumed") == 1
     finally:
         engine.dispose()

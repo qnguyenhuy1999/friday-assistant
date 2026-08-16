@@ -9,7 +9,13 @@ import pytest
 
 from friday.domain.errors import DomainValidationError, InvalidStateTransition
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import ApprovalRequestId, DelegationRequestId, RunId, TaskId
+from friday.domain.identifiers import (
+    ApprovalRequestId,
+    DelegationRequestId,
+    RunId,
+    TaskId,
+    WorkflowExecutionId,
+)
 from friday.domain.run import TERMINAL_RUN_STATUSES, Run, RunStatus
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -39,6 +45,9 @@ def _run_in(status: RunStatus) -> Run:
         return run
     if status is RunStatus.WAITING_FOR_DELEGATION:
         run.wait_for_delegation(T0, DelegationRequestId.new())
+        return run
+    if status is RunStatus.WAITING_FOR_WORKFLOW:
+        run.wait_for_workflow(T0, WorkflowExecutionId.new())
         return run
     if status is RunStatus.SUCCEEDED:
         run.succeed(T1)

@@ -5,7 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 
 from friday.application.commands import CancelTaskCommand, CompleteTaskCommand, FailTaskCommand
-from friday.application.errors import EntityConflict, TaskNotFound
+from friday.application.errors import (
+    EntityConflict,
+    TaskNotFound,
+    WorkflowCancelNotSupportedWhileActive,
+)
 from friday.application.lifecycle_events import LifecycleEvents, task_result
 from friday.application.ports import UnitOfWork
 from friday.application.results import TaskResult
@@ -18,6 +22,7 @@ from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
 from friday.domain.task import TERMINAL_TASK_STATUSES, TaskStatus
 from friday.domain.task_event import TaskEventType
 from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES
+from friday.domain.workflow_execution import WorkflowExecutionStatus
 
 
 class GetTask(LifecycleEvents):
@@ -77,6 +82,18 @@ class CancelTask(_TaskCancellation):
                 return task_result(task)
             if task.status in TERMINAL_TASK_STATUSES:
                 raise EntityConflict("task is terminal")
+            # A Task whose any non-terminal Run owns a RUNNING Workflow
+            # execution cannot be cancelled: Workflow cancellation is a
+            # Workflow-boundary concern and child Runs must not keep running
+            # while their root is cancelled (an orphaned execution is
+            # forbidden by the Step-4 contract).  Fail closed before any
+            # Task/Run mutation.
+            for run in uow.runs.list_for_task(task.id):
+                if run.status not in TERMINAL_RUN_STATUSES and any(
+                    execution.status is WorkflowExecutionStatus.RUNNING
+                    for execution in uow.workflow_executions.list_by_root_run_id(run.id)
+                ):
+                    raise WorkflowCancelNotSupportedWhileActive()
             task.cancel(now)
             uow.tasks.save(task)
             uow.schedules.complete_for_task(task.id, now, cancelled=True)

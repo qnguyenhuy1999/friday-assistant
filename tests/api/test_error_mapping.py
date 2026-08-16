@@ -25,6 +25,8 @@ from friday.application.errors import (
     TaskNotFound,
     ToolInvocationNotFound,
     TransactionFailure,
+    WorkflowCancelNotSupportedWhileActive,
+    WorkflowNodeManualRetryForbidden,
 )
 from friday.domain.errors import DomainValidationError
 from friday.domain.identifiers import (
@@ -63,6 +65,12 @@ def _client_raising(exc: ApplicationError) -> TestClient:
         (SkillRevisionNotFound(SkillRevisionId.new()), 404, "skill_revision_not_found"),
         (EntityConflict("conflict"), 409, "entity_conflict"),
         (DelegatedManualRetryForbidden(), 409, "delegated_manual_retry_forbidden"),
+        (WorkflowNodeManualRetryForbidden(), 409, "workflow_node_manual_retry_forbidden"),
+        (
+            WorkflowCancelNotSupportedWhileActive(),
+            409,
+            "workflow_cancel_not_supported_while_active",
+        ),
         (ConcurrencyConflict("stale"), 409, "concurrency_conflict"),
         (TransactionFailure("db down"), 500, "transaction_failure"),
     ],

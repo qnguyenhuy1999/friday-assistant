@@ -54,7 +54,9 @@ from friday.domain.identifiers import (
     SkillRollbackRequestId,
     TaskId,
     ToolInvocationId,
+    WorkflowExecutionId,
     WorkflowId,
+    WorkflowNodeExecutionId,
     WorkflowRevisionId,
 )
 from friday.domain.outbound_delivery import OutboundDelivery
@@ -88,6 +90,14 @@ from friday.domain.task import Task
 from friday.domain.task_event import TaskEvent
 from friday.domain.tool import ToolInvocation
 from friday.domain.workflow import Workflow, WorkflowRevision
+from friday.domain.workflow_execution import (
+    RunWorkflowResolution,
+    TaskWorkflowBinding,
+    WorkflowExecution,
+    WorkflowExecutionStatus,
+    WorkflowNodeExecution,
+    WorkflowNodeExecutionStatus,
+)
 
 
 class Clock(Protocol):
@@ -229,6 +239,104 @@ class WorkflowRevisionRepository(Protocol):
     def get(self, revision_id: WorkflowRevisionId) -> WorkflowRevision | None: ...
     def list_for_workflow(self, workflow_id: WorkflowId) -> list[WorkflowRevision]: ...
     def next_version(self, workflow_id: WorkflowId) -> int: ...
+
+
+class IWorkflowExecutionRepository(Protocol):
+    def create(self, execution: WorkflowExecution) -> None: ...
+    def get(self, execution_id: WorkflowExecutionId) -> WorkflowExecution | None: ...
+
+    def update_status(
+        self,
+        execution_id: WorkflowExecutionId,
+        status: WorkflowExecutionStatus,
+        *,
+        completed_at: datetime | None = None,
+        failure_code: str | None = None,
+        failure_message: str | None = None,
+    ) -> None: ...
+
+    def list_by_root_run_id(self, root_run_id: RunId) -> list[WorkflowExecution]: ...
+
+
+class IWorkflowNodeExecutionRepository(Protocol):
+    def create(self, node_execution: WorkflowNodeExecution) -> None: ...
+    def get(self, node_execution_id: WorkflowNodeExecutionId) -> WorkflowNodeExecution | None: ...
+
+    def update_status(
+        self,
+        node_execution_id: WorkflowNodeExecutionId,
+        status: WorkflowNodeExecutionStatus,
+        *,
+        child_task_id: TaskId | None = None,
+        child_run_id: RunId | None = None,
+        child_execution_id: RunId | None = None,
+        result_payload: object = None,
+        failure_code: str | None = None,
+        failure_message: str | None = None,
+        created_at: datetime | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+    ) -> None: ...
+
+    def list_by_execution(
+        self, workflow_execution_id: WorkflowExecutionId
+    ) -> list[WorkflowNodeExecution]: ...
+
+    def get_by_child_task_id(self, child_task_id: TaskId) -> WorkflowNodeExecution | None: ...
+    def get_by_child_execution_id(
+        self, child_execution_id: RunId
+    ) -> WorkflowNodeExecution | None: ...
+
+    def update_by_child_execution_id(
+        self,
+        child_execution_id: RunId,
+        status: WorkflowNodeExecutionStatus,
+        *,
+        result_payload: object = None,
+        failure_code: str | None = None,
+        failure_message: str | None = None,
+        completed_at: datetime | None = None,
+    ) -> None: ...
+
+
+class IRunWorkflowResolutionRepository(Protocol):
+    def create(self, resolution: RunWorkflowResolution) -> None: ...
+    def get_by_run_id(self, run_id: RunId) -> RunWorkflowResolution | None: ...
+    def add_if_claimed(
+        self,
+        resolution: RunWorkflowResolution,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool: ...
+
+
+class ITaskWorkflowBindingRepository(Protocol):
+    def bind(self, binding: TaskWorkflowBinding) -> None: ...
+    def unbind(self, task_id: TaskId) -> None: ...
+    def get_by_task_id(self, task_id: TaskId) -> TaskWorkflowBinding | None: ...
+
+
+class WorkflowExecutionUnitOfWork(Protocol):
+    """The extra repositories Task B adds to the shared UnitOfWork.
+
+    Kept separate from the pre-existing UnitOfWork contract so the domain and
+    application slice remains usable while infrastructure wiring is being
+    integrated.
+    """
+
+    @property
+    def workflow_executions(self) -> IWorkflowExecutionRepository: ...
+
+    @property
+    def workflow_node_executions(self) -> IWorkflowNodeExecutionRepository: ...
+
+    @property
+    def run_workflow_resolutions(self) -> IRunWorkflowResolutionRepository: ...
+
+    @property
+    def task_workflow_bindings(self) -> ITaskWorkflowBindingRepository: ...
 
 
 class TaskAgentBindingRepository(Protocol):
@@ -800,6 +908,14 @@ class UnitOfWork(Protocol):
     def workflows(self) -> WorkflowRepository: ...
     @property
     def workflow_revisions(self) -> WorkflowRevisionRepository: ...
+    @property
+    def workflow_executions(self) -> IWorkflowExecutionRepository: ...
+    @property
+    def workflow_node_executions(self) -> IWorkflowNodeExecutionRepository: ...
+    @property
+    def run_workflow_resolutions(self) -> IRunWorkflowResolutionRepository: ...
+    @property
+    def task_workflow_bindings(self) -> ITaskWorkflowBindingRepository: ...
     @property
     def task_agent_bindings(self) -> TaskAgentBindingRepository: ...
     @property

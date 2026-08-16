@@ -39,7 +39,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from friday.application.agent_registry import ResolveRunAgent
 from friday.application.brain_runtime import BrainRequest, BrainResponse, BrainRuntime
@@ -79,7 +79,7 @@ from friday.application.memory.query_builder import (
 from friday.application.memory.query_builder import (
     RunSnapshot as MemoryRunSnapshot,
 )
-from friday.application.ports import Clock, UnitOfWorkFactory
+from friday.application.ports import Clock, UnitOfWork, UnitOfWorkFactory
 from friday.application.run_processor import ClaimContext, ProcessingOutcome
 from friday.application.runtime_actions import (
     BrainAction,
@@ -106,6 +106,7 @@ from friday.application.tool_authorization import (
 )
 from friday.application.tool_gateway import ToolCall, ToolGateway, ToolRiskAssessment
 from friday.application.worker_coordination import VerifyRunClaim
+from friday.application.workflow_context import build_workflow_node_context
 from friday.domain.errors import DomainValidationError
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
@@ -313,6 +314,7 @@ class AgentRunProcessor:
                     max_skill_context_chars=self._limits.max_skill_context_chars,
                     max_agent_context_chars=self._limits.max_agent_context_chars,
                     memory_context=memory,
+                    workflow_context=snapshot.workflow_context,
                     conversation_context=conversation,
                 )
             except SkillContextTooLarge:
@@ -695,6 +697,7 @@ class AgentRunProcessor:
                 delegation_targets=tuple(targets),
                 delegations=tuple(delegation_views),
                 incoming_delegation=incoming,
+                workflow_context=_workflow_context_for_run(uow, run.execution_id),
             )
 
     def _retrieve_memory(
@@ -829,6 +832,21 @@ class AgentRunProcessor:
         return ProcessingOutcome.failed(
             Failure(code=code, message=bounded, retryable=retryable, cause=cause)
         )
+
+
+def _workflow_context_for_run(uow: object, execution_id: object) -> str | None:
+    nodes_repo = getattr(uow, "workflow_node_executions", None)
+    if (
+        nodes_repo is None
+        or getattr(uow, "workflow_executions", None) is None
+        or getattr(uow, "workflow_revisions", None) is None
+        or getattr(uow, "workflows", None) is None
+    ):
+        return None
+    node_execution = nodes_repo.get_by_child_execution_id(execution_id)
+    if node_execution is None:
+        return None
+    return build_workflow_node_context(cast(UnitOfWork, uow), node_execution)
 
 
 def _bounded_read(repository: object, run_id: object, limit: int) -> Any:

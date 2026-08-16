@@ -82,7 +82,9 @@ from friday.domain.identifiers import (
     SkillRollbackRequestId,
     TaskId,
     ToolInvocationId,
+    WorkflowExecutionId,
     WorkflowId,
+    WorkflowNodeExecutionId,
     WorkflowRevisionId,
 )
 from friday.domain.outbound_delivery import DeliveryStatus, OutboundDelivery
@@ -116,6 +118,14 @@ from friday.domain.task import Task
 from friday.domain.task_event import TaskEvent
 from friday.domain.tool import TERMINAL_TOOL_INVOCATION_STATUSES, ToolInvocation
 from friday.domain.workflow import Workflow, WorkflowRevision
+from friday.domain.workflow_execution import (
+    RunWorkflowResolution,
+    TaskWorkflowBinding,
+    WorkflowExecution,
+    WorkflowExecutionStatus,
+    WorkflowNodeExecution,
+    WorkflowNodeExecutionStatus,
+)
 
 T0 = datetime(2026, 1, 2, 3, tzinfo=UTC)
 
@@ -1475,6 +1485,197 @@ class FakeRunAgentResolutionRepository:
         return True
 
 
+class FakeWorkflowExecutionRepository:
+    def __init__(self) -> None:
+        self.items: dict[WorkflowExecutionId, WorkflowExecution] = {}
+
+    def create(self, execution: WorkflowExecution) -> None:
+        from friday.application.errors import EntityConflict
+
+        if execution.id in self.items or any(
+            item.root_run_id == execution.root_run_id for item in self.items.values()
+        ):
+            raise EntityConflict("duplicate Workflow execution")
+        self.items[execution.id] = execution
+
+    def get(self, execution_id: WorkflowExecutionId) -> WorkflowExecution | None:
+        return self.items.get(execution_id)
+
+    def update_status(
+        self,
+        execution_id: WorkflowExecutionId,
+        status: WorkflowExecutionStatus,
+        *,
+        completed_at: datetime | None = None,
+        failure_code: str | None = None,
+        failure_message: str | None = None,
+    ) -> None:
+        execution = self.items[execution_id]
+        execution.status = status
+        execution.completed_at = completed_at
+        execution.failure_code = failure_code
+        execution.failure_message = failure_message
+
+    def list_by_root_run_id(self, root_run_id: RunId) -> list[WorkflowExecution]:
+        return sorted(
+            (item for item in self.items.values() if item.root_run_id == root_run_id),
+            key=lambda item: (item.started_at, str(item.id)),
+        )
+
+
+class FakeWorkflowNodeExecutionRepository:
+    def __init__(
+        self,
+        executions: FakeWorkflowExecutionRepository | None = None,
+        revisions: FakeWorkflowRevisionRepository | None = None,
+    ) -> None:
+        self.items: dict[WorkflowNodeExecutionId, WorkflowNodeExecution] = {}
+        self._executions = executions
+        self._revisions = revisions
+
+    def create(self, node_execution: WorkflowNodeExecution) -> None:
+        from friday.application.errors import EntityConflict
+
+        if self._executions is not None:
+            owner = self._executions.items.get(node_execution.workflow_execution_id)
+            if owner is None or owner.workflow_revision_id != node_execution.workflow_revision_id:
+                raise EntityConflict("Workflow node execution revision ownership mismatch")
+        if self._revisions is not None:
+            revision = self._revisions.items.get(node_execution.workflow_revision_id)
+            if revision is None or not any(
+                node.id == node_execution.workflow_node_id for node in revision.nodes
+            ):
+                raise EntityConflict("Workflow node execution node ownership mismatch")
+        if node_execution.id in self.items or any(
+            item.workflow_execution_id == node_execution.workflow_execution_id
+            and item.workflow_node_id == node_execution.workflow_node_id
+            for item in self.items.values()
+        ):
+            raise EntityConflict("duplicate Workflow node execution")
+        self.items[node_execution.id] = node_execution
+
+    def get(self, node_execution_id: WorkflowNodeExecutionId) -> WorkflowNodeExecution | None:
+        return self.items.get(node_execution_id)
+
+    def update_status(
+        self,
+        node_execution_id: WorkflowNodeExecutionId,
+        status: WorkflowNodeExecutionStatus,
+        *,
+        child_task_id: TaskId | None = None,
+        child_run_id: RunId | None = None,
+        child_execution_id: RunId | None = None,
+        result_payload: object = None,
+        failure_code: str | None = None,
+        failure_message: str | None = None,
+        created_at: datetime | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+    ) -> None:
+        del created_at
+        node = self.items[node_execution_id]
+        node.status = status
+        node.child_task_id = child_task_id
+        node.child_run_id = child_run_id
+        node.child_execution_id = child_execution_id
+        node.result_payload = result_payload  # type: ignore[assignment]
+        node.failure_code = failure_code
+        node.failure_message = failure_message
+        node.started_at = started_at
+        node.completed_at = completed_at
+
+    def list_by_execution(
+        self, workflow_execution_id: WorkflowExecutionId
+    ) -> list[WorkflowNodeExecution]:
+        return sorted(
+            (
+                item
+                for item in self.items.values()
+                if item.workflow_execution_id == workflow_execution_id
+            ),
+            key=lambda item: (item.node_key, str(item.id)),
+        )
+
+    def get_by_child_task_id(self, child_task_id: TaskId) -> WorkflowNodeExecution | None:
+        return next(
+            (item for item in self.items.values() if item.child_task_id == child_task_id), None
+        )
+
+    def get_by_child_execution_id(self, child_execution_id: RunId) -> WorkflowNodeExecution | None:
+        return next(
+            (item for item in self.items.values() if item.child_execution_id == child_execution_id),
+            None,
+        )
+
+    def update_by_child_execution_id(
+        self,
+        child_execution_id: RunId,
+        status: WorkflowNodeExecutionStatus,
+        *,
+        result_payload: object = None,
+        failure_code: str | None = None,
+        failure_message: str | None = None,
+        completed_at: datetime | None = None,
+    ) -> None:
+        found = self.get_by_child_execution_id(child_execution_id)
+        if found is None:
+            return
+        self.update_status(
+            found.id,
+            status,
+            child_task_id=found.child_task_id,
+            child_run_id=found.child_run_id,
+            child_execution_id=found.child_execution_id,
+            result_payload=result_payload,
+            failure_code=failure_code,
+            failure_message=failure_message,
+            started_at=found.started_at,
+            completed_at=completed_at,
+        )
+
+
+class FakeRunWorkflowResolutionRepository:
+    def __init__(self) -> None:
+        self.items: dict[RunId, RunWorkflowResolution] = {}
+
+    def create(self, resolution: RunWorkflowResolution) -> None:
+        from friday.application.errors import EntityConflict
+
+        if resolution.run_id in self.items:
+            raise EntityConflict("duplicate Run Workflow resolution")
+        self.items[resolution.run_id] = resolution
+
+    def add_if_claimed(
+        self,
+        resolution: RunWorkflowResolution,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        if resolution.run_id in self.items:
+            return False
+        self.items[resolution.run_id] = resolution
+        return True
+
+    def get_by_run_id(self, run_id: RunId) -> RunWorkflowResolution | None:
+        return self.items.get(run_id)
+
+
+class FakeTaskWorkflowBindingRepository:
+    def __init__(self) -> None:
+        self.items: dict[TaskId, TaskWorkflowBinding] = {}
+
+    def bind(self, binding: TaskWorkflowBinding) -> None:
+        self.items[binding.task_id] = binding
+
+    def unbind(self, task_id: TaskId) -> None:
+        self.items.pop(task_id, None)
+
+    def get_by_task_id(self, task_id: TaskId) -> TaskWorkflowBinding | None:
+        return self.items.get(task_id)
+
+
 class FakeDelegationRequestRepository:
     def __init__(self) -> None:
         self.items: dict[DelegationRequestId, DelegationRequest] = {}
@@ -1867,6 +2068,13 @@ class FakeUnitOfWork:
         self.workflow_repo = FakeWorkflowRepository()
         self.workflow_revision_repo = FakeWorkflowRevisionRepository()
         self.task_agent_binding_repo = FakeTaskAgentBindingRepository()
+        self.workflow_execution_repo = FakeWorkflowExecutionRepository()
+        self.workflow_node_execution_repo = FakeWorkflowNodeExecutionRepository(
+            executions=self.workflow_execution_repo,
+            revisions=self.workflow_revision_repo,
+        )
+        self.run_workflow_resolution_repo = FakeRunWorkflowResolutionRepository()
+        self.task_workflow_binding_repo = FakeTaskWorkflowBindingRepository()
         self.run_agent_resolution_repo = FakeRunAgentResolutionRepository()
         self.delegation_request_repo = FakeDelegationRequestRepository()
         self.skill_repo = FakeSkillRepository()
@@ -1936,6 +2144,22 @@ class FakeUnitOfWork:
     @property
     def task_agent_bindings(self) -> TaskAgentBindingRepository:
         return self.task_agent_binding_repo
+
+    @property
+    def workflow_executions(self) -> FakeWorkflowExecutionRepository:
+        return self.workflow_execution_repo
+
+    @property
+    def workflow_node_executions(self) -> FakeWorkflowNodeExecutionRepository:
+        return self.workflow_node_execution_repo
+
+    @property
+    def run_workflow_resolutions(self) -> FakeRunWorkflowResolutionRepository:
+        return self.run_workflow_resolution_repo
+
+    @property
+    def task_workflow_bindings(self) -> FakeTaskWorkflowBindingRepository:
+        return self.task_workflow_binding_repo
 
     @property
     def run_agent_resolutions(self) -> RunAgentResolutionRepository:

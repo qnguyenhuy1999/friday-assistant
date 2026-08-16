@@ -6,6 +6,8 @@ import {
   validateRun,
   validateRunAgentResolution,
   validateRunPage,
+  validateWorkflowExecutionInspection,
+  validateWorkflowNodeExecutionInspection,
 } from "@friday/contracts";
 import { FridayHttpClient } from "../http";
 import { RunsResource } from "./runs";
@@ -151,5 +153,36 @@ describe("RunsResource", () => {
       path: "/v1/runs/r-1/delegations",
       validate: validateDelegationRequests,
     });
+  });
+  it("reads frozen workflow execution and node inspection", async () => {
+    const { http, request } = client();
+    const runs = new RunsResource(http);
+    await runs.getWorkflow("r-1");
+    await runs.getWorkflowNodes("r-1");
+    expect(request).toHaveBeenNthCalledWith(1, {
+      method: "GET",
+      path: "/v1/runs/r-1/workflow",
+      validate: validateWorkflowExecutionInspection,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, {
+      method: "GET",
+      path: "/v1/runs/r-1/workflow/nodes",
+      validate: validateWorkflowNodeExecutionInspection,
+    });
+  });
+  it("rejects malformed workflow inspection responses", async () => {
+    const invalid = new RunsResource(
+      new FridayHttpClient({
+        baseUrl: "http://api.test",
+        fetchImpl: vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ status: "succeeded" })),
+          ),
+      }),
+    );
+    await expect(invalid.getWorkflow("r-1")).rejects.toBeInstanceOf(
+      WireFormatError,
+    );
   });
 });

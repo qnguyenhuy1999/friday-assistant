@@ -38,3 +38,14 @@ class TaskPageResponse(BaseModel):
 class StartRunResponse(BaseModel):
     task_id: str
     run_id: str
+
+
+class PutTaskWorkflowBody(BaseModel):
+    workflow_id: str
+
+
+class TaskWorkflowBindingResponse(BaseModel):
+    task_id: str
+    workflow_id: str
+    created_at: datetime
+    updated_at: datetime

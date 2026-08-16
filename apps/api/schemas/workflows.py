@@ -81,3 +81,34 @@ class WorkflowRevisionResponse(StrictModel):
 class WorkflowPageResponse(StrictModel):
     items: list[WorkflowResponse]
     next_cursor: str | None = None
+
+
+class WorkflowExecutionInspectionResponse(StrictModel):
+    root_run_id: str
+    workflow_execution_id: str
+    workflow_id: str
+    workflow_revision_id: str
+    workflow_revision_sha256: str
+    status: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    failure_code: str | None = None
+    failure_message: str | None = None
+
+
+class WorkflowNodeExecutionInspectionResponse(StrictModel):
+    node_execution_id: str
+    node_key: str
+    target_agent_id: str
+    target_agent_revision_id: str
+    target_agent_revision_sha256: str
+    status: str
+    child_task_id: str | None = None
+    child_run_id: str | None = None
+    child_execution_id: str | None = None
+    result_payload: Any = None
+    failure_code: str | None = None
+    failure_message: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None

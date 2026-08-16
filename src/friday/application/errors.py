@@ -171,6 +171,22 @@ class WorkflowRevisionNotFound(ApplicationError):
         super().__init__(f"Workflow revision not found: {revision_id}")
 
 
+class WorkflowExecutionError(ApplicationError):
+    """A Workflow execution cannot be safely resolved or advanced."""
+
+    def __init__(self, message: str = "workflow execution failed") -> None:
+        self.message = message
+        super().__init__(message)
+
+
+class WorkflowIntegrityError(WorkflowExecutionError):
+    """The immutable Workflow graph or its execution snapshot is invalid."""
+
+
+class WorkflowBindingError(WorkflowExecutionError):
+    """A Task/Run Workflow binding violates ownership or freeze rules."""
+
+
 class DelegationRequestNotFound(ApplicationError):
     def __init__(self, delegation_id: DelegationRequestId) -> None:
         self.delegation_id = delegation_id
@@ -218,6 +234,16 @@ class DelegatedManualRetryForbidden(EntityConflict):
 
     def __init__(self) -> None:
         super().__init__("delegated_manual_retry_forbidden")
+
+
+class WorkflowNodeManualRetryForbidden(EntityConflict):
+    def __init__(self) -> None:
+        super().__init__("workflow_node_manual_retry_forbidden")
+
+
+class WorkflowCancelNotSupportedWhileActive(EntityConflict):
+    def __init__(self) -> None:
+        super().__init__("workflow_cancel_not_supported_while_active")
 
 
 class ConcurrencyConflict(ApplicationError):

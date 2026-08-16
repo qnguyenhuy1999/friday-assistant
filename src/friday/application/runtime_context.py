@@ -59,6 +59,7 @@ class RunSnapshot:
     delegation_targets: tuple[DelegationTarget, ...] = ()
     delegations: tuple[DelegationView, ...] = ()
     incoming_delegation: DelegationRequest | None = None
+    workflow_context: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -423,6 +424,7 @@ def build_runtime_context(
     memory_context: MemoryContext | None = None,
     memory_max_chars: int = _DEFAULT_MEMORY_CONTEXT_CHARS,
     conversation_context: ConversationContext | None = None,
+    workflow_context: str | None = None,
     conversation_max_chars: int = _DEFAULT_CONVERSATION_CONTEXT_CHARS,
     max_skill_context_chars: int | None = None,
     max_agent_context_chars: int | None = None,
@@ -505,6 +507,10 @@ def build_runtime_context(
             )
             if memory:
                 document = f"{document}\n\n{memory}"
+    if workflow_context:
+        if len(document) + len(workflow_context) + 2 > max_chars:
+            raise ValueError("workflow_context_too_large")
+        document = f"{document}\n\n{workflow_context}"
     if len(document) > max_chars and memory_context is not None and "\n\n# MEMORY" in document:
         # Memory is optional context.  If a provider ignored its requested
         # bound, omit it atomically rather than cutting immutable core/Skill

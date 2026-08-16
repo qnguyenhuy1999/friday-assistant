@@ -24,6 +24,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from friday.application.errors import ConcurrencyConflict
 from friday.application.memory.models import IndexSnapshot, IndexState, MemoryRetrievalRecord
 from friday.application.ports import validate_delivery_attempt_history_limit
 from friday.domain import (
@@ -58,6 +59,7 @@ from friday.domain import (
     RunSkillResolution,
     RunStep,
     RunStepId,
+    RunWorkflowResolution,
     Schedule,
     ScheduleDeliveryPolicy,
     ScheduleFire,
@@ -92,10 +94,17 @@ from friday.domain import (
     TaskEvent,
     TaskId,
     TaskSkillBinding,
+    TaskWorkflowBinding,
     ToolInvocation,
     ToolInvocationId,
     Workflow,
+    WorkflowExecution,
+    WorkflowExecutionId,
+    WorkflowExecutionStatus,
     WorkflowId,
+    WorkflowNodeExecution,
+    WorkflowNodeExecutionId,
+    WorkflowNodeExecutionStatus,
     WorkflowRevision,
     WorkflowRevisionId,
 )
@@ -141,6 +150,8 @@ from friday.infrastructure.persistence.mappers import (
     run_step_from_row,
     run_step_to_row,
     run_to_row,
+    run_workflow_resolution_from_row,
+    run_workflow_resolution_to_row,
     schedule_delivery_policy_from_row,
     schedule_delivery_policy_to_row,
     schedule_fire_delivery_plan_from_row,
@@ -187,11 +198,17 @@ from friday.infrastructure.persistence.mappers import (
     task_skill_binding_from_row,
     task_skill_binding_to_row,
     task_to_row,
+    task_workflow_binding_from_row,
+    task_workflow_binding_to_row,
     tool_invocation_from_row,
     tool_invocation_to_row,
     workflow_edge_from_row,
     workflow_edge_to_row,
+    workflow_execution_from_row,
+    workflow_execution_to_row,
     workflow_from_row,
+    workflow_node_execution_from_row,
+    workflow_node_execution_to_row,
     workflow_node_from_row,
     workflow_node_to_row,
     workflow_revision_from_rows,
@@ -218,6 +235,7 @@ from friday.infrastructure.persistence.models import (
     RunSkillBindingRow,
     RunSkillResolutionRow,
     RunStepRow,
+    RunWorkflowResolutionRow,
     ScheduleDeliveryPolicyRow,
     ScheduleFireDeliveryPlanRow,
     ScheduleFireRow,
@@ -242,8 +260,11 @@ from friday.infrastructure.persistence.models import (
     TaskEventSequenceCounterRow,
     TaskRow,
     TaskSkillBindingRow,
+    TaskWorkflowBindingRow,
     ToolInvocationRow,
     WorkflowEdgeRow,
+    WorkflowExecutionRow,
+    WorkflowNodeExecutionRow,
     WorkflowNodeRow,
     WorkflowRevisionRow,
     WorkflowRow,
@@ -414,6 +435,270 @@ class WorkflowRevisionRepository:
             )
             + 1
         )
+
+
+class WorkflowExecutionRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def create(self, execution: WorkflowExecution) -> None:
+        self._session.add(workflow_execution_to_row(execution))
+
+    def get(self, execution_id: WorkflowExecutionId) -> WorkflowExecution | None:
+        row = self._session.get(WorkflowExecutionRow, str(execution_id))
+        return workflow_execution_from_row(row) if row else None
+
+    def update_status(
+        self,
+        execution_id: WorkflowExecutionId,
+        status: WorkflowExecutionStatus,
+        *,
+        completed_at: datetime | None = None,
+        failure_code: str | None = None,
+        failure_message: str | None = None,
+    ) -> None:
+        statement = (
+            update(WorkflowExecutionRow)
+            .where(
+                WorkflowExecutionRow.id == str(execution_id),
+                WorkflowExecutionRow.status == WorkflowExecutionStatus.RUNNING.value,
+            )
+            .values(
+                status=status.value,
+                completed_at=completed_at,
+                failure_code=failure_code,
+                failure_message=failure_message,
+            )
+        )
+        result = cast(CursorResult[Any], self._session.execute(statement))
+        if result.rowcount:
+            return
+        current = self._session.get(WorkflowExecutionRow, str(execution_id))
+        if current is not None and current.status == status.value:
+            return
+        raise ConcurrencyConflict("Workflow execution status transition raced")
+
+    def list_by_root_run_id(self, root_run_id: RunId) -> list[WorkflowExecution]:
+        statement = (
+            select(WorkflowExecutionRow)
+            .where(WorkflowExecutionRow.root_run_id == str(root_run_id))
+            .order_by(WorkflowExecutionRow.started_at, WorkflowExecutionRow.id)
+        )
+        return [
+            workflow_execution_from_row(row) for row in self._session.execute(statement).scalars()
+        ]
+
+
+class WorkflowNodeExecutionRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def create(self, node_execution: WorkflowNodeExecution) -> None:
+        self._session.add(workflow_node_execution_to_row(node_execution))
+
+    def get(self, node_execution_id: WorkflowNodeExecutionId) -> WorkflowNodeExecution | None:
+        row = self._session.get(WorkflowNodeExecutionRow, str(node_execution_id))
+        return workflow_node_execution_from_row(row) if row else None
+
+    def update_status(
+        self,
+        node_execution_id: WorkflowNodeExecutionId,
+        status: WorkflowNodeExecutionStatus,
+        *,
+        child_task_id: TaskId | None = None,
+        child_run_id: RunId | None = None,
+        child_execution_id: RunId | None = None,
+        result_payload: object = None,
+        failure_code: str | None = None,
+        failure_message: str | None = None,
+        created_at: datetime | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+    ) -> None:
+        expected_statuses: tuple[str, ...]
+        if status in {
+            WorkflowNodeExecutionStatus.DISPATCHED,
+            WorkflowNodeExecutionStatus.BLOCKED,
+        }:
+            expected_statuses = (WorkflowNodeExecutionStatus.PENDING.value,)
+        elif status in {
+            WorkflowNodeExecutionStatus.SUCCEEDED,
+            WorkflowNodeExecutionStatus.FAILED,
+        }:
+            expected_statuses = (WorkflowNodeExecutionStatus.DISPATCHED.value,)
+        elif status is WorkflowNodeExecutionStatus.CANCELLED:
+            expected_statuses = (
+                WorkflowNodeExecutionStatus.PENDING.value,
+                WorkflowNodeExecutionStatus.DISPATCHED.value,
+            )
+        else:
+            expected_statuses = (WorkflowNodeExecutionStatus.PENDING.value,)
+
+        values: dict[str, object] = {
+            "status": status.value,
+            "child_task_id": str(child_task_id) if child_task_id else None,
+            "child_run_id": str(child_run_id) if child_run_id else None,
+            "child_execution_id": str(child_execution_id) if child_execution_id else None,
+            "result_payload": result_payload,
+            "failure_code": failure_code,
+            "failure_message": failure_message,
+            "started_at": started_at,
+            "completed_at": completed_at,
+        }
+        if created_at is not None:
+            values["created_at"] = created_at
+        statement = (
+            update(WorkflowNodeExecutionRow)
+            .where(
+                WorkflowNodeExecutionRow.id == str(node_execution_id),
+                WorkflowNodeExecutionRow.status.in_(expected_statuses),
+            )
+            .values(**values)
+        )
+        result = cast(CursorResult[Any], self._session.execute(statement))
+        if result.rowcount:
+            return
+        current = self._session.get(WorkflowNodeExecutionRow, str(node_execution_id))
+        # Terminal outcome transitions (succeeded/failed/cancelled/blocked)
+        # re-apply the same durable value idempotently.  DISPATCHED is the one
+        # transition that materializes a child Task/Run/queue item, so a stale
+        # dispatcher must fail closed and roll back its orphan tree rather than
+        # silently treat a lost dispatch race as success.
+        if (
+            current is not None
+            and current.status == status.value
+            and status is not WorkflowNodeExecutionStatus.DISPATCHED
+        ):
+            return
+        raise ConcurrencyConflict("Workflow node execution status transition raced")
+
+    def list_by_execution(
+        self, workflow_execution_id: WorkflowExecutionId
+    ) -> list[WorkflowNodeExecution]:
+        statement = (
+            select(WorkflowNodeExecutionRow)
+            .where(WorkflowNodeExecutionRow.workflow_execution_id == str(workflow_execution_id))
+            .order_by(WorkflowNodeExecutionRow.node_key, WorkflowNodeExecutionRow.id)
+        )
+        return [
+            workflow_node_execution_from_row(row)
+            for row in self._session.execute(statement).scalars()
+        ]
+
+    def get_by_child_task_id(self, child_task_id: TaskId) -> WorkflowNodeExecution | None:
+        row = self._session.scalar(
+            select(WorkflowNodeExecutionRow).where(
+                WorkflowNodeExecutionRow.child_task_id == str(child_task_id)
+            )
+        )
+        return workflow_node_execution_from_row(row) if row else None
+
+    def get_by_child_execution_id(self, child_execution_id: RunId) -> WorkflowNodeExecution | None:
+        row = self._session.scalar(
+            select(WorkflowNodeExecutionRow).where(
+                WorkflowNodeExecutionRow.child_execution_id == str(child_execution_id)
+            )
+        )
+        return workflow_node_execution_from_row(row) if row else None
+
+    def update_by_child_execution_id(
+        self,
+        child_execution_id: RunId,
+        status: WorkflowNodeExecutionStatus,
+        *,
+        result_payload: object = None,
+        failure_code: str | None = None,
+        failure_message: str | None = None,
+        completed_at: datetime | None = None,
+    ) -> None:
+        node = self.get_by_child_execution_id(child_execution_id)
+        if node is None:
+            return
+        self.update_status(
+            node.id,
+            status,
+            child_task_id=node.child_task_id,
+            child_run_id=node.child_run_id,
+            child_execution_id=node.child_execution_id,
+            result_payload=result_payload,
+            failure_code=failure_code,
+            failure_message=failure_message,
+            started_at=node.started_at,
+            completed_at=completed_at,
+        )
+
+
+class RunWorkflowResolutionRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def create(self, resolution: RunWorkflowResolution) -> None:
+        self._session.add(run_workflow_resolution_to_row(resolution))
+
+    def add_if_claimed(
+        self,
+        resolution: RunWorkflowResolution,
+        worker_id: str,
+        claim_token: str,
+        claim_generation: int,
+        now: datetime,
+    ) -> bool:
+        from friday.infrastructure.persistence.models import RunWorkItemRow
+
+        statement = (
+            insert(RunWorkflowResolutionRow)
+            .from_select(
+                [
+                    "id",
+                    "run_id",
+                    "workflow_id",
+                    "workflow_revision_id",
+                    "content_sha256",
+                    "resolved_at",
+                ],
+                select(
+                    literal(str(resolution.id)),
+                    literal(str(resolution.run_id)),
+                    literal(str(resolution.workflow_id)),
+                    literal(str(resolution.workflow_revision_id)),
+                    literal(resolution.content_sha256),
+                    literal(resolution.resolved_at),
+                ).where(
+                    RunWorkItemRow.run_id == str(resolution.run_id),
+                    RunWorkItemRow.claimed_by == worker_id,
+                    RunWorkItemRow.claim_token == claim_token,
+                    RunWorkItemRow.claim_generation == claim_generation,
+                    RunWorkItemRow.lease_expires_at.is_not(None),
+                    RunWorkItemRow.lease_expires_at > now,
+                ),
+            )
+            .on_conflict_do_nothing(index_elements=["run_id"])
+        )
+        result = cast(CursorResult[Any], self._session.execute(statement))
+        return bool(result.rowcount)
+
+    def get_by_run_id(self, run_id: RunId) -> RunWorkflowResolution | None:
+        row = self._session.scalar(
+            select(RunWorkflowResolutionRow).where(RunWorkflowResolutionRow.run_id == str(run_id))
+        )
+        return run_workflow_resolution_from_row(row) if row else None
+
+
+class TaskWorkflowBindingRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def bind(self, binding: TaskWorkflowBinding) -> None:
+        self._session.merge(task_workflow_binding_to_row(binding))
+
+    def unbind(self, task_id: TaskId) -> None:
+        self._session.query(TaskWorkflowBindingRow).filter(
+            TaskWorkflowBindingRow.task_id == str(task_id)
+        ).delete(synchronize_session=False)
+
+    def get_by_task_id(self, task_id: TaskId) -> TaskWorkflowBinding | None:
+        row = self._session.get(TaskWorkflowBindingRow, str(task_id))
+        return task_workflow_binding_from_row(row) if row else None
 
 
 class TaskAgentBindingRepository:
@@ -1193,6 +1478,13 @@ class RunRepository:
         self._session = session
 
     def add(self, run: Run) -> None:
+        # Runs now have a nullable reverse FK to workflow_executions, whose
+        # root_run_id points back to runs.  SQLAlchemy cannot topologically
+        # order that cycle when a new Task and Run are staged together, so
+        # make the Task-side FK visible before adding the Run row.  This is a
+        # flush only; the caller still owns the transaction and can roll back
+        # the complete Task/Run/work-item unit atomically.
+        self._session.flush()
         self._session.add(run_to_row(run))
 
     def get(self, run_id: RunId) -> Run | None:
@@ -1300,7 +1592,14 @@ class RunRepository:
             if legacy_row is None:
                 return None
             return run_from_row(
-                cast(RunRow, SimpleNamespace(**legacy_row._mapping, delegation_request_id=None))
+                cast(
+                    RunRow,
+                    SimpleNamespace(
+                        **legacy_row._mapping,
+                        delegation_request_id=None,
+                        workflow_execution_id=None,
+                    ),
+                )
             )
         stmt = (
             select(RunRow)

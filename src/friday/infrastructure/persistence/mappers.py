@@ -76,6 +76,8 @@ from friday.domain import (
     RunStep,
     RunStepId,
     RunStepStatus,
+    RunWorkflowResolution,
+    RunWorkflowResolutionId,
     Schedule,
     ScheduleDeliveryPolicy,
     ScheduleFire,
@@ -121,14 +123,21 @@ from friday.domain import (
     TaskId,
     TaskSkillBinding,
     TaskStatus,
+    TaskWorkflowBinding,
     ToolInvocation,
     ToolInvocationId,
     ToolInvocationStatus,
     Workflow,
     WorkflowEdge,
     WorkflowEdgeId,
+    WorkflowExecution,
+    WorkflowExecutionId,
+    WorkflowExecutionStatus,
     WorkflowId,
     WorkflowNode,
+    WorkflowNodeExecution,
+    WorkflowNodeExecutionId,
+    WorkflowNodeExecutionStatus,
     WorkflowNodeId,
     WorkflowRevision,
     WorkflowRevisionId,
@@ -162,6 +171,7 @@ from friday.infrastructure.persistence.models import (
     RunSkillBindingRow,
     RunSkillResolutionRow,
     RunStepRow,
+    RunWorkflowResolutionRow,
     RunWorkItemRow,
     ScheduleDeliveryPolicyRow,
     ScheduleFireDeliveryPlanRow,
@@ -186,8 +196,11 @@ from friday.infrastructure.persistence.models import (
     TaskEventRow,
     TaskRow,
     TaskSkillBindingRow,
+    TaskWorkflowBindingRow,
     ToolInvocationRow,
     WorkflowEdgeRow,
+    WorkflowExecutionRow,
+    WorkflowNodeExecutionRow,
     WorkflowNodeRow,
     WorkflowRevisionRow,
     WorkflowRow,
@@ -952,6 +965,128 @@ def workflow_revision_to_row(value: WorkflowRevision) -> WorkflowRevisionRow:
     )
 
 
+def workflow_execution_to_row(value: WorkflowExecution) -> WorkflowExecutionRow:
+    return WorkflowExecutionRow(
+        id=str(value.id),
+        root_run_id=str(value.root_run_id),
+        workflow_id=str(value.workflow_id),
+        workflow_revision_id=str(value.workflow_revision_id),
+        workflow_content_sha256=value.workflow_content_sha256,
+        status=value.status.value,
+        started_at=value.started_at,
+        completed_at=value.completed_at,
+        failure_code=value.failure_code,
+        failure_message=value.failure_message,
+    )
+
+
+def workflow_execution_from_row(row: WorkflowExecutionRow) -> WorkflowExecution:
+    return WorkflowExecution(
+        id=WorkflowExecutionId.parse(row.id),
+        root_run_id=RunId.parse(row.root_run_id),
+        workflow_id=WorkflowId.parse(row.workflow_id),
+        workflow_revision_id=WorkflowRevisionId.parse(row.workflow_revision_id),
+        workflow_content_sha256=row.workflow_content_sha256,
+        status=WorkflowExecutionStatus(row.status),
+        started_at=read_back_utc(row.started_at),
+        completed_at=read_back_utc(row.completed_at) if row.completed_at else None,
+        failure_code=row.failure_code,
+        failure_message=row.failure_message,
+    )
+
+
+def workflow_node_execution_to_row(
+    value: WorkflowNodeExecution,
+) -> WorkflowNodeExecutionRow:
+    return WorkflowNodeExecutionRow(
+        id=str(value.id),
+        workflow_execution_id=str(value.workflow_execution_id),
+        workflow_node_id=str(value.workflow_node_id),
+        workflow_revision_id=str(value.workflow_revision_id),
+        node_key=value.node_key,
+        target_agent_id=str(value.target_agent_id),
+        target_agent_revision_id=str(value.target_agent_revision_id),
+        target_agent_revision_sha256=value.target_agent_revision_sha256,
+        status=value.status.value,
+        child_task_id=str(value.child_task_id) if value.child_task_id else None,
+        child_run_id=str(value.child_run_id) if value.child_run_id else None,
+        child_execution_id=str(value.child_execution_id) if value.child_execution_id else None,
+        result_payload=value.result_payload,
+        failure_code=value.failure_code,
+        failure_message=value.failure_message,
+        created_at=value.created_at,
+        started_at=value.started_at,
+        completed_at=value.completed_at,
+    )
+
+
+def workflow_node_execution_from_row(row: WorkflowNodeExecutionRow) -> WorkflowNodeExecution:
+    return WorkflowNodeExecution(
+        id=WorkflowNodeExecutionId.parse(row.id),
+        workflow_execution_id=WorkflowExecutionId.parse(row.workflow_execution_id),
+        workflow_node_id=WorkflowNodeId.parse(row.workflow_node_id),
+        workflow_revision_id=WorkflowRevisionId.parse(row.workflow_revision_id),
+        node_key=row.node_key,
+        target_agent_id=AgentId.parse(row.target_agent_id),
+        target_agent_revision_id=AgentRevisionId.parse(row.target_agent_revision_id),
+        target_agent_revision_sha256=row.target_agent_revision_sha256,
+        status=WorkflowNodeExecutionStatus(row.status),
+        child_task_id=TaskId.parse(row.child_task_id) if row.child_task_id else None,
+        child_run_id=RunId.parse(row.child_run_id) if row.child_run_id else None,
+        child_execution_id=RunId.parse(row.child_execution_id) if row.child_execution_id else None,
+        result_payload=cast(JsonValue, row.result_payload),
+        failure_code=row.failure_code,
+        failure_message=row.failure_message,
+        created_at=read_back_utc(row.created_at),
+        started_at=read_back_utc(row.started_at) if row.started_at else None,
+        completed_at=read_back_utc(row.completed_at) if row.completed_at else None,
+    )
+
+
+def run_workflow_resolution_to_row(
+    value: RunWorkflowResolution,
+) -> RunWorkflowResolutionRow:
+    return RunWorkflowResolutionRow(
+        id=str(value.id),
+        run_id=str(value.run_id),
+        workflow_id=str(value.workflow_id),
+        workflow_revision_id=str(value.workflow_revision_id),
+        content_sha256=value.content_sha256,
+        resolved_at=value.resolved_at,
+    )
+
+
+def run_workflow_resolution_from_row(
+    row: RunWorkflowResolutionRow,
+) -> RunWorkflowResolution:
+    return RunWorkflowResolution(
+        id=RunWorkflowResolutionId.parse(row.id),
+        run_id=RunId.parse(row.run_id),
+        workflow_id=WorkflowId.parse(row.workflow_id),
+        workflow_revision_id=WorkflowRevisionId.parse(row.workflow_revision_id),
+        content_sha256=row.content_sha256,
+        resolved_at=read_back_utc(row.resolved_at),
+    )
+
+
+def task_workflow_binding_to_row(value: TaskWorkflowBinding) -> TaskWorkflowBindingRow:
+    return TaskWorkflowBindingRow(
+        task_id=str(value.task_id),
+        workflow_id=str(value.workflow_id),
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+    )
+
+
+def task_workflow_binding_from_row(row: TaskWorkflowBindingRow) -> TaskWorkflowBinding:
+    return TaskWorkflowBinding(
+        task_id=TaskId.parse(row.task_id),
+        workflow_id=WorkflowId.parse(row.workflow_id),
+        created_at=read_back_utc(row.created_at),
+        updated_at=read_back_utc(row.updated_at),
+    )
+
+
 def task_agent_binding_to_row(value: TaskAgentBinding) -> TaskAgentBindingRow:
     return TaskAgentBindingRow(
         task_id=str(value.task_id), agent_id=str(value.agent_id), created_at=value.created_at
@@ -1156,6 +1291,9 @@ def run_to_row(run: Run) -> RunRow:
         failure=_failure_to_dict(run.failure),
         approval_request_id=str(run.approval_request_id) if run.approval_request_id else None,
         delegation_request_id=str(run.delegation_request_id) if run.delegation_request_id else None,
+        workflow_execution_id=(
+            str(run.workflow_execution_id) if run.workflow_execution_id else None
+        ),
     )
 
 
@@ -1174,6 +1312,9 @@ def run_from_row(row: RunRow) -> Run:
         else None,
         _delegation_request_id=DelegationRequestId.parse(row.delegation_request_id)
         if row.delegation_request_id
+        else None,
+        _workflow_execution_id=WorkflowExecutionId.parse(row.workflow_execution_id)
+        if row.workflow_execution_id
         else None,
     )
 

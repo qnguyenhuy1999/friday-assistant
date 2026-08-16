@@ -509,3 +509,135 @@ def test_run_once_reraises_system_exit_from_processor() -> None:
 
     with pytest.raises(SystemExit):
         loop.run_once(processor)
+
+
+@dataclass
+class _StubWorkflowStarter:
+    exc: BaseException | None = None
+    calls: int = 0
+
+    def execute(self, *args: object, **kwargs: object) -> object:
+        self.calls += 1
+        if self.exc is not None:
+            raise self.exc
+        return object()
+
+
+def _bound_run_and_factory() -> tuple[FakeUnitOfWork, Run, CountingUnitOfWorkFactory, FakeClock]:
+    from friday.domain.identifiers import WorkflowId
+    from friday.domain.workflow_execution import TaskWorkflowBinding
+
+    uow = FakeUnitOfWork()
+    task_id = TaskId.new()
+    run = Run.new(id=RunId.new(), task_id=task_id, created_at=T0)
+    uow.runs.add(run)
+    uow.work_queue.enqueue(run.id, T0, T0)
+    uow.task_workflow_bindings.bind(
+        TaskWorkflowBinding.new(task_id=task_id, workflow_id=WorkflowId.new(), at=T0)
+    )
+    factory = CountingUnitOfWorkFactory(uow)
+    clock = FakeClock()
+    return uow, run, factory, clock
+
+
+def _workflow_loop(
+    factory: CountingUnitOfWorkFactory, clock: FakeClock, workflow_starter: object
+) -> WorkerLoop:
+    retry = RetryPolicy(3, timedelta(seconds=1), 2.0, timedelta(seconds=10))
+    return WorkerLoop(
+        claim_next_run=ClaimNextRun(
+            factory, clock, worker_id="worker", lease_duration=LEASE, candidate_limit=10
+        ),
+        renew_lease=RenewRunLease(factory, clock, lease_duration=LEASE),
+        requeue_claimed_run=RequeueClaimedRun(factory, clock),
+        apply_failed=ApplyFailedOutcome(factory, clock, retry_policy=retry),
+        apply_succeeded=ApplySucceededOutcome(factory, clock),
+        apply_waiting=ApplyWaitingOutcome(factory, clock),
+        recover_expired_leases=RecoverExpiredLeases(factory, clock, batch_size=10),
+        expire_due_approvals=ExpireDueApprovals(factory, clock, batch_size=10),
+        clock=clock,
+        heartbeat_interval_seconds=0.001,
+        maintenance_interval_seconds=60,
+        poll_interval_seconds=0.001,
+        workflow_starter=workflow_starter,  # type: ignore[arg-type]
+        uow_factory=factory,
+    )
+
+
+def test_run_once_fails_closed_when_workflow_bound_but_starter_not_configured() -> None:
+    uow, run, factory, clock = _bound_run_and_factory()
+    loop = _workflow_loop(factory, clock, None)
+
+    assert loop.run_once(RaisingProcessor(AssertionError("must not process"))) is True
+
+    reloaded = uow.runs.get(run.id)
+    assert reloaded is not None
+    assert reloaded.status is RunStatus.FAILED
+    assert reloaded.failure is not None
+    assert reloaded.failure.code == "workflow_bootstrap_not_configured"
+
+
+def test_run_once_fails_closed_when_workflow_starter_raises() -> None:
+    uow, run, factory, clock = _bound_run_and_factory()
+    starter = _StubWorkflowStarter(exc=RuntimeError("bootstrap exploded"))
+    loop = _workflow_loop(factory, clock, starter)
+
+    assert loop.run_once(RaisingProcessor(AssertionError("must not process"))) is True
+
+    reloaded = uow.runs.get(run.id)
+    assert reloaded is not None
+    assert reloaded.status is RunStatus.FAILED
+    assert reloaded.failure is not None
+    assert reloaded.failure.code == "workflow_bootstrap_failed"
+    assert starter.calls == 1
+
+
+def test_run_once_fences_claim_lost_from_workflow_starter() -> None:
+    uow, run, factory, clock = _bound_run_and_factory()
+    starter = _StubWorkflowStarter(exc=ClaimLost("stale"))
+    loop = _workflow_loop(factory, clock, starter)
+
+    assert loop.run_once(RaisingProcessor(AssertionError("must not process"))) is True
+
+    reloaded = uow.runs.get(run.id)
+    assert reloaded is not None
+    # Fenced -- the run's own state is untouched (still whatever ClaimNextRun left it as).
+    assert reloaded.status is RunStatus.RUNNING
+
+
+def test_run_once_dispatches_successfully_bootstrapped_workflow() -> None:
+    uow, run, factory, clock = _bound_run_and_factory()
+    starter = _StubWorkflowStarter()
+    loop = _workflow_loop(factory, clock, starter)
+
+    assert loop.run_once(RaisingProcessor(AssertionError("must not process"))) is True
+    assert starter.calls == 1
+    reloaded = uow.runs.get(run.id)
+    assert reloaded is not None and reloaded.status is RunStatus.RUNNING
+
+
+def test_run_once_fails_closed_on_conflicting_frozen_workflow_routing() -> None:
+    from friday.domain.identifiers import RunWorkflowResolutionId, WorkflowId, WorkflowRevisionId
+    from friday.domain.workflow_execution import RunWorkflowResolution
+
+    uow, run, factory, clock = _bound_run_and_factory()
+    binding = uow.task_workflow_bindings.get_by_task_id(run.task_id)
+    assert binding is not None
+    conflicting_resolution = RunWorkflowResolution(
+        id=RunWorkflowResolutionId.new(),
+        run_id=run.id,
+        workflow_id=WorkflowId.new(),  # deliberately different from the binding
+        workflow_revision_id=WorkflowRevisionId.new(),  # unused by the routing check itself
+        content_sha256="a" * 64,
+        resolved_at=T0,
+    )
+    uow.run_workflow_resolutions.create(conflicting_resolution)
+    loop = _workflow_loop(factory, clock, _StubWorkflowStarter())
+
+    assert loop.run_once(RaisingProcessor(AssertionError("must not process"))) is True
+
+    reloaded = uow.runs.get(run.id)
+    assert reloaded is not None
+    assert reloaded.status is RunStatus.FAILED
+    assert reloaded.failure is not None
+    assert reloaded.failure.code == "workflow_routing_conflict"

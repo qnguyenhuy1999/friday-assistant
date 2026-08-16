@@ -35,6 +35,7 @@ export interface Run {
     | "running"
     | "waiting_for_approval"
     | "waiting_for_delegation"
+    | "waiting_for_workflow"
     | "succeeded"
     | "failed"
     | "cancelled";
@@ -274,6 +275,37 @@ export interface WorkflowRevision {
   created_at: string;
 }
 
+export interface WorkflowExecutionInspection {
+  root_run_id: string;
+  workflow_execution_id: string;
+  workflow_id: string;
+  workflow_revision_id: string;
+  workflow_revision_sha256: string;
+  status: string;
+  started_at: string;
+  completed_at: string | null;
+  failure_code: string | null;
+  failure_message: string | null;
+}
+
+export interface WorkflowNodeExecutionInspection {
+  node_execution_id: string;
+  node_key: string;
+  target_agent_id: string;
+  target_agent_revision_id: string;
+  target_agent_revision_sha256: string;
+  status: string;
+  child_task_id: string | null;
+  child_run_id: string | null;
+  child_execution_id: string | null;
+  result_payload: JsonValue;
+  failure_code: string | null;
+  failure_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
 export interface AgentRevision {
   id: string;
   agent_id: string;
@@ -290,6 +322,13 @@ export interface TaskAgentBinding {
   task_id: string;
   agent_id: string;
   created_at: string;
+}
+
+export interface TaskWorkflowBinding {
+  task_id: string;
+  workflow_id: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface RunAgentResolution {
@@ -678,6 +717,7 @@ const schema = {
             "running",
             "waiting_for_approval",
             "waiting_for_delegation",
+            "waiting_for_workflow",
             "succeeded",
             "failed",
             "cancelled",
@@ -1390,6 +1430,122 @@ const schema = {
         },
       },
     },
+    WorkflowExecutionInspection: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "root_run_id",
+        "workflow_execution_id",
+        "workflow_id",
+        "workflow_revision_id",
+        "workflow_revision_sha256",
+        "status",
+        "started_at",
+        "completed_at",
+        "failure_code",
+        "failure_message",
+      ],
+      properties: {
+        root_run_id: {
+          type: "string",
+        },
+        workflow_execution_id: {
+          type: "string",
+        },
+        workflow_id: {
+          type: "string",
+        },
+        workflow_revision_id: {
+          type: "string",
+        },
+        workflow_revision_sha256: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        status: {
+          type: "string",
+        },
+        started_at: {
+          type: "string",
+        },
+        completed_at: {
+          type: ["string", "null"],
+        },
+        failure_code: {
+          type: ["string", "null"],
+        },
+        failure_message: {
+          type: ["string", "null"],
+        },
+      },
+    },
+    WorkflowNodeExecutionInspection: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "node_execution_id",
+        "node_key",
+        "target_agent_id",
+        "target_agent_revision_id",
+        "target_agent_revision_sha256",
+        "status",
+        "child_task_id",
+        "child_run_id",
+        "child_execution_id",
+        "result_payload",
+        "failure_code",
+        "failure_message",
+        "created_at",
+        "started_at",
+        "completed_at",
+      ],
+      properties: {
+        node_execution_id: {
+          type: "string",
+        },
+        node_key: {
+          type: "string",
+        },
+        target_agent_id: {
+          type: "string",
+        },
+        target_agent_revision_id: {
+          type: "string",
+        },
+        target_agent_revision_sha256: {
+          type: "string",
+          pattern: "^[0-9a-f]{64}$",
+        },
+        status: {
+          type: "string",
+        },
+        child_task_id: {
+          type: ["string", "null"],
+        },
+        child_run_id: {
+          type: ["string", "null"],
+        },
+        child_execution_id: {
+          type: ["string", "null"],
+        },
+        result_payload: {},
+        failure_code: {
+          type: ["string", "null"],
+        },
+        failure_message: {
+          type: ["string", "null"],
+        },
+        created_at: {
+          type: "string",
+        },
+        started_at: {
+          type: ["string", "null"],
+        },
+        completed_at: {
+          type: ["string", "null"],
+        },
+      },
+    },
     AgentRevision: {
       type: "object",
       additionalProperties: false,
@@ -1444,6 +1600,25 @@ const schema = {
           type: "string",
         },
         created_at: {
+          type: "string",
+        },
+      },
+    },
+    TaskWorkflowBinding: {
+      type: "object",
+      additionalProperties: false,
+      required: ["task_id", "workflow_id", "created_at", "updated_at"],
+      properties: {
+        task_id: {
+          type: "string",
+        },
+        workflow_id: {
+          type: "string",
+        },
+        created_at: {
+          type: "string",
+        },
+        updated_at: {
           type: "string",
         },
       },
@@ -2450,6 +2625,21 @@ const schema = {
         $ref: "#/definitions/WorkflowRevision",
       },
     },
+    workflowExecutionInspection: {
+      $ref: "#/definitions/WorkflowExecutionInspection",
+    },
+    workflowNodeExecutionInspection: {
+      type: "array",
+      items: {
+        $ref: "#/definitions/WorkflowNodeExecutionInspection",
+      },
+    },
+    workflowNodeExecutionInspections: {
+      type: "array",
+      items: {
+        $ref: "#/definitions/WorkflowNodeExecutionInspection",
+      },
+    },
     agentPage: {
       type: "object",
       additionalProperties: false,
@@ -2479,6 +2669,16 @@ const schema = {
       anyOf: [
         {
           $ref: "#/definitions/TaskAgentBinding",
+        },
+        {
+          type: "null",
+        },
+      ],
+    },
+    taskWorkflowBinding: {
+      anyOf: [
+        {
+          $ref: "#/definitions/TaskWorkflowBinding",
         },
         {
           type: "null",
@@ -2828,6 +3028,18 @@ export const validateWorkflowRevision: WireValidator = (value, path) =>
   assertWire("workflowRevision", value, path);
 export const validateWorkflowRevisions: WireValidator = (value, path) =>
   assertWire("workflowRevisions", value, path);
+export const validateWorkflowExecutionInspection: WireValidator = (
+  value,
+  path,
+) => assertWire("workflowExecutionInspection", value, path);
+export const validateWorkflowNodeExecutionInspection: WireValidator = (
+  value,
+  path,
+) => assertWire("workflowNodeExecutionInspection", value, path);
+export const validateWorkflowNodeExecutionInspections: WireValidator = (
+  value,
+  path,
+) => assertWire("workflowNodeExecutionInspections", value, path);
 export const validateAgentPage: WireValidator = (value, path) =>
   assertWire("agentPage", value, path);
 export const validateAgentRevision: WireValidator = (value, path) =>
@@ -2836,6 +3048,8 @@ export const validateAgentRevisions: WireValidator = (value, path) =>
   assertWire("agentRevisions", value, path);
 export const validateTaskAgentBinding: WireValidator = (value, path) =>
   assertWire("taskAgentBinding", value, path);
+export const validateTaskWorkflowBinding: WireValidator = (value, path) =>
+  assertWire("taskWorkflowBinding", value, path);
 export const validateRunAgentResolution: WireValidator = (value, path) =>
   assertWire("runAgentResolution", value, path);
 export const validateDelegationRequest: WireValidator = (value, path) =>

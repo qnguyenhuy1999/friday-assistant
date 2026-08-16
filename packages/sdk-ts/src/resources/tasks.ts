@@ -3,15 +3,18 @@ import type {
   Failure,
   Page,
   PutTaskAgentBody,
+  PutTaskWorkflowBody,
   StartRunResponse,
   Task,
   TaskAgentBinding,
+  TaskWorkflowBinding,
   TaskSkillBinding,
 } from "@friday/contracts";
 import {
   validateStartRun,
   validateTask,
   validateTaskAgentBinding,
+  validateTaskWorkflowBinding,
   validateTaskPage,
   validateTaskSkillBindings,
 } from "@friday/contracts";
@@ -73,6 +76,28 @@ export class TasksResource {
       path: `/v1/tasks/${taskId}/agent`,
       body: input,
       validate: validateTaskAgentBinding,
+    });
+  }
+  getWorkflow(taskId: string) {
+    return this.http.requestJson<TaskWorkflowBinding | null>({
+      method: "GET",
+      path: `/v1/tasks/${taskId}/workflow`,
+      validate: validateTaskWorkflowBinding,
+    });
+  }
+  bindWorkflow(taskId: string, workflowId: string) {
+    const input: PutTaskWorkflowBody = { workflow_id: workflowId };
+    return this.http.requestJson<TaskWorkflowBinding>({
+      method: "PUT",
+      path: `/v1/tasks/${taskId}/workflow`,
+      body: input,
+      validate: validateTaskWorkflowBinding,
+    });
+  }
+  unbindWorkflow(taskId: string) {
+    return this.http.requestVoid({
+      method: "DELETE",
+      path: `/v1/tasks/${taskId}/workflow`,
     });
   }
   startRun(taskId: string) {

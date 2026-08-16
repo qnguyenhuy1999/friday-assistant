@@ -43,6 +43,10 @@ from friday.application.errors import (
     ToolInvocationNotFound,
     TransactionFailure,
     UnknownBrainRuntimeKind,
+    WorkflowBindingError,
+    WorkflowCancelNotSupportedWhileActive,
+    WorkflowIntegrityError,
+    WorkflowNodeManualRetryForbidden,
     WorkflowNotFound,
     WorkflowRevisionNotFound,
 )
@@ -94,13 +98,17 @@ _NOT_FOUND_TYPES: dict[type[ApplicationError], str] = {
 
 _CONFLICT_TYPES: dict[type[ApplicationError], str] = {
     DelegatedManualRetryForbidden: "delegated_manual_retry_forbidden",
+    WorkflowNodeManualRetryForbidden: "workflow_node_manual_retry_forbidden",
+    WorkflowCancelNotSupportedWhileActive: "workflow_cancel_not_supported_while_active",
     EntityConflict: "entity_conflict",
     ConcurrencyConflict: "concurrency_conflict",
+    WorkflowBindingError: "workflow_binding_error",
 }
 
 _UNPROCESSABLE_TYPES: dict[type[ApplicationError], str] = {
     UnknownBrainRuntimeKind: "unknown_brain_runtime_kind",
     InvalidBrainRuntimeConfig: "invalid_brain_runtime_config",
+    WorkflowIntegrityError: "workflow_integrity_error",
 }
 
 

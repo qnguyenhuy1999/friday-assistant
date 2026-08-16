@@ -77,9 +77,16 @@ def test_upgrade_creates_all_lifecycle_tables(tmp_path: Path) -> None:
             "workflow_revisions",
             "workflow_nodes",
             "workflow_edges",
+            "workflow_executions",
+            "workflow_node_executions",
+            "run_workflow_resolutions",
+            "task_workflow_bindings",
             "alembic_version",
         }
         assert "execution_id" in {column["name"] for column in inspector.get_columns("runs")}
+        assert "workflow_execution_id" in {
+            column["name"] for column in inspector.get_columns("runs")
+        }
         skill_uniques = {
             tuple(x["column_names"]) for x in inspector.get_unique_constraints("skills")
         }

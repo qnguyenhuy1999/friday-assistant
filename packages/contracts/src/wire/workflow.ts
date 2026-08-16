@@ -5,6 +5,9 @@ export interface CreateWorkflowBody {
   display_name: string;
   description?: string;
 }
+export interface PutTaskWorkflowBody {
+  workflow_id: string;
+}
 export interface WorkflowNodeInput {
   node_key: string;
   target_agent_id: string;

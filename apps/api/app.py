@@ -30,6 +30,7 @@ from apps.api.routes.steps import router as steps_router
 from apps.api.routes.tasks import router as tasks_router
 from apps.api.routes.tool_invocations import router as tool_invocations_router
 from apps.api.routes.workflows import router as workflows_router
+from apps.api.routes.workflows import workflow_inspection_router
 from apps.api.settings import ApiSettings
 from friday.application.brain_runtime import BrainRuntime
 from friday.application.brain_runtime_registry import DEFAULT_RUNTIME_KIND, BrainRuntimeRegistry
@@ -67,7 +68,7 @@ def create_app(settings: ApiSettings) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_allowed_origins),
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["Content-Type", "Last-Event-ID"],
     )
 
@@ -86,5 +87,6 @@ def create_app(settings: ApiSettings) -> FastAPI:
     app.include_router(artifacts_router, responses=ERROR_RESPONSES)
     app.include_router(events_router, responses=ERROR_RESPONSES)
     app.include_router(workflows_router, responses=ERROR_RESPONSES)
+    app.include_router(workflow_inspection_router, responses=ERROR_RESPONSES)
 
     return app

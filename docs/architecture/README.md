@@ -104,9 +104,9 @@ reverse.
 
 ## Status
 
-Implemented through **Phase 21 / Step 3 — Workflow registry and DAG contract**.
-Phase 21 overall remains incomplete: workflow invocation and execution are
-deliberately deferred to later steps.
+Implemented through **Phase 21 / Step 4 — Workflow registry, DAG contract, and
+frozen execution**. Phase 21 overall remains incomplete: later steps continue
+after workflow orchestration.
 
 - **Phase 4–5** — framework-independent domain model, application ports, JSON
   Schema contracts, and the SQLite persistence adapter (see
@@ -143,6 +143,14 @@ deliberately deferred to later steps.
 - **Phase 21 / Step 2** — durable delegation execution relationship.
 - **Phase 21 / Step 3** — immutable versioned Workflow registry, graph
   ownership, canonical DAG integrity hashing, lifecycle control, API, and SDK.
+- **Phase 21 / Step 4** — frozen Workflow execution: Task Workflow binding and
+  Run Workflow resolution, durable Workflow/Node execution snapshots with exact
+  Workflow and Agent freezes, fan-out/fan-in scheduling to a durable fixed
+  point, `BLOCKED` propagation, strict no-truncation predecessor context with
+  fail-closed dispatch, retry semantics, authority isolation (Workflow
+  influences orchestration; it never grants authority), and the current
+  cancellation limitation (an active Workflow execution cannot be cancelled
+  through the Task/Run paths). See [workflows.md](workflows.md).
 
 Remaining core work is Phase 21 multi-agent delegation.
 The adapter and migration behavior are covered by `tests/persistence`.

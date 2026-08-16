@@ -366,12 +366,12 @@ def test_empty_phase21_downgrade_upgrade_cycle_is_compatible(tmp_path: Path) -> 
     command.downgrade(config, "0031")
     assert _revision(db_path) == "0031"
     command.upgrade(config, "head")
-    assert _revision(db_path) == "0035"
+    assert _revision(db_path) == "0036"
 
     command.downgrade(config, "0030")
     assert _revision(db_path) == "0030"
     command.upgrade(config, "head")
-    assert _revision(db_path) == "0035"
+    assert _revision(db_path) == "0036"
 
 
 def test_0032_populated_downgrade_refuses_before_schema_mutation(tmp_path: Path) -> None:
@@ -518,3 +518,112 @@ def test_0034_populated_downgrade_refuses_before_schema_or_row_mutation(
         command.downgrade(config, "0033")
 
     assert _workflow_state_snapshot(db_path) == before
+
+
+def _seed_0036_lineage(db_path: Path, *, nested: bool) -> None:
+    """Seed delegation rows at head: one root (depth 1), optionally one
+    nested row (depth 2) naming it as root."""
+    engine = create_engine(f"sqlite:///{db_path}")
+    nested_id = "00000000-0000-0000-0000-000000000021"
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO delegation_requests ("
+                    "id, parent_run_id, parent_run_step_id, target_agent_id, objective, "
+                    "input_payload, expected_output_contract, authorization_fingerprint, "
+                    "status, child_task_id, child_run_id, created_at, root_delegation_id, "
+                    "depth) VALUES (:id, :run_id, NULL, :agent_id, 'lineage root', '{}', "
+                    "'result', :fingerprint, 'requested', NULL, NULL, :at, :id, 1)"
+                ),
+                {
+                    "id": DELEGATION_ID,
+                    "run_id": RUN_ID,
+                    "agent_id": AGENT_ID,
+                    "fingerprint": "a" * 64,
+                    "at": AT,
+                },
+            )
+            if nested:
+                connection.execute(
+                    text(
+                        "INSERT INTO delegation_requests ("
+                        "id, parent_run_id, parent_run_step_id, target_agent_id, objective, "
+                        "input_payload, expected_output_contract, authorization_fingerprint, "
+                        "status, child_task_id, child_run_id, created_at, root_delegation_id, "
+                        "depth) VALUES (:id, :run_id, NULL, :agent_id, 'nested hop', '{}', "
+                        "'result', :fingerprint, 'requested', NULL, NULL, :at, :root_id, 2)"
+                    ),
+                    {
+                        "id": nested_id,
+                        "run_id": RUN_ID,
+                        "agent_id": AGENT_ID,
+                        "fingerprint": "b" * 64,
+                        "at": AT,
+                        "root_id": DELEGATION_ID,
+                    },
+                )
+    finally:
+        engine.dispose()
+
+
+def test_0036_upgrade_backfills_historical_single_hop_rows_as_true_roots(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "phase21-0036-backfill.db"
+    config = _config(db_path)
+    command.upgrade(config, "0035")
+    _seed_delegation(db_path)
+
+    command.upgrade(config, "head")
+    assert _revision(db_path) == "0036"
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text("SELECT id, root_delegation_id, depth FROM delegation_requests")
+            ).all()
+    finally:
+        engine.dispose()
+    # Every pre-0036 row is a genuine root: nested delegation never existed
+    # before this migration, so nothing beyond root/depth-1 is fabricated.
+    assert [(row[0], row[1], row[2]) for row in rows] == [(DELEGATION_ID, DELEGATION_ID, 1)]
+
+
+def test_0036_populated_downgrade_refuses_while_nested_lineage_exists(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "phase21-populated-0036.db"
+    config = _config(db_path)
+    command.upgrade(config, "head")
+    _seed_0036_lineage(db_path, nested=True)
+    before_revision = _revision(db_path)
+    before_schema = _schema_fingerprint(db_path)
+
+    with pytest.raises(RuntimeError, match="0036 cannot downgrade"):
+        command.downgrade(config, "0035")
+
+    assert _revision(db_path) == before_revision == "0036"
+    assert _schema_fingerprint(db_path) == before_schema
+
+
+def test_0036_single_hop_rows_downgrade_compatibility(tmp_path: Path) -> None:
+    db_path = tmp_path / "phase21-single-hop-0036.db"
+    config = _config(db_path)
+    command.upgrade(config, "head")
+    _seed_0036_lineage(db_path, nested=False)
+
+    command.downgrade(config, "0035")
+    assert _revision(db_path) == "0035"
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with engine.connect() as connection:
+            columns = {
+                row[1] for row in connection.execute(text("PRAGMA table_info(delegation_requests)"))
+            }
+            count = connection.scalar(text("SELECT count(*) FROM delegation_requests"))
+    finally:
+        engine.dispose()
+    assert "root_delegation_id" not in columns
+    assert "depth" not in columns
+    assert count == 1

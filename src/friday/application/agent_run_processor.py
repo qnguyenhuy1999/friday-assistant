@@ -107,6 +107,7 @@ from friday.application.tool_authorization import (
 from friday.application.tool_gateway import ToolCall, ToolGateway, ToolRiskAssessment
 from friday.application.worker_coordination import VerifyRunClaim
 from friday.application.workflow_context import build_workflow_node_context
+from friday.domain.delegation import MAX_DELEGATION_DEPTH
 from friday.domain.errors import DomainValidationError
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
@@ -133,6 +134,7 @@ class RuntimeLimits:
     max_agent_context_chars: int = 24_000
     max_delegations_per_run: int = 4
     max_delegation_targets: int = 32
+    max_delegation_depth: int = MAX_DELEGATION_DEPTH
 
     def __post_init__(self) -> None:
         if self.max_turns_per_claim < 1:
@@ -157,6 +159,8 @@ class RuntimeLimits:
             raise ValueError("max_delegations_per_run must be positive")
         if self.max_delegation_targets < 1:
             raise ValueError("max_delegation_targets must be positive")
+        if self.max_delegation_depth < 1:
+            raise ValueError("max_delegation_depth must be >= 1")
 
 
 class AgentRunProcessor:
@@ -193,6 +197,7 @@ class AgentRunProcessor:
             clock,
             runtime_registry,
             max_delegations_per_run=limits.max_delegations_per_run,
+            max_delegation_depth=limits.max_delegation_depth,
         )
         self._limits = limits
         self._memory_retriever = memory_retriever
@@ -444,7 +449,7 @@ class AgentRunProcessor:
                     if message
                     in {
                         "delegation_budget_exhausted",
-                        "nested_delegation_not_supported",
+                        "delegation_depth_exhausted",
                     }
                     else "delegation_dispatch_failed"
                 )

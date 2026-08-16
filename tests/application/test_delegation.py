@@ -447,14 +447,14 @@ def test_dispatch_rejects_invalid_parent_step_before_materialization() -> None:
         )
 
 
-def test_nested_delegation_is_rejected_before_child_materialization() -> None:
+def test_nested_dispatch_within_depth_bound_inherits_root_lineage() -> None:
     uow, clock = FakeUnitOfWork(), FakeClock()
     factory = CountingUnitOfWorkFactory(uow)
     agent, parent = _setup(uow, clock, factory)
     generation = _claim_parent(uow, parent)
     incoming = DelegationRequest.new(
         id=DelegationRequestId.new(),
-        parent_run_id=parent.id,
+        parent_run_id=RunId.new(),
         target_agent_id=agent.id,
         objective="incoming",
         input_payload={},
@@ -464,18 +464,72 @@ def test_nested_delegation_is_rejected_before_child_materialization() -> None:
     incoming.dispatch(parent.task_id, parent.id, T0)
     uow.delegation_request_repo.add(incoming)
 
-    with pytest.raises(EntityConflict, match="nested_delegation_not_supported"):
+    request = DispatchDelegation(factory, clock, _registry()).execute(
+        parent_run_id=parent.id,
+        worker_id="parent-worker",
+        claim_token="parent-token",
+        claim_generation=generation,
+        target_agent_key="coder",
+        objective="grandchild",
+        input_payload={},
+        expected_output_contract="result",
+    )
+    assert request.depth == 2
+    assert request.root_delegation_id == incoming.id
+    assert incoming.depth == 1 and incoming.root_delegation_id == incoming.id
+    assert request.status.value == "dispatched"
+    assert parent.status.value == "waiting_for_delegation"
+    assert parent.delegation_request_id == request.id
+    assert request.child_task_id is not None
+    assert uow.task_agent_binding_repo.items[request.child_task_id].agent_id == agent.id
+
+
+def test_nested_dispatch_beyond_depth_bound_fails_closed() -> None:
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    agent, parent = _setup(uow, clock, factory)
+    generation = _claim_parent(uow, parent)
+    incoming = DelegationRequest.new(
+        id=DelegationRequestId.new(),
+        parent_run_id=RunId.new(),
+        target_agent_id=agent.id,
+        objective="incoming at the boundary",
+        input_payload={},
+        expected_output_contract="result",
+        created_at=T0,
+        root_delegation_id=DelegationRequestId.new(),
+        depth=3,
+    )
+    incoming.dispatch(parent.task_id, parent.id, T0)
+    uow.delegation_request_repo.add(incoming)
+    before = (
+        len(uow.task_repo.items),
+        len(uow.run_repo.items),
+        len(uow.delegation_request_repo.items),
+        len(uow.work_queue_repo.items),
+        len(uow.event_store.appended),
+    )
+
+    with pytest.raises(EntityConflict, match="delegation_depth_exhausted"):
         DispatchDelegation(factory, clock, _registry()).execute(
             parent_run_id=parent.id,
             worker_id="parent-worker",
             claim_token="parent-token",
             claim_generation=generation,
             target_agent_key="coder",
-            objective="grandchild",
+            objective="grandchild beyond the boundary",
             input_payload={},
             expected_output_contract="result",
         )
-    assert len(uow.task_repo.items) == 1
+    assert (
+        len(uow.task_repo.items),
+        len(uow.run_repo.items),
+        len(uow.delegation_request_repo.items),
+        len(uow.work_queue_repo.items),
+        len(uow.event_store.appended),
+    ) == before
+    assert parent.status.value == "running"
+    assert parent.delegation_request_id is None
 
 
 def test_delegation_budget_and_input_limits_fail_closed() -> None:

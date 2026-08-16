@@ -841,9 +841,18 @@ class DelegationRequestRow(Base):
     __tablename__ = "delegation_requests"
     __table_args__ = (
         Index("ix_delegation_requests_parent_run_id", "parent_run_id"),
+        Index("ix_delegation_requests_root_delegation_id", "root_delegation_id"),
         CheckConstraint(
             "status IN ('requested', 'dispatched', 'succeeded', 'failed', 'cancelled')",
             name="ck_delegation_requests_status",
+        ),
+        CheckConstraint(
+            "depth >= 1",
+            name="ck_delegation_requests_depth_positive",
+        ),
+        CheckConstraint(
+            "(depth = 1 AND root_delegation_id = id) OR (depth > 1 AND root_delegation_id <> id)",
+            name="ck_delegation_requests_root_shape",
         ),
         CheckConstraint(
             "length(authorization_fingerprint) = 64 AND "
@@ -905,6 +914,15 @@ class DelegationRequestRow(Base):
             ["task_agent_bindings.task_id", "task_agent_bindings.agent_id"],
             name="fk_delegation_requests_child_agent_ownership",
         ),
+        # Delegation-tree lineage: a root delegation is its own root; a
+        # nested delegation names its incoming delegation's root.  The
+        # incoming delegation itself stays derived from the canonical
+        # child_run_id -> runs.execution_id lineage.
+        ForeignKeyConstraint(
+            ["root_delegation_id"],
+            ["delegation_requests.id"],
+            name="fk_delegation_requests_root_ownership",
+        ),
     )
     id: Mapped[str] = mapped_column(primary_key=True)
     parent_run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
@@ -921,6 +939,8 @@ class DelegationRequestRow(Base):
     started_at: Mapped[datetime | None]
     completed_at: Mapped[datetime | None]
     failure_code: Mapped[str | None]
+    root_delegation_id: Mapped[str]
+    depth: Mapped[int]
 
 
 class TaskRow(Base):

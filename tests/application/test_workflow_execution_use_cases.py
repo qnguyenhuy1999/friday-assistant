@@ -668,3 +668,125 @@ def test_resolve_fails_closed_when_workflow_is_disabled() -> None:
 
     with pytest.raises(WorkflowBindingError, match="active"):
         ResolveRunWorkflow(factory, clock).execute(run.id, workflow.id, WORKER, TOKEN, generation)
+
+
+def _oversized_root_workflow(
+    uow: FakeUnitOfWork,
+    agents: list[Agent],
+    edges: list[tuple[int, int]],
+) -> tuple[Workflow, WorkflowRevision, list[WorkflowNode]]:
+    """Build a Workflow whose root node's aggregate context exceeds 6000 chars."""
+    workflow = Workflow.new(
+        id=WorkflowId.new(),
+        key=f"workflow.oversized.{str(WorkflowId.new())[:8]}",
+        display_name="Oversized Root",
+        description="",
+        created_at=T0,
+    )
+    uow.workflows.add(workflow)
+    revision_id = WorkflowRevisionId.new()
+    nodes = [
+        WorkflowNode(
+            id=WorkflowNodeId.new(),
+            revision_id=revision_id,
+            node_key=f"node-{index}",
+            target_agent_id=agents[index % len(agents)].id,
+            objective=("x" * 4000) if index == 0 else f"objective-{index}",
+            input_payload={"index": index},
+            expected_output_contract=("y" * 4000) if index == 0 else "result",
+            created_at=T0,
+        )
+        for index in range(max(len(agents), max((max(edge) for edge in edges), default=-1) + 1))
+    ]
+    workflow_edges = [
+        WorkflowEdge(
+            id=WorkflowEdgeId.new(),
+            revision_id=revision_id,
+            from_node_id=nodes[source].id,
+            to_node_id=nodes[target].id,
+            created_at=T0,
+        )
+        for source, target in edges
+    ]
+    revision = WorkflowRevision.new(
+        id=revision_id,
+        workflow_id=workflow.id,
+        version=1,
+        nodes=nodes,
+        edges=workflow_edges,
+        source_kind=WorkflowRevisionSourceKind.OPERATOR,
+        created_at=T0,
+    )
+    uow.workflow_revisions.add(revision)
+    workflow.activate(revision, T0)
+    uow.workflows.save(workflow)
+    return workflow, revision, nodes
+
+
+def test_bootstrap_terminalizes_single_oversized_root() -> None:
+    """A single oversized root must fail the Workflow in the bootstrap
+    transaction -- never strand it in WAITING_FOR_WORKFLOW forever."""
+    uow = FakeUnitOfWork()
+    factory = CountingUnitOfWorkFactory(uow)
+    clock = FakeClock(T0)
+    agent = _agent(uow, key="oversized-root")
+    workflow, _, _ = _oversized_root_workflow(uow, [agent], [])
+    task, run, generation = _root(uow, factory, workflow)
+
+    execution = StartWorkflowExecution(factory, clock, _runtime_registry()).execute(
+        run.id, workflow.id, WORKER, TOKEN, generation
+    )
+
+    nodes = uow.workflow_node_executions.list_by_execution(execution.id)
+    assert len(nodes) == 1
+    root_node = nodes[0]
+    assert root_node.status is WorkflowNodeExecutionStatus.BLOCKED
+    assert root_node.failure_code == "workflow_context_too_large"
+    assert root_node.child_task_id is None
+    assert root_node.child_run_id is None
+    assert root_node.child_execution_id is None
+
+    assert len(uow.task_repo.items) == 1
+    assert len(uow.run_repo.items) == 1
+    assert len(uow.work_queue_repo.items) == 0
+
+    completed = uow.workflow_executions.get(execution.id)
+    assert completed is not None
+    assert completed.status is WorkflowExecutionStatus.FAILED
+    assert completed.failure_code == "workflow_context_too_large"
+    assert uow.runs.get(run.id).status is RunStatus.FAILED  # type: ignore[union-attr]
+
+
+def test_bootstrap_propagates_oversized_root_through_dag() -> None:
+    """An oversized root A must block B and C in the same bootstrap
+    transaction, with no child Task/Run materialized for any node."""
+    uow = FakeUnitOfWork()
+    factory = CountingUnitOfWorkFactory(uow)
+    clock = FakeClock(T0)
+    agent = _agent(uow, key="oversized-chain")
+    workflow, _, _ = _oversized_root_workflow(uow, [agent], [(0, 1), (1, 2)])
+    task, run, generation = _root(uow, factory, workflow)
+
+    execution = StartWorkflowExecution(factory, clock, _runtime_registry()).execute(
+        run.id, workflow.id, WORKER, TOKEN, generation
+    )
+
+    nodes = uow.workflow_node_executions.list_by_execution(execution.id)
+    assert len(nodes) == 3
+    by_key = {node.node_key: node for node in nodes}
+    assert by_key["node-0"].status is WorkflowNodeExecutionStatus.BLOCKED
+    assert by_key["node-0"].failure_code == "workflow_context_too_large"
+    assert by_key["node-1"].status is WorkflowNodeExecutionStatus.BLOCKED
+    assert by_key["node-1"].failure_code == "blocked_by_predecessor"
+    assert by_key["node-2"].status is WorkflowNodeExecutionStatus.BLOCKED
+    assert by_key["node-2"].failure_code == "blocked_by_predecessor"
+
+    assert len(uow.task_repo.items) == 1
+    assert len(uow.run_repo.items) == 1
+    assert len(uow.work_queue_repo.items) == 0
+
+    completed = uow.workflow_executions.get(execution.id)
+    assert completed is not None
+    assert completed.status is WorkflowExecutionStatus.FAILED
+    assert completed.failure_code == "workflow_context_too_large"
+    assert uow.runs.get(run.id).status is RunStatus.FAILED  # type: ignore[union-attr]

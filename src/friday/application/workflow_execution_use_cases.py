@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from typing import cast
 
@@ -350,6 +350,194 @@ def _require_binding_exclusive(uow: UnitOfWork, task_id: TaskId) -> None:
         )
 
 
+def _remove_root_claim(
+    uow: UnitOfWork,
+    run_id: RunId,
+    worker_id: str,
+    claim_token: str,
+    claim_generation: int,
+    now: datetime,
+) -> None:
+    """Remove the root Run work item only if this exact claim still holds it."""
+    if not uow.work_queue.remove_if_claimed(run_id, worker_id, claim_token, claim_generation, now):
+        raise ClaimLost("Workflow bootstrap lost the exact root Run claim")
+
+
+def _schedule_to_fixed_point(
+    uow: UnitOfWork,
+    node_executions: dict[WorkflowNodeId, WorkflowNodeExecution],
+    workflow_nodes: dict[WorkflowNodeId, WorkflowNode],
+    predecessors: dict[WorkflowNodeId, list[WorkflowNodeId]],
+    now: datetime,
+) -> None:
+    """Advance every PENDING node to a durable fixed point.
+
+    A node whose predecessor failed, cancelled, or blocked is itself blocked;
+    a node whose predecessors all succeeded is dispatched.  The loop repeats
+    until no node changes, so a BLOCKED root propagates through the whole
+    downstream DAG in one call.
+    """
+    while True:
+        changed = False
+        for node_id in sorted(
+            node_executions,
+            key=lambda value: (workflow_nodes[value].node_key, str(value)),
+        ):
+            node_execution = node_executions[node_id]
+            if node_execution.status is not WorkflowNodeExecutionStatus.PENDING:
+                continue
+            predecessor_statuses = [
+                node_executions[pred].status for pred in predecessors.get(node_id, [])
+            ]
+            if any(
+                status
+                in {
+                    WorkflowNodeExecutionStatus.FAILED,
+                    WorkflowNodeExecutionStatus.CANCELLED,
+                    WorkflowNodeExecutionStatus.BLOCKED,
+                }
+                for status in predecessor_statuses
+            ):
+                node_execution.block(now)
+                _persist_node(uow, node_execution)
+                _emit_node_event(
+                    uow,
+                    node_execution,
+                    RunEventType.WORKFLOW_NODE_BLOCKED,
+                    now,
+                )
+                changed = True
+            elif all(
+                status is WorkflowNodeExecutionStatus.SUCCEEDED for status in predecessor_statuses
+            ):
+                _dispatch_node(uow, node_execution, workflow_nodes[node_id], now)
+                changed = True
+        if not changed:
+            return
+
+
+def _finish_if_terminal(
+    uow: UnitOfWork,
+    execution: WorkflowExecution,
+    nodes: list[WorkflowNodeExecution],
+    now: datetime,
+    queue_remover: Callable[[RunId], None] | None = None,
+) -> None:
+    """Terminalize the Workflow execution and root Run when every node is done.
+
+    ``queue_remover`` lets bootstrap remove the root work item under its exact
+    claim (``remove_if_claimed``) while reconcile uses the plain ``remove``
+    (the item was already removed during bootstrap).
+    """
+    if not nodes or any(not node.is_terminal for node in nodes):
+        return
+    root_run = uow.runs.get(execution.root_run_id)
+    if (
+        root_run is not None
+        and root_run.status is RunStatus.WAITING_FOR_WORKFLOW
+        and root_run.workflow_execution_id != execution.id
+    ):
+        raise WorkflowIntegrityError("root Run Workflow ownership marker mismatch")
+    remover = queue_remover or uow.work_queue.remove
+    if all(node.status is WorkflowNodeExecutionStatus.SUCCEEDED for node in nodes):
+        workflow, revision = _load_frozen_revision(
+            uow,
+            execution.workflow_id,
+            execution.workflow_revision_id,
+            execution.workflow_content_sha256,
+        )
+        result = _root_workflow_result(execution, workflow, revision, nodes)
+        execution.succeed(now)
+        _persist_execution(uow, execution)
+        _emit_workflow_event(
+            uow,
+            execution,
+            RunEventType.WORKFLOW_EXECUTION_SUCCEEDED,
+            result,
+            now,
+        )
+        if root_run is not None and root_run.status is RunStatus.WAITING_FOR_WORKFLOW:
+            root_run.succeed_workflow(now)
+            uow.runs.save(root_run)
+            remover(root_run.id)
+        return
+
+    failed = next(
+        (node for node in nodes if node.status is WorkflowNodeExecutionStatus.FAILED),
+        None,
+    )
+    cancelled = next(
+        (node for node in nodes if node.status is WorkflowNodeExecutionStatus.CANCELLED),
+        None,
+    )
+    if failed is not None:
+        code = failed.failure_code or "workflow_node_failed"
+        message = failed.failure_message or "A Workflow node failed"
+        execution.fail(now, code, message)
+        _persist_execution(uow, execution)
+        _emit_workflow_event(
+            uow,
+            execution,
+            RunEventType.WORKFLOW_EXECUTION_FAILED,
+            {
+                "workflow_execution_id": str(execution.id),
+                "failure_code": code,
+                "failure_message": message,
+            },
+            now,
+        )
+        if root_run is not None and root_run.status is RunStatus.WAITING_FOR_WORKFLOW:
+            root_run.fail_workflow(now, Failure(code, message, False, FailureCause.RUNTIME))
+            uow.runs.save(root_run)
+            remover(root_run.id)
+    elif cancelled is not None:
+        execution.cancel(now, "A Workflow node was cancelled")
+        _persist_execution(uow, execution)
+        _emit_workflow_event(
+            uow,
+            execution,
+            RunEventType.WORKFLOW_EXECUTION_FAILED,
+            {
+                "workflow_execution_id": str(execution.id),
+                "failure_code": "workflow_node_cancelled",
+                "failure_message": "A Workflow node was cancelled",
+            },
+            now,
+        )
+        if root_run is not None and root_run.status is RunStatus.WAITING_FOR_WORKFLOW:
+            root_run.cancel_workflow(now)
+            uow.runs.save(root_run)
+            remover(root_run.id)
+    else:
+        blocked = next(
+            (node for node in nodes if node.status is WorkflowNodeExecutionStatus.BLOCKED),
+            None,
+        )
+        if blocked is not None and blocked.failure_code != "blocked_by_predecessor":
+            code = blocked.failure_code or "workflow_node_blocked"
+            message = blocked.failure_message or "A Workflow node was blocked by a predecessor"
+        else:
+            code = "workflow_node_blocked"
+            message = "A Workflow node was blocked by a predecessor"
+        execution.fail(now, code, message)
+        _persist_execution(uow, execution)
+        _emit_workflow_event(
+            uow,
+            execution,
+            RunEventType.WORKFLOW_EXECUTION_FAILED,
+            {
+                "workflow_execution_id": str(execution.id),
+                "failure_code": code,
+                "failure_message": message,
+            },
+            now,
+        )
+        if root_run is not None and root_run.status is RunStatus.WAITING_FOR_WORKFLOW:
+            root_run.fail_workflow(now, Failure(code, message, False, FailureCause.RUNTIME))
+            uow.runs.save(root_run)
+            remover(root_run.id)
+
+
 class BindTaskWorkflow:
     def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
         self._uow_factory, self._clock = uow_factory, clock
@@ -618,12 +806,26 @@ class StartWorkflowExecution:
                 if not predecessors.get(node_id, []):
                     _dispatch_node(uow, node_executions[node_id], by_id[node_id], now)
 
+            # Reach a durable fixed point in the same transaction: a root that
+            # becomes BLOCKED (e.g. workflow_context_too_large) must propagate
+            # through the whole downstream DAG and terminalize the Workflow
+            # immediately, otherwise a single oversized root would strand the
+            # Workflow in WAITING_FOR_WORKFLOW forever with no child to trigger
+            # a later reconcile.
+            _schedule_to_fixed_point(uow, node_executions, by_id, predecessors, now)
             root_run.wait_for_workflow(now, execution.id)
             uow.runs.save(root_run)
-            if not uow.work_queue.remove_if_claimed(
-                root_run.id, worker_id, claim_token, claim_generation, now
-            ):
-                raise ClaimLost("Workflow bootstrap lost the exact root Run claim")
+            _finish_if_terminal(
+                uow,
+                execution,
+                list(node_executions.values()),
+                now,
+                queue_remover=lambda run_id: _remove_root_claim(
+                    uow, run_id, worker_id, claim_token, claim_generation, now
+                ),
+            )
+            if execution.status is WorkflowExecutionStatus.RUNNING:
+                _remove_root_claim(uow, root_run.id, worker_id, claim_token, claim_generation, now)
             uow.commit()
             return execution
 
@@ -757,8 +959,8 @@ class ReconcileWorkflowExecution:
             if execution.status is WorkflowExecutionStatus.RUNNING:
                 self._reconcile_dispatched_children(uow, node_executions.values(), now)
                 predecessors = _predecessors(revision.edges)
-                self._schedule_to_fixed_point(uow, node_executions, by_node_id, predecessors, now)
-                self._finish_if_terminal(uow, execution, list(node_executions.values()), now)
+                _schedule_to_fixed_point(uow, node_executions, by_node_id, predecessors, now)
+                _finish_if_terminal(uow, execution, list(node_executions.values()), now)
             uow.commit()
             return sorted(node_executions.values(), key=lambda node: (node.node_key, str(node.id)))
 
@@ -804,164 +1006,3 @@ class ReconcileWorkflowExecution:
                     RunEventType.WORKFLOW_NODE_CANCELLED,
                     now,
                 )
-
-    @staticmethod
-    def _schedule_to_fixed_point(
-        uow: UnitOfWork,
-        node_executions: dict[WorkflowNodeId, WorkflowNodeExecution],
-        workflow_nodes: dict[WorkflowNodeId, WorkflowNode],
-        predecessors: dict[WorkflowNodeId, list[WorkflowNodeId]],
-        now: datetime,
-    ) -> None:
-        while True:
-            changed = False
-            for node_id in sorted(
-                node_executions,
-                key=lambda value: (workflow_nodes[value].node_key, str(value)),
-            ):
-                node_execution = node_executions[node_id]
-                if node_execution.status is not WorkflowNodeExecutionStatus.PENDING:
-                    continue
-                predecessor_statuses = [
-                    node_executions[pred].status for pred in predecessors.get(node_id, [])
-                ]
-                if any(
-                    status
-                    in {
-                        WorkflowNodeExecutionStatus.FAILED,
-                        WorkflowNodeExecutionStatus.CANCELLED,
-                        WorkflowNodeExecutionStatus.BLOCKED,
-                    }
-                    for status in predecessor_statuses
-                ):
-                    node_execution.block(now)
-                    _persist_node(uow, node_execution)
-                    _emit_node_event(
-                        uow,
-                        node_execution,
-                        RunEventType.WORKFLOW_NODE_BLOCKED,
-                        now,
-                    )
-                    changed = True
-                elif all(
-                    status is WorkflowNodeExecutionStatus.SUCCEEDED
-                    for status in predecessor_statuses
-                ):
-                    _dispatch_node(uow, node_execution, workflow_nodes[node_id], now)
-                    changed = True
-            if not changed:
-                return
-
-    @staticmethod
-    def _finish_if_terminal(
-        uow: UnitOfWork,
-        execution: WorkflowExecution,
-        nodes: list[WorkflowNodeExecution],
-        now: datetime,
-    ) -> None:
-        if not nodes or any(not node.is_terminal for node in nodes):
-            return
-        root_run = uow.runs.get(execution.root_run_id)
-        if (
-            root_run is not None
-            and root_run.status is RunStatus.WAITING_FOR_WORKFLOW
-            and root_run.workflow_execution_id != execution.id
-        ):
-            raise WorkflowIntegrityError("root Run Workflow ownership marker mismatch")
-        if all(node.status is WorkflowNodeExecutionStatus.SUCCEEDED for node in nodes):
-            workflow, revision = _load_frozen_revision(
-                uow,
-                execution.workflow_id,
-                execution.workflow_revision_id,
-                execution.workflow_content_sha256,
-            )
-            result = _root_workflow_result(execution, workflow, revision, nodes)
-            execution.succeed(now)
-            _persist_execution(uow, execution)
-            _emit_workflow_event(
-                uow,
-                execution,
-                RunEventType.WORKFLOW_EXECUTION_SUCCEEDED,
-                result,
-                now,
-            )
-            if root_run is not None and root_run.status is RunStatus.WAITING_FOR_WORKFLOW:
-                root_run.succeed_workflow(now)
-                uow.runs.save(root_run)
-                uow.work_queue.remove(root_run.id)
-            return
-
-        failed = next(
-            (node for node in nodes if node.status is WorkflowNodeExecutionStatus.FAILED),
-            None,
-        )
-        cancelled = next(
-            (node for node in nodes if node.status is WorkflowNodeExecutionStatus.CANCELLED),
-            None,
-        )
-        if failed is not None:
-            code = failed.failure_code or "workflow_node_failed"
-            message = failed.failure_message or "A Workflow node failed"
-            execution.fail(now, code, message)
-            _persist_execution(uow, execution)
-            _emit_workflow_event(
-                uow,
-                execution,
-                RunEventType.WORKFLOW_EXECUTION_FAILED,
-                {
-                    "workflow_execution_id": str(execution.id),
-                    "failure_code": code,
-                    "failure_message": message,
-                },
-                now,
-            )
-            if root_run is not None and root_run.status is RunStatus.WAITING_FOR_WORKFLOW:
-                root_run.fail_workflow(now, Failure(code, message, False, FailureCause.RUNTIME))
-                uow.runs.save(root_run)
-                uow.work_queue.remove(root_run.id)
-        elif cancelled is not None:
-            execution.cancel(now, "A Workflow node was cancelled")
-            _persist_execution(uow, execution)
-            _emit_workflow_event(
-                uow,
-                execution,
-                RunEventType.WORKFLOW_EXECUTION_FAILED,
-                {
-                    "workflow_execution_id": str(execution.id),
-                    "failure_code": "workflow_node_cancelled",
-                    "failure_message": "A Workflow node was cancelled",
-                },
-                now,
-            )
-            if root_run is not None and root_run.status is RunStatus.WAITING_FOR_WORKFLOW:
-                root_run.cancel_workflow(now)
-                uow.runs.save(root_run)
-                uow.work_queue.remove(root_run.id)
-        else:
-            blocked = next(
-                (node for node in nodes if node.status is WorkflowNodeExecutionStatus.BLOCKED),
-                None,
-            )
-            if blocked is not None and blocked.failure_code != "blocked_by_predecessor":
-                code = blocked.failure_code or "workflow_node_blocked"
-                message = blocked.failure_message or "A Workflow node was blocked by a predecessor"
-            else:
-                code = "workflow_node_blocked"
-                message = "A Workflow node was blocked by a predecessor"
-            execution.fail(now, code, message)
-            _persist_execution(uow, execution)
-            _emit_workflow_event(
-                uow,
-                execution,
-                RunEventType.WORKFLOW_EXECUTION_FAILED,
-                {
-                    "workflow_execution_id": str(execution.id),
-                    "failure_code": code,
-                    "failure_message": message,
-                },
-                now,
-            )
-            if root_run is not None and root_run.status is RunStatus.WAITING_FOR_WORKFLOW:
-                root_run.fail_workflow(now, Failure(code, message, False, FailureCause.RUNTIME))
-                uow.runs.save(root_run)
-                uow.work_queue.remove(root_run.id)

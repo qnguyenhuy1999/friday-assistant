@@ -28,6 +28,7 @@ from friday.domain import (
     RunId,
     TaskAgentBinding,
 )
+from friday.domain.delegation import MAX_DELEGATION_DEPTH
 from friday.domain.event import RunEventType
 from friday.domain.identifiers import RunStepId, TaskId
 from friday.domain.json_value import JsonValue, ensure_json_value
@@ -111,6 +112,13 @@ class DispatchDelegation:
     This is deliberately a single transaction. It does not call a nested use
     case that commits: StartRun.execute_in_uow only contributes the normal
     child Task/Run/work-item writes to this transaction.
+
+    A delegated child Run may itself dispatch a further delegation: the
+    incoming delegation is derived from the parent Run's canonical execution
+    lineage, the new request inherits its root and depth, and depth beyond
+    `max_delegation_depth` fails closed with `delegation_depth_exhausted`.
+    The nested hop reuses this exact path — there is no second, nested or
+    agent-to-agent dispatch mechanism, and no authority crosses the hop.
     """
 
     def __init__(
@@ -120,13 +128,17 @@ class DispatchDelegation:
         runtime_registry: BrainRuntimeRegistry,
         *,
         max_delegations_per_run: int = 4,
+        max_delegation_depth: int = MAX_DELEGATION_DEPTH,
     ) -> None:
         if max_delegations_per_run < 1:
             raise ValueError("max_delegations_per_run must be positive")
+        if max_delegation_depth < 1:
+            raise ValueError("max_delegation_depth must be >= 1")
         self._uow_factory = uow_factory
         self._clock = clock
         self._runtime_registry = runtime_registry
         self._max_delegations_per_run = max_delegations_per_run
+        self._max_delegation_depth = max_delegation_depth
 
     def execute(
         self,
@@ -149,8 +161,15 @@ class DispatchDelegation:
                 raise RunNotFound(parent_run_id)
             if parent.status is not RunStatus.RUNNING:
                 raise EntityConflict("delegation parent must be running")
-            if uow.delegation_requests.get_for_child_execution(parent.execution_id) is not None:
-                raise EntityConflict("nested_delegation_not_supported")
+            incoming = uow.delegation_requests.get_for_child_execution(parent.execution_id)
+            root_delegation_id: DelegationRequestId | None = None
+            depth = 1
+            if incoming is not None:
+                assert incoming.depth is not None  # always set by __post_init__
+                depth = incoming.depth + 1
+                if depth > self._max_delegation_depth:
+                    raise EntityConflict("delegation_depth_exhausted")
+                root_delegation_id = incoming.root_delegation_id
             if (
                 uow.delegation_requests.count_dispatched_for_run(parent.id)
                 >= self._max_delegations_per_run
@@ -198,6 +217,8 @@ class DispatchDelegation:
                 expected_output_contract=expected_output_contract,
                 created_at=now,
                 parent_run_step_id=parent_run_step_id,
+                root_delegation_id=root_delegation_id,
+                depth=depth,
             )
             child_task = Task.new(
                 id=TaskId.new(),

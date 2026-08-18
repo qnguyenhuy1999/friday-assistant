@@ -1136,6 +1136,8 @@ def delegation_request_to_row(value: DelegationRequest) -> DelegationRequestRow:
         started_at=value.started_at,
         completed_at=value.completed_at,
         failure_code=value.failure_code,
+        root_delegation_id=str(value.root_delegation_id),
+        depth=value.depth,
     )
 
 
@@ -1158,6 +1160,8 @@ def delegation_request_from_row(row: DelegationRequestRow) -> DelegationRequest:
         started_at=read_back_utc(row.started_at) if row.started_at else None,
         completed_at=read_back_utc(row.completed_at) if row.completed_at else None,
         failure_code=row.failure_code,
+        root_delegation_id=DelegationRequestId.parse(row.root_delegation_id),
+        depth=row.depth,
     )
 
 

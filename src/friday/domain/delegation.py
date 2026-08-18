@@ -31,6 +31,16 @@ MAX_OUTPUT_CONTRACT_LENGTH = 4_000
 MAX_FAILURE_CODE_LENGTH = 128
 FINGERPRINT_VERSION = 1
 
+# Delegation depth convention: each hop adds one.  A -> B is depth 1,
+# B -> C is depth 2, C -> D is depth 3.  ROOT_DELEGATION_DEPTH names the
+# depth of a delegation with no incoming parent delegation; a root
+# delegation's root_delegation_id is itself.  MAX_DELEGATION_DEPTH is the
+# Friday-owned deterministic bound: dispatching one hop deeper fails closed
+# with `delegation_depth_exhausted` regardless of Agent identity, role,
+# model, Skill, Workflow membership, or prompt.
+ROOT_DELEGATION_DEPTH = 1
+MAX_DELEGATION_DEPTH = 3
+
 
 class DelegationStatus(StrEnum):
     REQUESTED = "requested"
@@ -91,6 +101,8 @@ class DelegationRequest:
     started_at: datetime | None = None
     completed_at: datetime | None = None
     failure_code: str | None = None
+    root_delegation_id: DelegationRequestId | None = None
+    depth: int | None = None
 
     def __post_init__(self) -> None:
         objective = self.objective.strip()
@@ -130,6 +142,19 @@ class DelegationRequest:
             raise DomainValidationError("failed DelegationRequest requires a failure_code")
         if self.status is not DelegationStatus.FAILED and self.failure_code is not None:
             raise DomainValidationError("only a failed DelegationRequest may carry a failure_code")
+        object.__setattr__(self, "root_delegation_id", self.root_delegation_id or self.id)
+        object.__setattr__(
+            self, "depth", ROOT_DELEGATION_DEPTH if self.depth is None else self.depth
+        )
+        if not isinstance(self.depth, int) or isinstance(self.depth, bool):
+            raise DomainValidationError("DelegationRequest.depth must be an integer")
+        if self.depth < ROOT_DELEGATION_DEPTH:
+            raise DomainValidationError("DelegationRequest.depth must be at least 1")
+        if (self.depth == ROOT_DELEGATION_DEPTH) != (self.root_delegation_id == self.id):
+            raise DomainValidationError(
+                "a root delegation has depth 1 and is its own root; a nested delegation "
+                "has depth > 1 and names another delegation as root"
+            )
         object.__setattr__(self, "created_at", ensure_utc(self.created_at))
         if self.started_at is not None:
             object.__setattr__(self, "started_at", ensure_utc(self.started_at))
@@ -215,7 +240,13 @@ class DelegationRequest:
         expected_output_contract: str,
         created_at: datetime,
         parent_run_step_id: RunStepId | None = None,
+        root_delegation_id: DelegationRequestId | None = None,
+        depth: int | None = None,
     ) -> DelegationRequest:
+        """`root_delegation_id`/`depth` default to a root delegation (self,
+        depth 1).  A nested delegation passes its incoming delegation's root
+        and `incoming.depth + 1`; Friday derives both at dispatch time from
+        durable lineage, never from runtime context."""
         normalized_objective = objective.strip()
         normalized_contract = expected_output_contract.strip()
         canonical_input = ensure_json_value(input_payload, path="DelegationRequest.input_payload")
@@ -239,4 +270,6 @@ class DelegationRequest:
             status=DelegationStatus.REQUESTED,
             created_at=ensure_utc(created_at),
             parent_run_step_id=parent_run_step_id,
+            root_delegation_id=root_delegation_id,
+            depth=depth,
         )

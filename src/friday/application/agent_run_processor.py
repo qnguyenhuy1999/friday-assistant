@@ -107,7 +107,11 @@ from friday.application.tool_authorization import (
 from friday.application.tool_gateway import ToolCall, ToolGateway, ToolRiskAssessment
 from friday.application.worker_coordination import VerifyRunClaim
 from friday.application.workflow_context import build_workflow_node_context
-from friday.domain.delegation import MAX_DELEGATION_DEPTH
+from friday.domain.delegation import (
+    MAX_DELEGATION_DEPTH,
+    MAX_DELEGATIONS_PER_RUN,
+    MAX_DELEGATIONS_PER_TREE,
+)
 from friday.domain.errors import DomainValidationError
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
@@ -132,7 +136,8 @@ class RuntimeLimits:
     max_processing_seconds: float = 600.0
     max_skill_context_chars: int = 24_000
     max_agent_context_chars: int = 24_000
-    max_delegations_per_run: int = 4
+    max_delegations_per_run: int = MAX_DELEGATIONS_PER_RUN
+    max_delegations_per_tree: int = MAX_DELEGATIONS_PER_TREE
     max_delegation_targets: int = 32
     max_delegation_depth: int = MAX_DELEGATION_DEPTH
 
@@ -157,6 +162,8 @@ class RuntimeLimits:
             )
         if self.max_delegations_per_run < 1:
             raise ValueError("max_delegations_per_run must be positive")
+        if self.max_delegations_per_tree < 1:
+            raise ValueError("max_delegations_per_tree must be positive")
         if self.max_delegation_targets < 1:
             raise ValueError("max_delegation_targets must be positive")
         if self.max_delegation_depth < 1:
@@ -197,6 +204,7 @@ class AgentRunProcessor:
             clock,
             runtime_registry,
             max_delegations_per_run=limits.max_delegations_per_run,
+            max_delegations_per_tree=limits.max_delegations_per_tree,
             max_delegation_depth=limits.max_delegation_depth,
         )
         self._limits = limits

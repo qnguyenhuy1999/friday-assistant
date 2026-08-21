@@ -17,6 +17,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
 from friday.application.conversation_context import ConversationContext, build_conversation_section
+from friday.application.delegation_result_safety import (
+    sanitize_delegation_result_text,
+    sanitize_delegation_result_value,
+)
 from friday.application.errors import SkillIntegrityFailed
 from friday.application.memory.context import build_memory_section
 from friday.application.memory.models import MemoryContext, RetrievalMode
@@ -188,8 +192,10 @@ def _delegation_section(delegations: tuple[DelegationView, ...]) -> list[str]:
         if item.child_execution_id is not None:
             line += f" child_execution={item.child_execution_id}"
         if request.status.value == "succeeded" and item.summary is not None:
-            line += f" summary={_clip(item.summary, 1000)}"
-            line += f" details={_compact_json(item.details)}"
+            safe_summary = sanitize_delegation_result_text(item.summary)
+            safe_details = sanitize_delegation_result_value(item.details)
+            line += f" summary={_clip(safe_summary, 1000)}"
+            line += f" details={_compact_json(safe_details)}"
         elif request.failure_code is not None:
             line += f" failure_code={request.failure_code}"
         lines.append(line)

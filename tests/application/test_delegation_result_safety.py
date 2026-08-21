@@ -50,10 +50,7 @@ def test_delegation_result_redacts_recursive_authority_fields() -> None:
     assert nested["credentials"] == REDACTED_DELEGATION_AUTHORITY
     assert nested["provider_handle"] == REDACTED_DELEGATION_AUTHORITY
     assert nested["runtime_handle"] == REDACTED_DELEGATION_AUTHORITY
-    assert (
-        nested["tool_invocation_authorization_state"]
-        == REDACTED_DELEGATION_AUTHORITY
-    )
+    assert nested["tool_invocation_authorization_state"] == REDACTED_DELEGATION_AUTHORITY
     assert "approval-secret" not in encoded
     assert "fingerprint-secret" not in encoded
     assert "claim-secret" not in encoded

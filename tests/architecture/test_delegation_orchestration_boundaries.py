@@ -73,9 +73,7 @@ def test_delegation_orchestration_has_no_tool_provider_shell_or_approval_depende
                     None,
                 )
                 if hit is not None:
-                    offenders.append(
-                        f"{path.relative_to(ROOT)}: {imported!r} matches {hit!r}"
-                    )
+                    offenders.append(f"{path.relative_to(ROOT)}: {imported!r} matches {hit!r}")
     assert offenders == []
 
 

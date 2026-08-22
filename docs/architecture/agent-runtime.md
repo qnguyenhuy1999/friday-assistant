@@ -43,13 +43,29 @@ required flag fails the worker before any claim (fail-closed).
 ## Action contract
 
 `packages/contracts/schemas/v1/runtime/brain_action.json` is the canonical
-envelope: a strict `oneOf` of `finish`, `fail`, `yield`, `invoke_tool`
+envelope: a strict `oneOf` of `finish`, `fail`, `yield`, `invoke_tool`, and
+`delegate`
 (version 1, bounded strings, `additionalProperties: false`).
 `friday.application.runtime_actions.parse_brain_action` mirrors it in
 stdlib code (jsonschema is dev-only) and rejects unknown actions, unknown
 fields, wrong versions, bool-as-int, and oversized values. There is no
 action that touches Run/Step/Approval/ToolInvocation status — the model
 cannot set lifecycle state.
+
+## Phase 21 Agent and delegation boundary
+
+An Agent is a versioned reasoning definition, not an authority principal. A
+Run resolves and freezes one exact Agent revision before it is processed; all
+automatic retries in the same execution lineage retain that frozen revision.
+The active revision may change for later executions only.
+
+`delegate` asks Friday to materialize another ordinary Task/Run. Friday
+claim-fences and persists that edge, enforces depth and budget limits, and
+parks the parent until the child execution lineage reaches its latest terminal
+attempt. Delegation transfers work, never approvals, tool grants, claim
+tokens, provider handles, or filesystem/MCP/browser/messaging authority. Each
+child independently follows the normal AgentRunProcessor → proposed action →
+risk → ApprovalRequest → ToolInvocation → ToolGateway path.
 
 ## Deterministic context
 

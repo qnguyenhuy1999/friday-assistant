@@ -182,18 +182,13 @@ Domain never depends outward. See [docs/architecture/README.md](docs/architectur
 Completed core foundations through:
 
 ```text
-Phase 19 — Durable Messaging & Scheduled Delivery
+Phase 21 — Agents, Workflows & Delegation
 ```
 
 Phase 20 — Skills & Self-Improvement Loop is complete.
-Phase 21 Step 1 and Step 2 are complete. Phase 21 Step 3 — Workflow registry
-and DAG contract — is implemented; Phase 21 overall is not complete.
-
-Remaining v1 phases:
-
-```text
-Phase 21 — Agents, Workflows & Delegation
-```
+Phase 21 — Agents, Workflows & Delegation is complete: immutable Agent and
+Workflow revisions, frozen execution, bounded nested delegation, durable
+retry/recovery, result projection, and Run-local authority isolation.
 
 After Phase 21, additional work is considered product expansion rather than core architecture.
 
@@ -231,6 +226,5 @@ See `justfile` for the complete command set and `docs/` for architecture, govern
 
 Friday is actively developed and should still be treated as pre-release software.
 
-The core execution/runtime foundations and messaging are implemented through
-Phase 19. Phase 20 skills/self-improvement closure work is in progress.
-Multi-agent workflows remain upcoming work.
+The core execution/runtime foundations, messaging, skills, and bounded
+multi-agent workflow runtime are implemented through Phase 21.

@@ -113,3 +113,19 @@ proves upgrade/downgrade behavior, while
 `tests/persistence/test_schema_parity.py` upgrades a new database through
 Alembic and compares its owned tables, columns, types, nullability, keys,
 constraints, indexes, and defaults with `Base.metadata`.
+
+## Phase 21 durable orchestration state
+
+Migration head `0036` closes Phase 21 without rewriting historical migration
+history. Migrations `0031`–`0036` add immutable Agent revisions and Run
+resolutions, durable delegation requests and child execution lineage,
+Workflow definitions/revisions, frozen Workflow execution/node state, and
+bounded nested delegation tree identity/depth. Database constraints,
+conditional state transitions, claim fencing, and unique ownership keys are
+the correctness mechanism for Agent freeze, Workflow dispatch, retry lineage,
+and delegation budgets; process-local locks are not relied on.
+
+Worker recovery reads durable `running` Workflow executions with a latest
+terminal child in bounded batches and re-applies the idempotent scheduler. No
+`0037` migration is needed for that recovery path because its durable state and
+transition fences already exist in the `0035`/`0036` schema.

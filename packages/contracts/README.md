@@ -42,3 +42,12 @@ the SDK's public response types and Ajv validators; CI regenerates it and
 rejects drift. `@friday/sdk` applies those validators to each versioned JSON
 resource operation and to SSE run events. Endpoints without a versioned HTTP
 wire contract (for example health checks) are intentionally outside that set.
+
+Phase 21's operator-visible control plane is included in that generated HTTP
+contract: immutable Agents and revisions, immutable Workflows and revisions,
+Task Agent/Workflow bindings, frozen Run Agent/Workflow inspection, Workflow
+node inspection, and delegation request inspection. Delegation requests are
+materialized internally through the Agent delegation runtime; the operator HTTP
+surface exposes inspection only. These fields are
+provenance and orchestration data only; contracts never expose an approval,
+claim, or ToolInvocation handle as transferable authority.

@@ -1,9 +1,10 @@
 # Architecture Overview
 
-This document describes the implemented source organization through Phase 19,
-with Phase 20 closure work in progress: domain and application logic, SQLite persistence, API and worker
-delivery, Claude runtime, memory, computer use, contracts, SDK, web control
-plane, durable scheduled automations, and the versioned skill registry.
+This document describes the implemented source organization through Phase 21:
+domain and application logic, SQLite persistence, API and worker delivery,
+Claude runtime, memory, computer use, contracts, SDK, web control plane,
+durable scheduled automations, versioned skills, and the bounded
+Agent/Workflow/Delegation runtime.
 
 ## Source Tree
 
@@ -104,9 +105,7 @@ reverse.
 
 ## Status
 
-Implemented through **Phase 21 / Step 4 — Workflow registry, DAG contract, and
-frozen execution**. Phase 21 overall remains incomplete: later steps continue
-after workflow orchestration.
+Implemented through **Phase 21 — Agents, Workflows & Delegation**.
 
 - **Phase 4–5** — framework-independent domain model, application ports, JSON
   Schema contracts, and the SQLite persistence adapter (see
@@ -139,18 +138,11 @@ after workflow orchestration.
   deterministic isolated evaluation, brain-only candidate proposals,
   exact-intent promotion and rollback, and policy-driven proposal generation
   (see [phase-20-skills.md](phase-20-skills.md)).
-- **Phase 21 / Step 1** — durable delegation request definition.
-- **Phase 21 / Step 2** — durable delegation execution relationship.
-- **Phase 21 / Step 3** — immutable versioned Workflow registry, graph
-  ownership, canonical DAG integrity hashing, lifecycle control, API, and SDK.
-- **Phase 21 / Step 4** — frozen Workflow execution: Task Workflow binding and
-  Run Workflow resolution, durable Workflow/Node execution snapshots with exact
-  Workflow and Agent freezes, fan-out/fan-in scheduling to a durable fixed
-  point, `BLOCKED` propagation, strict no-truncation predecessor context with
-  fail-closed dispatch, retry semantics, authority isolation (Workflow
-  influences orchestration; it never grants authority), and the current
-  cancellation limitation (an active Workflow execution cannot be cancelled
-  through the Task/Run paths). See [workflows.md](workflows.md).
+- **Phase 21 (complete)** — immutable Agent and Workflow revisions; durable
+  Run freeze and retry lineage; single-hop and bounded nested delegation;
+  direct and tree-wide delegation budgets; durable Workflow DAG scheduling;
+  Workflow-plus-delegation composition; restart recovery; result projection;
+  and Run-local authority isolation. See [workflows.md](workflows.md) and
+  [agent-runtime.md](agent-runtime.md).
 
-Remaining core work is Phase 21 multi-agent delegation.
 The adapter and migration behavior are covered by `tests/persistence`.

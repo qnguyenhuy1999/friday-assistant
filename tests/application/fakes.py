@@ -1494,6 +1494,16 @@ class FakeRunAgentResolutionRepository:
 class FakeWorkflowExecutionRepository:
     def __init__(self) -> None:
         self.items: dict[WorkflowExecutionId, WorkflowExecution] = {}
+        self._nodes: FakeWorkflowNodeExecutionRepository | None = None
+        self._runs: FakeRunRepository | None = None
+
+    def configure_recovery_sources(
+        self,
+        nodes: FakeWorkflowNodeExecutionRepository,
+        runs: FakeRunRepository,
+    ) -> None:
+        self._nodes = nodes
+        self._runs = runs
 
     def create(self, execution: WorkflowExecution) -> None:
         from friday.application.errors import EntityConflict
@@ -1527,6 +1537,29 @@ class FakeWorkflowExecutionRepository:
             (item for item in self.items.values() if item.root_run_id == root_run_id),
             key=lambda item: (item.started_at, str(item.id)),
         )
+
+    def list_recoverable(self, limit: int) -> list[WorkflowExecution]:
+        from friday.domain.run import TERMINAL_RUN_STATUSES
+
+        if self._nodes is None or self._runs is None:
+            return []
+        return sorted(
+            (
+                item
+                for item in self.items.values()
+                if item.status is WorkflowExecutionStatus.RUNNING
+                and any(
+                    node.status is WorkflowNodeExecutionStatus.DISPATCHED
+                    and node.child_execution_id is not None
+                    and (latest := self._runs.get_latest_for_execution(node.child_execution_id))
+                    is not None
+                    and latest.status in TERMINAL_RUN_STATUSES
+                    for node in self._nodes.items.values()
+                    if node.workflow_execution_id == item.id
+                )
+            ),
+            key=lambda item: (item.started_at, str(item.id)),
+        )[:limit]
 
 
 class FakeWorkflowNodeExecutionRepository:
@@ -2128,6 +2161,9 @@ class FakeUnitOfWork:
         self.skill_promotion_request_repo = FakeSkillPromotionRequestRepository()
         self.skill_rollback_request_repo = FakeSkillRollbackRequestRepository()
         self.run_repo = FakeRunRepository()
+        self.workflow_execution_repo.configure_recovery_sources(
+            self.workflow_node_execution_repo, self.run_repo
+        )
         self.delegation_request_repo._runs = self.run_repo
         self.schedule_repo = FakeScheduleRepository()
         self.conversation_repo = FakeConversationRepository()

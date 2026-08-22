@@ -71,6 +71,7 @@ class WorkerLoop:
         workflow_starter: StartWorkflowExecution | None = None,
         workflow_reconciler: ReconcileWorkflowExecution | None = None,
         uow_factory: UnitOfWorkFactory | None = None,
+        workflow_recovery_batch_size: int = 100,
     ) -> None:
         self._claim_next_run = claim_next_run
         self._renew_lease = renew_lease
@@ -82,6 +83,7 @@ class WorkerLoop:
         self._workflow_starter = workflow_starter
         self._workflow_reconciler = workflow_reconciler
         self._uow_factory = uow_factory
+        self._workflow_recovery_batch_size = workflow_recovery_batch_size
         self._recover_expired_leases = recover_expired_leases
         self._expire_due_approvals = expire_due_approvals
         self._materialize_due_schedules = materialize_due_schedules
@@ -423,6 +425,7 @@ class WorkerLoop:
         except Exception:  # noqa: BLE001 - maintenance jobs are isolated from one another
             approvals = []
             lifecycle_log(logger, logging.WARNING, "worker.approval_expiry_failed")
+        recovered_workflows = self._recover_running_workflows()
         try:
             skill_policies_due = (
                 self._evaluate_due_skill_policies.execute()
@@ -454,7 +457,48 @@ class WorkerLoop:
             "worker.approvals_expired",
             expired_approval_count=len(approvals),
         )
+        lifecycle_log(
+            logger,
+            logging.INFO,
+            "worker.workflows_reconciled",
+            workflow_count=recovered_workflows,
+        )
         self._refresh_memory_index_if_due()
+
+    def _recover_running_workflows(self) -> int:
+        """Resume durable Workflow scheduling after a process boundary.
+
+        A child Run terminalizes in its own transaction.  Normal processing
+        immediately reconciles its owning Workflow, but a worker can stop in
+        that interval. Running executions are therefore the durable recovery
+        queue. Existing conditional node and execution transitions make this
+        safe when multiple workers recover the same execution concurrently.
+        """
+        if self._uow_factory is None or self._workflow_reconciler is None:
+            return 0
+        try:
+            with self._uow_factory() as uow:
+                executions = uow.workflow_executions.list_recoverable(
+                    self._workflow_recovery_batch_size
+                )
+                uow.commit()
+        except Exception:  # noqa: BLE001 - retry this scan on the next tick
+            lifecycle_log(logger, logging.WARNING, "worker.workflow_recovery_scan_failed")
+            return 0
+
+        reconciled = 0
+        for execution in executions:
+            try:
+                self._workflow_reconciler.execute(execution.id)
+                reconciled += 1
+            except Exception:  # noqa: BLE001 - one bad execution cannot starve the batch
+                lifecycle_log(
+                    logger,
+                    logging.WARNING,
+                    "worker.workflow_recovery_reconciliation_failed",
+                    workflow_execution_id=execution.id,
+                )
+        return reconciled
 
     def _refresh_memory_index_if_due(self) -> None:
         refresh = self._refresh_memory_index

@@ -4,13 +4,15 @@ import json
 
 from friday.application.delegation_result_safety import (
     REDACTED_DELEGATION_AUTHORITY,
+    project_delegated_result,
     sanitize_delegation_result_text,
     sanitize_delegation_result_value,
 )
+from friday.domain.json_value import JsonValue
 
 
 def test_delegation_result_redacts_recursive_authority_fields() -> None:
-    source = {
+    source: JsonValue = {
         "finding": "keep this useful result",
         "artifact_id": "ordinary-artifact",
         "token_count": 17,
@@ -22,9 +24,7 @@ def test_delegation_result_redacts_recursive_authority_fields() -> None:
             "credentials": {"api_key": "credential-secret"},
             "provider_handle": "provider-handle-secret",
             "runtime_handle": "runtime-handle-secret",
-            "tool_invocation_authorization_state": {
-                "tool_invocation_id": "invocation-secret"
-            },
+            "tool_invocation_authorization_state": {"tool_invocation_id": "invocation-secret"},
         },
         "items": [
             {
@@ -79,3 +79,35 @@ def test_delegation_result_text_redacts_only_labelled_authority_values() -> None
     assert "token_count=23" in sanitized
     assert "artifact_id=ordinary-artifact" in sanitized
     assert sanitized.count(REDACTED_DELEGATION_AUTHORITY) == 5
+
+
+def test_actual_authority_literals_are_redacted_without_sensitive_labels() -> None:
+    approval_id = "11111111-1111-1111-1111-111111111111"
+    fingerprint = "a" * 64
+    invocation_id = "22222222-2222-2222-2222-222222222222"
+    summary = f"result {approval_id} {fingerprint} {invocation_id}"
+    details: JsonValue = {
+        "proof": fingerprint,
+        "debug": approval_id,
+        "nested": {"ordinary": invocation_id},
+        "finding": "keep this useful result",
+    }
+
+    safe_summary, safe_details = project_delegated_result(
+        summary,
+        details,
+        authority_values=(approval_id, fingerprint, invocation_id),
+    )
+    encoded = json.dumps(safe_details, sort_keys=True)
+
+    assert safe_summary is not None
+    assert isinstance(safe_details, dict)
+    for forbidden in (approval_id, fingerprint, invocation_id):
+        assert forbidden not in safe_summary
+        assert forbidden not in encoded
+    assert "keep this useful result" in encoded
+    assert safe_details["proof"] == REDACTED_DELEGATION_AUTHORITY
+    assert safe_details["debug"] == REDACTED_DELEGATION_AUTHORITY
+    nested = safe_details["nested"]
+    assert isinstance(nested, dict)
+    assert nested["ordinary"] == REDACTED_DELEGATION_AUTHORITY

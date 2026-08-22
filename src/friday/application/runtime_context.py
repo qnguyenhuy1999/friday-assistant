@@ -18,8 +18,8 @@ from dataclasses import dataclass, replace
 
 from friday.application.conversation_context import ConversationContext, build_conversation_section
 from friday.application.delegation_result_safety import (
-    sanitize_delegation_result_text,
-    sanitize_delegation_result_value,
+    AuthorityValue,
+    project_delegated_result,
 )
 from friday.application.errors import SkillIntegrityFailed
 from friday.application.memory.context import build_memory_section
@@ -80,6 +80,7 @@ class DelegationView:
     child_execution_id: str | None
     summary: str | None = None
     details: JsonValue = None
+    authority_values: tuple[AuthorityValue, ...] = ()
 
 
 class SkillContextTooLarge(ValueError):
@@ -192,8 +193,12 @@ def _delegation_section(delegations: tuple[DelegationView, ...]) -> list[str]:
         if item.child_execution_id is not None:
             line += f" child_execution={item.child_execution_id}"
         if request.status.value == "succeeded" and item.summary is not None:
-            safe_summary = sanitize_delegation_result_text(item.summary)
-            safe_details = sanitize_delegation_result_value(item.details)
+            safe_summary, safe_details = project_delegated_result(
+                item.summary,
+                item.details,
+                authority_values=item.authority_values,
+            )
+            assert safe_summary is not None
             line += f" summary={_clip(safe_summary, 1000)}"
             line += f" details={_compact_json(safe_details)}"
         elif request.failure_code is not None:

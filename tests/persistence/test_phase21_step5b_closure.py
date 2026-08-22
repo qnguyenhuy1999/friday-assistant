@@ -770,10 +770,9 @@ def test_workflow_delegated_tool_authority_stays_local_and_result_is_redacted(
             assert len(nodes) == 1
             assert nodes[0].status is WorkflowNodeExecutionStatus.DISPATCHED
             assert nodes[0].child_run_id is not None
-            run_b = nodes[0].child_run_id
-            b_resolution = uow.run_agent_resolutions.get(run_b)
-            assert b_resolution is not None
-            assert b_resolution.revision_id == revision_b.id
+            child_run_b = nodes[0].child_run_id
+            assert child_run_b is not None
+            run_b: RunId = child_run_b
             uow.commit()
 
         brain.script(
@@ -790,11 +789,16 @@ def test_workflow_delegated_tool_authority_stays_local_and_result_is_redacted(
         assert loop.run_once(processor) is True
 
         with factory() as uow:
+            b_resolution = uow.run_agent_resolutions.get(run_b)
+            assert b_resolution is not None
+            assert b_resolution.revision_id == revision_b.id
             requests = uow.delegation_requests.list_for_run(run_b)
             assert len(requests) == 1
             assert requests[0].child_run_id is not None
             bc = requests[0]
-            run_c = bc.child_run_id
+            child_run_c = bc.child_run_id
+            assert child_run_c is not None
+            run_c: RunId = child_run_c
             waiting_b = uow.runs.get(run_b)
             assert waiting_b is not None
             assert waiting_b.status is RunStatus.WAITING_FOR_DELEGATION
@@ -856,12 +860,17 @@ def test_workflow_delegated_tool_authority_stays_local_and_result_is_redacted(
                 summary=(
                     "C useful result "
                     f"authorization_fingerprint={fingerprint} "
-                    f"approval_request_id={approval_id}"
+                    f"approval_request_id={approval_id} "
+                    f"raw approval {approval_id} fingerprint {fingerprint} "
+                    f"invocation {invocation_id}"
                 ),
                 details={
                     "finding": "keep this child finding",
                     "artifact_id": "ordinary-artifact-id",
                     "token_count": 23,
+                    "proof": fingerprint,
+                    "debug": approval_id,
+                    "nested": {"ordinary": invocation_id},
                     "approval_request_id": approval_id,
                     "authorization_fingerprint": fingerprint,
                     "tool_invocation_id": invocation_id,

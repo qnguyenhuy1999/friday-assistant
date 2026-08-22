@@ -48,6 +48,7 @@ from friday.application.claim_aware_tool_execution import ExecuteToolAction
 from friday.application.commands import RequestApprovalCommand
 from friday.application.conversation_context import ConversationContextAssembler
 from friday.application.delegation import DispatchDelegation
+from friday.application.delegation_result_safety import AuthorityValue, project_delegated_result
 from friday.application.errors import (
     AgentIntegrityFailed,
     ApplicationError,
@@ -111,11 +112,12 @@ from friday.domain.delegation import (
     MAX_DELEGATION_DEPTH,
     MAX_DELEGATIONS_PER_RUN,
     MAX_DELEGATIONS_PER_TREE,
+    DelegationRequest,
 )
 from friday.domain.errors import DomainValidationError
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import RunId, RunStepId
+from friday.domain.identifiers import DelegationRequestId, RunId, RunStepId
 from friday.domain.json_value import JsonValue
 from friday.domain.run import RunStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
@@ -665,11 +667,15 @@ class AgentRunProcessor:
                 child_execution_id = None
                 summary = None
                 details: JsonValue = None
+                authority_values: tuple[AuthorityValue, ...] = ()
                 if request.child_run_id is not None:
                     child = uow.runs.get(request.child_run_id)
                     if child is not None:
                         child_execution_id = str(child.execution_id)
                         if request.status.value == "succeeded":
+                            authority_values = _delegated_lineage_authority_values(
+                                uow, child.execution_id, request
+                            )
                             successful = [
                                 candidate
                                 for candidate in uow.runs.list_for_execution(child.execution_id)
@@ -681,8 +687,12 @@ class AgentRunProcessor:
                                 )
                                 if finished is not None and isinstance(finished.payload, dict):
                                     raw_summary = finished.payload.get("summary")
-                                    summary = raw_summary if isinstance(raw_summary, str) else None
-                                    details = finished.payload.get("details")
+                                    raw_details = finished.payload.get("details")
+                                    summary, details = project_delegated_result(
+                                        raw_summary if isinstance(raw_summary, str) else None,
+                                        raw_details,
+                                        authority_values=authority_values,
+                                    )
                                     break
                 delegation_views.append(
                     DelegationView(
@@ -691,6 +701,7 @@ class AgentRunProcessor:
                         child_execution_id=child_execution_id,
                         summary=summary,
                         details=details,
+                        authority_values=authority_values,
                     )
                 )
             incoming = uow.delegation_requests.get_for_child_execution(run.execution_id)
@@ -869,6 +880,147 @@ def _bounded_read(repository: object, run_id: object, limit: int) -> Any:
     # Compatibility for in-memory ports used by older callers; production
     # repositories implement the bounded query above.
     return list(getattr(repository, "list_for_run")(run_id))[-limit:]  # noqa: B009
+
+
+def _delegated_lineage_authority_values(
+    uow: UnitOfWork, child_execution_id: RunId, request: DelegationRequest
+) -> tuple[AuthorityValue, ...]:
+    """Collect the actual durable authority values of one delegated child
+    execution lineage.  This is the fail-closed input for the parent-facing
+    result projection: approval ids and authorization fingerprints, tool
+    invocation ids, and Friday-owned delegation identifiers and fingerprints
+    across the whole subtree (all retry attempts, all nested hops).  Literal
+    occurrences of these values must never travel upward, regardless of which
+    field name or free text carries them."""
+
+    values: set[AuthorityValue] = set()
+
+    def remember(value: object) -> None:
+        if value is None:
+            return
+        if isinstance(value, bool):
+            return
+        if isinstance(value, int):
+            if value > 0:
+                values.add(value)
+            return
+        text = str(value)
+        if text:
+            values.add(text)
+
+    def remember_json_literals(value: JsonValue) -> None:
+        if isinstance(value, dict):
+            for child in value.values():
+                remember_json_literals(child)
+        elif isinstance(value, list):
+            for child in value:
+                remember_json_literals(child)
+        elif isinstance(value, (str, int)) and not isinstance(value, bool):
+            remember(value)
+
+    for request_identifier in (
+        request.id,
+        request.authorization_fingerprint,
+        request.parent_run_step_id,
+        request.root_delegation_id,
+        request.child_task_id,
+        request.child_run_id,
+    ):
+        remember(request_identifier)
+    pending_executions = [child_execution_id]
+    seen_executions: set[RunId] = set()
+    seen_requests: set[DelegationRequestId] = set()
+    seen_requests.add(request.id)
+    while pending_executions:
+        execution_id = pending_executions.pop()
+        if execution_id in seen_executions:
+            continue
+        seen_executions.add(execution_id)
+        remember(execution_id)
+        for run in uow.runs.list_for_execution(execution_id):
+            for run_identifier in (
+                run.id,
+                run.task_id,
+                run.execution_id,
+                run.approval_request_id,
+                run.delegation_request_id,
+                run.workflow_execution_id,
+            ):
+                remember(run_identifier)
+
+            resolution = uow.run_agent_resolutions.get(run.id)
+            if resolution is not None:
+                for resolution_identifier in (
+                    resolution.id,
+                    resolution.run_id,
+                    resolution.agent_id,
+                    resolution.revision_id,
+                ):
+                    remember(resolution_identifier)
+                revision = uow.agent_revisions.get(resolution.revision_id)
+                if revision is not None:
+                    for revision_value in (
+                        revision.id,
+                        revision.agent_id,
+                        revision.content_sha256,
+                        revision.runtime_kind,
+                    ):
+                        remember(revision_value)
+                    remember_json_literals(revision.runtime_config)
+
+            work_item = uow.work_queue.get(run.id)
+            if work_item is not None:
+                remember(work_item.claim_token)
+                remember(work_item.claim_generation)
+
+            for step in uow.steps.list_for_run(run.id):
+                for step_identifier in (step.id, step.run_id, step.approval_request_id):
+                    remember(step_identifier)
+
+            for approval in uow.approvals.list_for_run(run.id):
+                for approval_identifier in (
+                    approval.id,
+                    approval.run_id,
+                    approval.step_id,
+                    approval.subject_id,
+                    approval.authorization_fingerprint,
+                ):
+                    remember(approval_identifier)
+
+            for invocation in uow.tool_invocations.list_for_run(run.id):
+                for invocation_identifier in (
+                    invocation.id,
+                    invocation.run_id,
+                    invocation.step_id,
+                    invocation.approval_request_id,
+                ):
+                    remember(invocation_identifier)
+                if invocation.provenance is not None:
+                    for handle in (
+                        invocation.provenance.target,
+                        invocation.provenance.remote_name,
+                        invocation.provenance.binding_fingerprint,
+                    ):
+                        remember(handle)
+
+            for nested in uow.delegation_requests.list_for_run(run.id):
+                if nested.id in seen_requests:
+                    continue
+                seen_requests.add(nested.id)
+                for identifier in (
+                    nested.id,
+                    nested.authorization_fingerprint,
+                    nested.parent_run_step_id,
+                    nested.root_delegation_id,
+                    nested.child_task_id,
+                    nested.child_run_id,
+                ):
+                    remember(identifier)
+                if nested.child_run_id is not None:
+                    nested_child = uow.runs.get(nested.child_run_id)
+                    if nested_child is not None:
+                        pending_executions.append(nested_child.execution_id)
+    return tuple(sorted(values, key=lambda value: (isinstance(value, int), str(value))))
 
 
 def _build_memory_retrieval_record(

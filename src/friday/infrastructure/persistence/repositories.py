@@ -488,6 +488,17 @@ class WorkflowExecutionRepository:
             workflow_execution_from_row(row) for row in self._session.execute(statement).scalars()
         ]
 
+    def list_running(self, limit: int) -> list[WorkflowExecution]:
+        statement = (
+            select(WorkflowExecutionRow)
+            .where(WorkflowExecutionRow.status == WorkflowExecutionStatus.RUNNING.value)
+            .order_by(WorkflowExecutionRow.started_at, WorkflowExecutionRow.id)
+            .limit(limit)
+        )
+        return [
+            workflow_execution_from_row(row) for row in self._session.execute(statement).scalars()
+        ]
+
 
 class WorkflowNodeExecutionRepository:
     def __init__(self, session: Session) -> None:

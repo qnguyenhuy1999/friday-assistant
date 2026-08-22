@@ -1528,6 +1528,16 @@ class FakeWorkflowExecutionRepository:
             key=lambda item: (item.started_at, str(item.id)),
         )
 
+    def list_running(self, limit: int) -> list[WorkflowExecution]:
+        return sorted(
+            (
+                item
+                for item in self.items.values()
+                if item.status is WorkflowExecutionStatus.RUNNING
+            ),
+            key=lambda item: (item.started_at, str(item.id)),
+        )[:limit]
+
 
 class FakeWorkflowNodeExecutionRepository:
     def __init__(

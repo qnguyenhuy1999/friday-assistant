@@ -49,9 +49,11 @@ from friday.application.workflow_registry import (
 from friday.domain import (
     AgentRevisionSourceKind,
     Run,
+    RunStatus,
     Task,
     TaskWorkflowBinding,
     WorkflowExecutionStatus,
+    WorkflowNodeExecutionStatus,
     WorkflowRevisionSourceKind,
 )
 from friday.domain.identifiers import RunId, TaskId
@@ -214,3 +216,108 @@ def test_frozen_resolution_wins_over_unbound_task_workflow_binding(
         assert len(executions) == 1
         assert executions[0].workflow_revision_id == workflow_revision.id
         assert executions[0].status is WorkflowExecutionStatus.RUNNING
+
+
+def test_restarted_worker_recovers_workflow_after_child_terminal_commit(
+    tmp_path: Path,
+) -> None:
+    """A crash after child terminalization cannot strand a Workflow root."""
+    database_url = f"sqlite:///{tmp_path / 'workflow-routing.db'}"
+    factory = _factory(tmp_path)
+    clock = _Clock()
+    registry = _runtime_registry()
+
+    agent = CreateAgent(factory, clock).execute(
+        key="recovery.agent", display_name="Recovery Agent", description=""
+    )
+    agent_revision = CreateAgentRevision(factory, clock, registry).execute(
+        agent_id=agent.id,
+        instructions="finish the workflow node",
+        runtime_kind="claude_cli",
+        runtime_config={},
+        source_kind=AgentRevisionSourceKind.OPERATOR,
+    )
+    ActivateAgentRevision(factory, clock).execute(agent_id=agent.id, revision_id=agent_revision.id)
+    workflow = CreateWorkflow(factory, clock).execute(
+        key="recovery.workflow", display_name="Recovery Workflow", description=""
+    )
+    revision = CreateWorkflowRevision(factory, clock).execute(
+        workflow_id=workflow.id,
+        nodes=[
+            {
+                "node_key": "only",
+                "target_agent_id": str(agent.id),
+                "objective": "finish",
+                "input_payload": {},
+                "expected_output_contract": "done",
+            }
+        ],
+        edges=[],
+        source_kind=WorkflowRevisionSourceKind.OPERATOR,
+    )
+    ActivateWorkflowRevision(factory, clock).execute(
+        workflow_id=workflow.id, revision_id=revision.id
+    )
+
+    root_task = Task.new(id=TaskId.new(), title="root", description="", created_at=AT)
+    root_task.start(AT)
+    root_run = Run.new(id=RunId.new(), task_id=root_task.id, created_at=AT)
+    root_run.start(AT)
+    with factory() as uow:
+        uow.tasks.add(root_task)
+        uow.runs.add(root_run)
+        uow.task_workflow_bindings.bind(
+            TaskWorkflowBinding.new(task_id=root_task.id, workflow_id=workflow.id, at=AT)
+        )
+        uow.work_queue.enqueue(root_run.id, AT, AT)
+        uow.commit()
+
+    original = _build_worker_loop(factory, "original-worker")
+    processor = _CountingProcessor()
+    assert original.run_once(processor) is True
+    assert processor.calls == []
+    with factory() as uow:
+        execution = uow.workflow_executions.list_by_root_run_id(root_run.id)[0]
+        node = uow.workflow_node_executions.list_by_execution(execution.id)[0]
+        assert node.child_run_id is not None
+        child_run_id = node.child_run_id
+        assert execution.status is WorkflowExecutionStatus.RUNNING
+        assert node.status is WorkflowNodeExecutionStatus.DISPATCHED
+        uow.commit()
+
+    child_claim = ClaimNextRun(
+        factory, clock, worker_id="child-worker", lease_duration=LEASE, candidate_limit=10
+    ).execute()
+    assert child_claim is not None and child_claim.run_id == child_run_id
+    ApplySucceededOutcome(factory, clock).execute(
+        child_claim.run_id,
+        child_claim.worker_id,
+        child_claim.claim_token,
+        child_claim.claim_generation,
+        ("child finished", {"ordinary": "result"}),
+    )
+
+    # This is a new process boundary: it has an independent engine, session
+    # factory, and WorkerLoop, and never receives the original callback.
+    restarted_engine = create_engine(database_url)
+    restarted_factory = create_unit_of_work_factory(create_session_factory(restarted_engine))
+    try:
+        restarted = _build_worker_loop(restarted_factory, "restarted-worker")
+        restarted.run_maintenance_tick()
+        with restarted_factory() as uow:
+            execution = uow.workflow_executions.list_by_root_run_id(root_run.id)[0]
+            node = uow.workflow_node_executions.list_by_execution(execution.id)[0]
+            root = uow.runs.get(root_run.id)
+            assert execution.status is WorkflowExecutionStatus.SUCCEEDED
+            assert node.status is WorkflowNodeExecutionStatus.SUCCEEDED
+            assert node.result_payload is not None
+            assert isinstance(node.result_payload, dict)
+            assert node.result_payload["summary"] == "child finished"
+            assert node.result_payload["details"] == {"ordinary": "result"}
+            assert root is not None and root.status is RunStatus.SUCCEEDED
+            assert uow.work_queue.get(child_run_id) is None
+            assert uow.work_queue.get(root_run.id) is None
+            assert len(uow.runs.list_for_execution(child_run_id)) == 1
+            uow.commit()
+    finally:
+        restarted_engine.dispose()

@@ -22,7 +22,7 @@ authority. They contain no runtime, provider, credential, shell, filesystem,
 MCP, browser, computer-use, messaging, approval, or tool permission fields.
 Friday remains the authority owner; Agents reason and Friday orchestrates.
 
-## Step 4 — execution (implemented)
+## Phase 21 — frozen execution and bounded delegation (complete)
 
 Step 4 adds frozen execution on top of the immutable registry. A hierarchy
 marker, `TaskWorkflowBinding`, `RunWorkflowResolution`, `WorkflowExecution`,
@@ -77,3 +77,38 @@ as a DAG of ordinary Friday Tasks/Runs.
   set, and one dispatch per node: the `dispatched` transition is strict, so the
   loser of a dispatch race fails closed and rolls back its orphan child instead
   of publishing a duplicate.
+
+## Delegation composition and recovery
+
+A Workflow node is an ordinary frozen Agent Run and may use the same bounded
+delegation path as any other Run. The resulting hierarchy can combine Workflow
+fan-out/fan-in with nested descendants; the Workflow does not become a source
+of authority for its nodes or their children.
+
+- **Bounds** — nesting is limited to `MAX_DELEGATION_DEPTH = 3`; a Run has at
+  most `MAX_DELEGATIONS_PER_RUN = 4` direct materialized child requests; a
+  delegation tree has at most `MAX_DELEGATIONS_PER_TREE = 16` materialized
+  requests. Historical materialized requests continue to consume these logical
+  slots; retry attempts do not create another request.
+- **Lineage** — a `DelegationRequest` owns the child execution identity rather
+  than a single physical Run attempt. Reconciliation selects the latest
+  attempt, so a stale failure cannot settle a parent or a Workflow node while a
+  retry is queued or running. Manual retry of delegation-owned execution is
+  forbidden.
+- **Restart safety** — delegation terminalization is committed with normal Run
+  terminalization. Worker maintenance also scans bounded durable running
+  Workflow executions and reconciles them, recovering the crash window after a
+  child terminal commit but before the original worker callback.
+- **Result boundary** — child results cross only to their immediate parent as
+  reasoning context. `delegation_result_safety.py` preserves ordinary
+  provenance and useful result data while redacting structurally identified or
+  actual authority-bearing values such as approval references, authorization
+  fingerprints, claim tokens, ToolInvocation references, bindings, and
+  credentials.
+
+## Intentional limitations
+
+Active Workflow cancellation remains unsupported through the Task/Run paths,
+as described above. Delegated authority-value collection walks a bounded tree
+and may issue multiple repository reads near the maximum size; this is a
+non-blocking performance follow-up, not a correctness dependency.

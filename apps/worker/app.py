@@ -552,6 +552,7 @@ def _compose_worker(
         workflow_starter=workflow_starter,
         workflow_reconciler=workflow_reconciler,
         uow_factory=uow_factory,
+        workflow_recovery_batch_size=settings.maintenance_batch_size,
     )
     worker = Worker(
         engine=engine,

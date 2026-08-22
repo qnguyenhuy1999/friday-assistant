@@ -96,9 +96,10 @@ of authority for its nodes or their children.
   retry is queued or running. Manual retry of delegation-owned execution is
   forbidden.
 - **Restart safety** — delegation terminalization is committed with normal Run
-  terminalization. Worker maintenance also scans bounded durable running
-  Workflow executions and reconciles them, recovering the crash window after a
-  child terminal commit but before the original worker callback.
+  terminalization. Worker maintenance scans bounded durable running Workflow
+  executions whose latest child is terminal and reconciles them, recovering the
+  crash window after a child terminal commit but before the original worker
+  callback without starving behind healthy long-running Workflows.
 - **Result boundary** — child results cross only to their immediate parent as
   reasoning context. `delegation_result_safety.py` preserves ordinary
   provenance and useful result data while redacting structurally identified or

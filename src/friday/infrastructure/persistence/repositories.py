@@ -488,10 +488,39 @@ class WorkflowExecutionRepository:
             workflow_execution_from_row(row) for row in self._session.execute(statement).scalars()
         ]
 
-    def list_running(self, limit: int) -> list[WorkflowExecution]:
+    def list_recoverable(self, limit: int) -> list[WorkflowExecution]:
+        """Return running executions whose latest dispatched child is terminal.
+
+        Recovery only needs to re-run the scheduler after a child outcome has
+        committed.  Selecting every running execution would repeatedly spend a
+        bounded batch on healthy long-running children and could starve this
+        crash-recovery path forever.
+        """
+        latest_child_run_id = (
+            select(RunRow.id)
+            .where(RunRow.execution_id == WorkflowNodeExecutionRow.child_execution_id)
+            .order_by(RunRow.created_at.desc(), RunRow.id.desc())
+            .limit(1)
+            .correlate(WorkflowNodeExecutionRow)
+            .scalar_subquery()
+        )
+        recoverable_child = (
+            select(WorkflowNodeExecutionRow.id)
+            .join(RunRow, RunRow.id == latest_child_run_id)
+            .where(
+                WorkflowNodeExecutionRow.workflow_execution_id == WorkflowExecutionRow.id,
+                WorkflowNodeExecutionRow.status == WorkflowNodeExecutionStatus.DISPATCHED.value,
+                WorkflowNodeExecutionRow.child_execution_id.is_not(None),
+                RunRow.status.in_(tuple(status.value for status in TERMINAL_RUN_STATUSES)),
+            )
+            .exists()
+        )
         statement = (
             select(WorkflowExecutionRow)
-            .where(WorkflowExecutionRow.status == WorkflowExecutionStatus.RUNNING.value)
+            .where(
+                WorkflowExecutionRow.status == WorkflowExecutionStatus.RUNNING.value,
+                recoverable_child,
+            )
             .order_by(WorkflowExecutionRow.started_at, WorkflowExecutionRow.id)
             .limit(limit)
         )

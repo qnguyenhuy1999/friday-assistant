@@ -53,3 +53,25 @@ def test_lifecycle_log_keeps_scheduled_answer_delivery_count() -> None:
     assert handler.record is not None
     rendered = json.loads(JsonOperationalFormatter().format(handler.record))
     assert rendered["delivery_count"] == "3"
+
+
+def test_lifecycle_log_keeps_workflow_recovery_fields() -> None:
+    logger = logging.getLogger("test.operational.workflow-recovery")
+    handler = _Capture()
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        lifecycle_log(
+            logger,
+            logging.WARNING,
+            "worker.workflow_recovery_reconciliation_failed",
+            workflow_execution_id="workflow-1",
+            workflow_count=3,
+        )
+    finally:
+        logger.removeHandler(handler)
+
+    assert handler.record is not None
+    rendered = json.loads(JsonOperationalFormatter().format(handler.record))
+    assert rendered["workflow_execution_id"] == "workflow-1"
+    assert rendered["workflow_count"] == "3"

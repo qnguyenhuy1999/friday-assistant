@@ -34,6 +34,8 @@ _SAFE_FIELDS: Final = (
     "mcp_failure_code",
     "configured_binding_count",
     "available_binding_count",
+    "workflow_count",
+    "workflow_execution_id",
 )
 
 

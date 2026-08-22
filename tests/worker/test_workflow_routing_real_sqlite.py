@@ -66,8 +66,11 @@ LEASE = timedelta(minutes=5)
 
 
 class _Clock:
+    def __init__(self, current_time: datetime = AT) -> None:
+        self.current_time = current_time
+
     def now(self) -> datetime:
-        return AT
+        return self.current_time
 
 
 @dataclass
@@ -97,8 +100,14 @@ def _runtime_registry() -> BrainRuntimeRegistry:
     return registry
 
 
-def _build_worker_loop(factory: UnitOfWorkFactory, processor_worker_id: str) -> WorkerLoop:
-    clock = _Clock()
+def _build_worker_loop(
+    factory: UnitOfWorkFactory,
+    processor_worker_id: str,
+    *,
+    clock: _Clock | None = None,
+    workflow_recovery_batch_size: int = 100,
+) -> WorkerLoop:
+    clock = clock or _Clock()
     return WorkerLoop(
         claim_next_run=ClaimNextRun(
             factory, clock, worker_id=processor_worker_id, lease_duration=LEASE, candidate_limit=10
@@ -121,6 +130,7 @@ def _build_worker_loop(factory: UnitOfWorkFactory, processor_worker_id: str) -> 
         workflow_starter=StartWorkflowExecution(factory, clock, _runtime_registry()),
         workflow_reconciler=ReconcileWorkflowExecution(factory, clock),
         uow_factory=factory,
+        workflow_recovery_batch_size=workflow_recovery_batch_size,
     )
 
 
@@ -259,6 +269,41 @@ def test_restarted_worker_recovers_workflow_after_child_terminal_commit(
         workflow_id=workflow.id, revision_id=revision.id
     )
 
+    # This child is deliberately healthy and remains running. Its Workflow is
+    # older than the recoverable one below, so a batch of one must skip it.
+    older_root_task = Task.new(id=TaskId.new(), title="older root", description="", created_at=AT)
+    older_root_task.start(AT)
+    older_root_run = Run.new(id=RunId.new(), task_id=older_root_task.id, created_at=AT)
+    older_root_run.start(AT)
+    with factory() as uow:
+        uow.tasks.add(older_root_task)
+        uow.runs.add(older_root_run)
+        uow.task_workflow_bindings.bind(
+            TaskWorkflowBinding.new(task_id=older_root_task.id, workflow_id=workflow.id, at=AT)
+        )
+        uow.work_queue.enqueue(older_root_run.id, AT, AT)
+        uow.commit()
+
+    original = _build_worker_loop(factory, "original-worker", clock=clock)
+    processor = _CountingProcessor()
+    assert original.run_once(processor) is True
+    assert processor.calls == []
+    with factory() as uow:
+        older_execution = uow.workflow_executions.list_by_root_run_id(older_root_run.id)[0]
+        older_node = uow.workflow_node_executions.list_by_execution(older_execution.id)[0]
+        assert older_node.child_run_id is not None
+        older_child_run_id = older_node.child_run_id
+        older_execution_id = older_execution.id
+        older_node_id = older_node.id
+        uow.commit()
+
+    older_child_claim = ClaimNextRun(
+        factory, clock, worker_id="older-child-worker", lease_duration=LEASE, candidate_limit=10
+    ).execute()
+    assert older_child_claim is not None and older_child_claim.run_id == older_child_run_id
+
+    clock.current_time = AT + timedelta(seconds=1)
+
     root_task = Task.new(id=TaskId.new(), title="root", description="", created_at=AT)
     root_task.start(AT)
     root_run = Run.new(id=RunId.new(), task_id=root_task.id, created_at=AT)
@@ -272,8 +317,6 @@ def test_restarted_worker_recovers_workflow_after_child_terminal_commit(
         uow.work_queue.enqueue(root_run.id, AT, AT)
         uow.commit()
 
-    original = _build_worker_loop(factory, "original-worker")
-    processor = _CountingProcessor()
     assert original.run_once(processor) is True
     assert processor.calls == []
     with factory() as uow:
@@ -302,7 +345,12 @@ def test_restarted_worker_recovers_workflow_after_child_terminal_commit(
     restarted_engine = create_engine(database_url)
     restarted_factory = create_unit_of_work_factory(create_session_factory(restarted_engine))
     try:
-        restarted = _build_worker_loop(restarted_factory, "restarted-worker")
+        restarted = _build_worker_loop(
+            restarted_factory,
+            "restarted-worker",
+            clock=_Clock(clock.current_time),
+            workflow_recovery_batch_size=1,
+        )
         restarted.run_maintenance_tick()
         with restarted_factory() as uow:
             execution = uow.workflow_executions.list_by_root_run_id(root_run.id)[0]
@@ -318,6 +366,12 @@ def test_restarted_worker_recovers_workflow_after_child_terminal_commit(
             assert uow.work_queue.get(child_run_id) is None
             assert uow.work_queue.get(root_run.id) is None
             assert len(uow.runs.list_for_execution(child_run_id)) == 1
+            reloaded_older_execution = uow.workflow_executions.get(older_execution_id)
+            reloaded_older_node = uow.workflow_node_executions.get(older_node_id)
+            assert reloaded_older_execution is not None
+            assert reloaded_older_execution.status is WorkflowExecutionStatus.RUNNING
+            assert reloaded_older_node is not None
+            assert reloaded_older_node.status is WorkflowNodeExecutionStatus.DISPATCHED
             uow.commit()
     finally:
         restarted_engine.dispose()

@@ -125,7 +125,7 @@ conditional state transitions, claim fencing, and unique ownership keys are
 the correctness mechanism for Agent freeze, Workflow dispatch, retry lineage,
 and delegation budgets; process-local locks are not relied on.
 
-Worker recovery reads durable `running` Workflow executions in bounded batches
-and re-applies the idempotent scheduler. No `0037` migration is needed for
-that recovery path because its durable state and transition fences already
-exist in the `0035`/`0036` schema.
+Worker recovery reads durable `running` Workflow executions with a latest
+terminal child in bounded batches and re-applies the idempotent scheduler. No
+`0037` migration is needed for that recovery path because its durable state and
+transition fences already exist in the `0035`/`0036` schema.

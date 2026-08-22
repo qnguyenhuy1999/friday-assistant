@@ -46,7 +46,7 @@ WRITE = json.dumps(
 )
 
 
-def worker_settings(tmp_path: Path) -> WorkerSettings:
+def worker_settings(tmp_path: Path, *, maintenance_batch_size: int = 100) -> WorkerSettings:
     return WorkerSettings(
         database_url=f"sqlite:///{tmp_path / 'worker.db'}",
         worker_id="test-worker",
@@ -56,7 +56,7 @@ def worker_settings(tmp_path: Path) -> WorkerSettings:
         poll_interval_seconds=0.01,
         heartbeat_interval_seconds=0.05,
         maintenance_interval_seconds=0.05,
-        maintenance_batch_size=100,
+        maintenance_batch_size=maintenance_batch_size,
         retry_max_attempts=3,
         retry_base_delay=timedelta(seconds=5),
         retry_multiplier=2.0,
@@ -160,6 +160,17 @@ def test_construction_injects_a_real_processor(tmp_path: Path) -> None:
     worker = build_worker(tmp_path, [FINISH])
     try:
         assert isinstance(worker.processor, AgentRunProcessor)
+    finally:
+        worker.engine.dispose()
+
+
+def test_construction_wires_workflow_recovery_batch_size(tmp_path: Path) -> None:
+    executable, _ = make_fake_claude(tmp_path, action_jsons=[FINISH])
+    worker = create_worker(
+        worker_settings(tmp_path, maintenance_batch_size=7), runtime_settings(tmp_path, executable)
+    )
+    try:
+        assert worker.loop._workflow_recovery_batch_size == 7
     finally:
         worker.engine.dispose()
 

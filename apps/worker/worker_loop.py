@@ -478,7 +478,7 @@ class WorkerLoop:
             return 0
         try:
             with self._uow_factory() as uow:
-                executions = uow.workflow_executions.list_running(
+                executions = uow.workflow_executions.list_recoverable(
                     self._workflow_recovery_batch_size
                 )
                 uow.commit()

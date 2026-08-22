@@ -92,6 +92,12 @@ class _FakeRunRepository:
     def save(self, run: Run) -> None:
         self._runs[run.id] = run
 
+    def lock_for_delegation_dispatch(self, run_id: RunId) -> bool:
+        return run_id in self._runs
+
+    def lock_execution_lineage(self, execution_id: RunId) -> bool:
+        return any(run.execution_id == execution_id for run in self._runs.values())
+
     def list_for_task(self, task_id: TaskId) -> list[Run]:
         matches = [run for run in self._runs.values() if run.task_id == task_id]
         return sorted(matches, key=lambda run: (run.created_at, run.id.value))

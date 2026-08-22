@@ -31,6 +31,12 @@ MAX_OUTPUT_CONTRACT_LENGTH = 4_000
 MAX_FAILURE_CODE_LENGTH = 128
 FINGERPRINT_VERSION = 1
 
+# Friday-owned delegation budgets.  These are deliberately domain constants:
+# identity, model, role, prompt, Skill, Workflow membership, and target Agent
+# never change the authority or capacity of a Run or delegation tree.
+MAX_DELEGATIONS_PER_RUN = 4
+MAX_DELEGATIONS_PER_TREE = 16
+
 # Delegation depth convention: each hop adds one.  A -> B is depth 1,
 # B -> C is depth 2, C -> D is depth 3.  ROOT_DELEGATION_DEPTH names the
 # depth of a delegation with no incoming parent delegation; a root

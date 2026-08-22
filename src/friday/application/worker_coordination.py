@@ -229,17 +229,25 @@ class ApplyFailedOutcome:
     ) -> RunResult:
         with self._uow_factory() as uow:
             now = self._clock.now()
+            run = uow.runs.get(run_id)
+            if run is None:
+                uow.commit()
+                raise RunNotFound(run_id)
+
+            # Retry materialization and delegation reconciliation share one
+            # durable execution-lineage fence.  The failed attempt and its
+            # next Run are committed as one unit before another reconciler can
+            # select a historical terminal attempt.
+            if not uow.runs.lock_execution_lineage(run.execution_id):
+                uow.commit()
+                raise RunNotFound(run_id)
+
             removed = uow.work_queue.remove_if_claimed(
                 run_id, worker_id, claim_token, claim_generation, now
             )
             if not removed:
                 uow.commit()
                 raise ClaimLost(f"failed outcome lost claim for run {run_id}")
-
-            run = uow.runs.get(run_id)
-            if run is None:
-                uow.commit()
-                raise RunNotFound(run_id)
 
             specs = _fail_run_event_specs(uow, run, now, failure)
             LifecycleEvents.append_run_events(uow, run, now, specs)

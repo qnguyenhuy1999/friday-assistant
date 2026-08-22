@@ -802,26 +802,90 @@ class DelegationRequestRepository:
             ).scalars()
         ]
 
-    def count_dispatched_for_run(self, run_id: RunId) -> int:
+    def count_materialized_for_run(self, run_id: RunId) -> int:
+        """Count durable direct child executions, including terminal history.
+
+        A REQUESTED row has no child execution and is only a contract record;
+        once a child Run is attached, the slot is consumed permanently for
+        this parent Run.
+        """
         return int(
             self._session.scalar(
                 select(func.count())
                 .select_from(DelegationRequestRow)
                 .where(
                     DelegationRequestRow.parent_run_id == str(run_id),
-                    DelegationRequestRow.status.in_(
-                        (
-                            DelegationStatus.DISPATCHED.value,
-                            DelegationStatus.SUCCEEDED.value,
-                            DelegationStatus.FAILED.value,
-                            DelegationStatus.CANCELLED.value,
-                        )
-                    ),
                     DelegationRequestRow.child_run_id.is_not(None),
                 )
             )
             or 0
         )
+
+    def count_dispatched_for_run(self, run_id: RunId) -> int:
+        # Compatibility name retained for callers from Step 5A.  The durable
+        # semantics are materialized-history accounting, not active-state
+        # accounting.
+        return self.count_materialized_for_run(run_id)
+
+    def count_materialized_for_tree(self, root_delegation_id: DelegationRequestId) -> int:
+        return int(
+            self._session.scalar(
+                select(func.count())
+                .select_from(DelegationRequestRow)
+                .where(
+                    DelegationRequestRow.root_delegation_id == str(root_delegation_id),
+                    DelegationRequestRow.child_run_id.is_not(None),
+                )
+            )
+            or 0
+        )
+
+    def lock_tree_for_dispatch(self, root_delegation_id: DelegationRequestId) -> bool:
+        """Acquire the durable root-tree write fence for this transaction.
+
+        SQLite does not implement SELECT FOR UPDATE.  A no-op UPDATE is an
+        intentional database write: it acquires the existing root row's write
+        ownership, so the subsequent count-and-materialize sequence is
+        serialized with every other nested dispatch for this tree.  The
+        transaction owns the lock until UnitOfWork.commit()/rollback().
+        """
+        statement = (
+            update(DelegationRequestRow)
+            .where(DelegationRequestRow.id == str(root_delegation_id))
+            .values(id=DelegationRequestRow.id)
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(statement))
+        return result.rowcount == 1
+
+    def finalize_if_dispatched(
+        self,
+        delegation_id: DelegationRequestId,
+        status: DelegationStatus,
+        completed_at: datetime,
+        failure_code: str | None,
+    ) -> bool:
+        """Terminalize exactly one DISPATCHED request.
+
+        The status predicate is the durable idempotency fence used by
+        concurrent reconciliation.  A terminal request cannot be rewritten,
+        so an old attempt can never resurrect or overwrite a newer result.
+        """
+        statement = (
+            update(DelegationRequestRow)
+            .where(
+                DelegationRequestRow.id == str(delegation_id),
+                DelegationRequestRow.status == DelegationStatus.DISPATCHED.value,
+            )
+            .values(
+                status=status.value,
+                completed_at=completed_at,
+                failure_code=failure_code,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(statement))
+        return result.rowcount == 1
 
     def has_dispatched_for_run(self, run_id: RunId) -> bool:
         return (
@@ -1493,6 +1557,33 @@ class RunRepository:
 
     def save(self, run: Run) -> None:
         self._session.merge(run_to_row(run))
+
+    def lock_for_delegation_dispatch(self, run_id: RunId) -> bool:
+        """Acquire the exact parent Run write fence for child materialization.
+
+        This is the database-backed counterpart to the exact work-queue claim:
+        it serializes competing dispatch transactions before the durable direct
+        budget is counted and before any child state is staged.
+        """
+        statement = (
+            update(RunRow)
+            .where(RunRow.id == str(run_id))
+            .values(id=RunRow.id)
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(statement))
+        return result.rowcount == 1
+
+    def lock_execution_lineage(self, execution_id: RunId) -> bool:
+        """Acquire one write fence shared by every attempt of an execution."""
+        statement = (
+            update(RunRow)
+            .where(RunRow.execution_id == str(execution_id))
+            .values(id=RunRow.id)
+            .execution_options(synchronize_session=False)
+        )
+        result = cast(CursorResult[Any], self._session.execute(statement))
+        return result.rowcount > 0
 
     def list_for_task(self, task_id: TaskId) -> list[Run]:
         stmt = (

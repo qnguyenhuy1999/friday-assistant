@@ -16,44 +16,74 @@ def reconcile_child_terminal_in_uow(uow: UnitOfWork, child_run: Run, now: dateti
     """Close a dispatched delegation exactly once and wake its waiting parent.
 
     The lookup is by execution lineage, so an automatic retry is still part of
-    the same delegation.  A terminal request is the idempotency fence.
+    the same delegation.  The execution write fence makes retry materialization
+    and reconciliation serialize before the latest attempt is selected.  A
+    conditional DISPATCHED -> terminal update is the idempotency fence.
     """
+
+    if not uow.runs.lock_execution_lineage(child_run.execution_id):
+        return
 
     request = uow.delegation_requests.get_for_child_execution(child_run.execution_id)
     if request is None or request.status is not DelegationStatus.DISPATCHED:
         return
 
-    if child_run.status is RunStatus.SUCCEEDED:
-        request.succeed(now)
-        event_type = RunEventType.DELEGATION_SUCCEEDED
-        payload: JsonValue = {
-            "delegation_request_id": str(request.id),
-            "child_run_id": str(child_run.id),
-            "status": request.status.value,
-        }
-    elif child_run.status is RunStatus.FAILED:
-        request.fail(
-            now, child_run.failure.code if child_run.failure is not None else "child_run_failed"
-        )
-        event_type = RunEventType.DELEGATION_FAILED
-        payload = {
-            "delegation_request_id": str(request.id),
-            "child_run_id": str(child_run.id),
-            "status": request.status.value,
-            "failure_code": request.failure_code,
-        }
-    elif child_run.status is RunStatus.CANCELLED:
-        request.cancel(now)
-        event_type = RunEventType.DELEGATION_CANCELLED
-        payload = {
-            "delegation_request_id": str(request.id),
-            "child_run_id": str(child_run.id),
-            "status": request.status.value,
-        }
-    else:
+    # Never let a historical terminal attempt settle the delegation while a
+    # newer retry is queued, running, or otherwise non-terminal.
+    latest = uow.runs.get_latest_for_execution(child_run.execution_id)
+    if latest is None or latest.status not in {
+        RunStatus.SUCCEEDED,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+    }:
         return
 
-    uow.delegation_requests.save(request)
+    if latest.status is RunStatus.SUCCEEDED:
+        terminal_status = DelegationStatus.SUCCEEDED
+        event_type = RunEventType.DELEGATION_SUCCEEDED
+        failure_code = None
+        payload: JsonValue = {
+            "delegation_request_id": str(request.id),
+            "child_run_id": str(latest.id),
+            "status": terminal_status.value,
+        }
+    elif latest.status is RunStatus.FAILED:
+        terminal_status = DelegationStatus.FAILED
+        event_type = RunEventType.DELEGATION_FAILED
+        failure_code = latest.failure.code if latest.failure is not None else "child_run_failed"
+        payload = {
+            "delegation_request_id": str(request.id),
+            "child_run_id": str(latest.id),
+            "status": terminal_status.value,
+            "failure_code": failure_code,
+        }
+    else:
+        terminal_status = DelegationStatus.CANCELLED
+        event_type = RunEventType.DELEGATION_CANCELLED
+        failure_code = None
+        payload = {
+            "delegation_request_id": str(request.id),
+            "child_run_id": str(latest.id),
+            "status": terminal_status.value,
+        }
+
+    if not uow.delegation_requests.finalize_if_dispatched(
+        request.id, terminal_status, now, failure_code
+    ):
+        # A concurrent reconciler won the terminal transition.  In
+        # particular, do not enqueue or resume the parent a second time.
+        return
+
+    # Update the in-memory snapshot only after the conditional durable fence
+    # wins; no unconditional merge can overwrite a terminal request.
+    if terminal_status is DelegationStatus.SUCCEEDED:
+        request.succeed(now)
+    elif terminal_status is DelegationStatus.FAILED:
+        assert failure_code is not None
+        request.fail(now, failure_code)
+    else:
+        request.cancel(now)
+
     parent = uow.runs.get(request.parent_run_id)
     if (
         parent is None

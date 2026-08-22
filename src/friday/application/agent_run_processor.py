@@ -48,6 +48,7 @@ from friday.application.claim_aware_tool_execution import ExecuteToolAction
 from friday.application.commands import RequestApprovalCommand
 from friday.application.conversation_context import ConversationContextAssembler
 from friday.application.delegation import DispatchDelegation
+from friday.application.delegation_result_safety import AuthorityValue, project_delegated_result
 from friday.application.errors import (
     AgentIntegrityFailed,
     ApplicationError,
@@ -107,11 +108,16 @@ from friday.application.tool_authorization import (
 from friday.application.tool_gateway import ToolCall, ToolGateway, ToolRiskAssessment
 from friday.application.worker_coordination import VerifyRunClaim
 from friday.application.workflow_context import build_workflow_node_context
-from friday.domain.delegation import MAX_DELEGATION_DEPTH
+from friday.domain.delegation import (
+    MAX_DELEGATION_DEPTH,
+    MAX_DELEGATIONS_PER_RUN,
+    MAX_DELEGATIONS_PER_TREE,
+    DelegationRequest,
+)
 from friday.domain.errors import DomainValidationError
 from friday.domain.event import RunEventType
 from friday.domain.failure import Failure, FailureCause
-from friday.domain.identifiers import RunId, RunStepId
+from friday.domain.identifiers import DelegationRequestId, RunId, RunStepId
 from friday.domain.json_value import JsonValue
 from friday.domain.run import RunStatus
 from friday.domain.step import TERMINAL_RUN_STEP_STATUSES
@@ -132,7 +138,8 @@ class RuntimeLimits:
     max_processing_seconds: float = 600.0
     max_skill_context_chars: int = 24_000
     max_agent_context_chars: int = 24_000
-    max_delegations_per_run: int = 4
+    max_delegations_per_run: int = MAX_DELEGATIONS_PER_RUN
+    max_delegations_per_tree: int = MAX_DELEGATIONS_PER_TREE
     max_delegation_targets: int = 32
     max_delegation_depth: int = MAX_DELEGATION_DEPTH
 
@@ -157,6 +164,8 @@ class RuntimeLimits:
             )
         if self.max_delegations_per_run < 1:
             raise ValueError("max_delegations_per_run must be positive")
+        if self.max_delegations_per_tree < 1:
+            raise ValueError("max_delegations_per_tree must be positive")
         if self.max_delegation_targets < 1:
             raise ValueError("max_delegation_targets must be positive")
         if self.max_delegation_depth < 1:
@@ -197,6 +206,7 @@ class AgentRunProcessor:
             clock,
             runtime_registry,
             max_delegations_per_run=limits.max_delegations_per_run,
+            max_delegations_per_tree=limits.max_delegations_per_tree,
             max_delegation_depth=limits.max_delegation_depth,
         )
         self._limits = limits
@@ -657,11 +667,15 @@ class AgentRunProcessor:
                 child_execution_id = None
                 summary = None
                 details: JsonValue = None
+                authority_values: tuple[AuthorityValue, ...] = ()
                 if request.child_run_id is not None:
                     child = uow.runs.get(request.child_run_id)
                     if child is not None:
                         child_execution_id = str(child.execution_id)
                         if request.status.value == "succeeded":
+                            authority_values = _delegated_lineage_authority_values(
+                                uow, child.execution_id, request
+                            )
                             successful = [
                                 candidate
                                 for candidate in uow.runs.list_for_execution(child.execution_id)
@@ -673,8 +687,12 @@ class AgentRunProcessor:
                                 )
                                 if finished is not None and isinstance(finished.payload, dict):
                                     raw_summary = finished.payload.get("summary")
-                                    summary = raw_summary if isinstance(raw_summary, str) else None
-                                    details = finished.payload.get("details")
+                                    raw_details = finished.payload.get("details")
+                                    summary, details = project_delegated_result(
+                                        raw_summary if isinstance(raw_summary, str) else None,
+                                        raw_details,
+                                        authority_values=authority_values,
+                                    )
                                     break
                 delegation_views.append(
                     DelegationView(
@@ -683,6 +701,7 @@ class AgentRunProcessor:
                         child_execution_id=child_execution_id,
                         summary=summary,
                         details=details,
+                        authority_values=authority_values,
                     )
                 )
             incoming = uow.delegation_requests.get_for_child_execution(run.execution_id)
@@ -861,6 +880,89 @@ def _bounded_read(repository: object, run_id: object, limit: int) -> Any:
     # Compatibility for in-memory ports used by older callers; production
     # repositories implement the bounded query above.
     return list(getattr(repository, "list_for_run")(run_id))[-limit:]  # noqa: B009
+
+
+def _delegated_lineage_authority_values(
+    uow: UnitOfWork, child_execution_id: RunId, request: DelegationRequest
+) -> tuple[AuthorityValue, ...]:
+    """Collect actual authority-bearing values from one delegated subtree.
+
+    Only values that can participate in an authorization or security binding
+    cross the projection boundary: approval references/fingerprints, claim
+    tokens, tool invocation references, and delegation/security fingerprints.
+    Task/run/execution identities, agent/revision provenance, runtime
+    configuration, and external target names remain useful result metadata and
+    are intentionally excluded.
+    """
+
+    values: set[AuthorityValue] = set()
+
+    def remember(value: object) -> None:
+        if value is None:
+            return
+        if isinstance(value, bool):
+            return
+        if isinstance(value, int):
+            if value > 0:
+                values.add(value)
+            return
+        text = str(value)
+        if text:
+            values.add(text)
+
+    # A delegation fingerprint binds the exact delegated intent.  The
+    # delegation/request IDs themselves are provenance identifiers, not
+    # credentials, and therefore must not enter this set.
+    remember(request.authorization_fingerprint)
+    pending_executions = [child_execution_id]
+    seen_executions: set[RunId] = set()
+    seen_requests: set[DelegationRequestId] = set()
+    seen_requests.add(request.id)
+    while pending_executions:
+        execution_id = pending_executions.pop()
+        if execution_id in seen_executions:
+            continue
+        seen_executions.add(execution_id)
+        for run in uow.runs.list_for_execution(execution_id):
+            # The approval marker is an authority reference; the other run
+            # fields are ordinary execution/provenance identities.
+            remember(run.approval_request_id)
+
+            work_item = uow.work_queue.get(run.id)
+            if work_item is not None:
+                # The token is the secret half of the worker lease.  A
+                # generation is only a low-cardinality freshness counter and
+                # is not a standalone authority credential.
+                remember(work_item.claim_token)
+
+            for step in uow.steps.list_for_run(run.id):
+                remember(step.approval_request_id)
+
+            for approval in uow.approvals.list_for_run(run.id):
+                remember(approval.id)
+                remember(approval.authorization_fingerprint)
+
+            for invocation in uow.tool_invocations.list_for_run(run.id):
+                # Invocation and linked approval references are authority
+                # handles; run/step IDs are merely provenance.
+                remember(invocation.id)
+                remember(invocation.approval_request_id)
+                if invocation.provenance is not None:
+                    # The binding fingerprint participates in the exact
+                    # authorization scope.  Target and remote name are
+                    # ordinary, useful external-resource provenance.
+                    remember(invocation.provenance.binding_fingerprint)
+
+            for nested in uow.delegation_requests.list_for_run(run.id):
+                if nested.id in seen_requests:
+                    continue
+                seen_requests.add(nested.id)
+                remember(nested.authorization_fingerprint)
+                if nested.child_run_id is not None:
+                    nested_child = uow.runs.get(nested.child_run_id)
+                    if nested_child is not None:
+                        pending_executions.append(nested_child.execution_id)
+    return tuple(sorted(values, key=lambda value: (isinstance(value, int), str(value))))
 
 
 def _build_memory_retrieval_record(

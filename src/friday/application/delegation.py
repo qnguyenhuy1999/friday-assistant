@@ -28,7 +28,11 @@ from friday.domain import (
     RunId,
     TaskAgentBinding,
 )
-from friday.domain.delegation import MAX_DELEGATION_DEPTH
+from friday.domain.delegation import (
+    MAX_DELEGATION_DEPTH,
+    MAX_DELEGATIONS_PER_RUN,
+    MAX_DELEGATIONS_PER_TREE,
+)
 from friday.domain.event import RunEventType
 from friday.domain.identifiers import RunStepId, TaskId
 from friday.domain.json_value import JsonValue, ensure_json_value
@@ -127,17 +131,21 @@ class DispatchDelegation:
         clock: Clock,
         runtime_registry: BrainRuntimeRegistry,
         *,
-        max_delegations_per_run: int = 4,
+        max_delegations_per_run: int = MAX_DELEGATIONS_PER_RUN,
+        max_delegations_per_tree: int = MAX_DELEGATIONS_PER_TREE,
         max_delegation_depth: int = MAX_DELEGATION_DEPTH,
     ) -> None:
         if max_delegations_per_run < 1:
             raise ValueError("max_delegations_per_run must be positive")
+        if max_delegations_per_tree < 1:
+            raise ValueError("max_delegations_per_tree must be positive")
         if max_delegation_depth < 1:
             raise ValueError("max_delegation_depth must be >= 1")
         self._uow_factory = uow_factory
         self._clock = clock
         self._runtime_registry = runtime_registry
         self._max_delegations_per_run = max_delegations_per_run
+        self._max_delegations_per_tree = max_delegations_per_tree
         self._max_delegation_depth = max_delegation_depth
 
     def execute(
@@ -170,9 +178,28 @@ class DispatchDelegation:
                 if depth > self._max_delegation_depth:
                     raise EntityConflict("delegation_depth_exhausted")
                 root_delegation_id = incoming.root_delegation_id
+
+            # The exact parent Run serializes every competing direct dispatch.
+            # Nested dispatches additionally take the existing root request's
+            # durable write fence before counting the whole tree.  These are
+            # database fences, not process-local locks, and they remain held
+            # through child Task/Run/queue/event materialization and commit.
             if (
-                uow.delegation_requests.count_dispatched_for_run(parent.id)
-                >= self._max_delegations_per_run
+                root_delegation_id is not None
+                and not uow.delegation_requests.lock_tree_for_dispatch(root_delegation_id)
+            ):
+                raise EntityConflict("delegation_lineage_invalid")
+            if not uow.runs.lock_for_delegation_dispatch(parent.id):
+                raise RunNotFound(parent.id)
+
+            if uow.delegation_requests.count_materialized_for_run(parent.id) >= (
+                self._max_delegations_per_run
+            ):
+                raise EntityConflict("delegation_budget_exhausted")
+            if (
+                root_delegation_id is not None
+                and uow.delegation_requests.count_materialized_for_tree(root_delegation_id)
+                >= self._max_delegations_per_tree
             ):
                 raise EntityConflict("delegation_budget_exhausted")
 

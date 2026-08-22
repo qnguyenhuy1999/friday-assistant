@@ -182,6 +182,12 @@ class FakeRunRepository:
     def save(self, run: Run) -> None:
         self.items[run.id] = run
 
+    def lock_for_delegation_dispatch(self, run_id: RunId) -> bool:
+        return run_id in self.items
+
+    def lock_execution_lineage(self, execution_id: RunId) -> bool:
+        return any(run.execution_id == execution_id for run in self.items.values())
+
     def list_for_task(self, task_id: TaskId) -> list[Run]:
         matching = [run for run in self.items.values() if run.task_id == task_id]
         return sorted(matching, key=lambda run: (run.created_at, str(run.id)))
@@ -1696,19 +1702,45 @@ class FakeDelegationRequestRepository:
             key=lambda x: x.created_at,
         )
 
-    def count_dispatched_for_run(self, run_id: RunId) -> int:
+    def count_materialized_for_run(self, run_id: RunId) -> int:
         return sum(
-            request.parent_run_id == run_id
-            and request.child_run_id is not None
-            and request.status
-            in {
-                DelegationStatus.DISPATCHED,
-                DelegationStatus.SUCCEEDED,
-                DelegationStatus.FAILED,
-                DelegationStatus.CANCELLED,
-            }
+            request.parent_run_id == run_id and request.child_run_id is not None
             for request in self.items.values()
         )
+
+    def count_dispatched_for_run(self, run_id: RunId) -> int:
+        return self.count_materialized_for_run(run_id)
+
+    def count_materialized_for_tree(self, root_delegation_id: DelegationRequestId) -> int:
+        return sum(
+            request.root_delegation_id == root_delegation_id and request.child_run_id is not None
+            for request in self.items.values()
+        )
+
+    def lock_tree_for_dispatch(self, root_delegation_id: DelegationRequestId) -> bool:
+        return root_delegation_id in self.items
+
+    def finalize_if_dispatched(
+        self,
+        delegation_id: DelegationRequestId,
+        status: DelegationStatus,
+        completed_at: datetime,
+        failure_code: str | None,
+    ) -> bool:
+        request = self.items.get(delegation_id)
+        if request is None or request.status is not DelegationStatus.DISPATCHED:
+            return False
+        if status not in {
+            DelegationStatus.SUCCEEDED,
+            DelegationStatus.FAILED,
+            DelegationStatus.CANCELLED,
+        }:
+            raise AssertionError(f"unsupported terminal delegation status: {status}")
+        # The production repository's conditional UPDATE is only the
+        # idempotency fence. Reconciliation applies the domain transition to
+        # its already-loaded request after the fence wins; mutating here would
+        # apply that transition twice in fake-backed application tests.
+        return True
 
     def has_dispatched_for_run(self, run_id: RunId) -> bool:
         return any(

@@ -8,11 +8,12 @@ child's durable AGENT_FINISHED event.
 
 Redaction is layered.  Key/label heuristics catch structurally labelled
 authority.  The fail-closed layer is value-based: callers collect the actual
-durable authority values of the child execution lineage (approval ids and
-authorization fingerprints, tool invocation ids, Friday-owned delegation
-identifiers and fingerprints) and every literal occurrence is scrubbed from
-summary text and recursively from JSON values and keys, regardless of field
-names or labels.
+durable authority values of the child execution lineage (approval ids,
+authorization/security-binding fingerprints, claim tokens, and tool
+invocation references) and every literal occurrence is scrubbed from summary
+text and recursively from JSON values and keys, regardless of field names or
+labels.  Ordinary execution and resource provenance is deliberately not part
+of that value set.
 """
 
 from __future__ import annotations

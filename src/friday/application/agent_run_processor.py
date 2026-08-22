@@ -885,13 +885,15 @@ def _bounded_read(repository: object, run_id: object, limit: int) -> Any:
 def _delegated_lineage_authority_values(
     uow: UnitOfWork, child_execution_id: RunId, request: DelegationRequest
 ) -> tuple[AuthorityValue, ...]:
-    """Collect the actual durable authority values of one delegated child
-    execution lineage.  This is the fail-closed input for the parent-facing
-    result projection: approval ids and authorization fingerprints, tool
-    invocation ids, and Friday-owned delegation identifiers and fingerprints
-    across the whole subtree (all retry attempts, all nested hops).  Literal
-    occurrences of these values must never travel upward, regardless of which
-    field name or free text carries them."""
+    """Collect actual authority-bearing values from one delegated subtree.
+
+    Only values that can participate in an authorization or security binding
+    cross the projection boundary: approval references/fingerprints, claim
+    tokens, tool invocation references, and delegation/security fingerprints.
+    Task/run/execution identities, agent/revision provenance, runtime
+    configuration, and external target names remain useful result metadata and
+    are intentionally excluded.
+    """
 
     values: set[AuthorityValue] = set()
 
@@ -908,25 +910,10 @@ def _delegated_lineage_authority_values(
         if text:
             values.add(text)
 
-    def remember_json_literals(value: JsonValue) -> None:
-        if isinstance(value, dict):
-            for child in value.values():
-                remember_json_literals(child)
-        elif isinstance(value, list):
-            for child in value:
-                remember_json_literals(child)
-        elif isinstance(value, (str, int)) and not isinstance(value, bool):
-            remember(value)
-
-    for request_identifier in (
-        request.id,
-        request.authorization_fingerprint,
-        request.parent_run_step_id,
-        request.root_delegation_id,
-        request.child_task_id,
-        request.child_run_id,
-    ):
-        remember(request_identifier)
+    # A delegation fingerprint binds the exact delegated intent.  The
+    # delegation/request IDs themselves are provenance identifiers, not
+    # credentials, and therefore must not enter this set.
+    remember(request.authorization_fingerprint)
     pending_executions = [child_execution_id]
     seen_executions: set[RunId] = set()
     seen_requests: set[DelegationRequestId] = set()
@@ -936,86 +923,41 @@ def _delegated_lineage_authority_values(
         if execution_id in seen_executions:
             continue
         seen_executions.add(execution_id)
-        remember(execution_id)
         for run in uow.runs.list_for_execution(execution_id):
-            for run_identifier in (
-                run.id,
-                run.task_id,
-                run.execution_id,
-                run.approval_request_id,
-                run.delegation_request_id,
-                run.workflow_execution_id,
-            ):
-                remember(run_identifier)
-
-            resolution = uow.run_agent_resolutions.get(run.id)
-            if resolution is not None:
-                for resolution_identifier in (
-                    resolution.id,
-                    resolution.run_id,
-                    resolution.agent_id,
-                    resolution.revision_id,
-                ):
-                    remember(resolution_identifier)
-                revision = uow.agent_revisions.get(resolution.revision_id)
-                if revision is not None:
-                    for revision_value in (
-                        revision.id,
-                        revision.agent_id,
-                        revision.content_sha256,
-                        revision.runtime_kind,
-                    ):
-                        remember(revision_value)
-                    remember_json_literals(revision.runtime_config)
+            # The approval marker is an authority reference; the other run
+            # fields are ordinary execution/provenance identities.
+            remember(run.approval_request_id)
 
             work_item = uow.work_queue.get(run.id)
             if work_item is not None:
+                # The token is the secret half of the worker lease.  A
+                # generation is only a low-cardinality freshness counter and
+                # is not a standalone authority credential.
                 remember(work_item.claim_token)
-                remember(work_item.claim_generation)
 
             for step in uow.steps.list_for_run(run.id):
-                for step_identifier in (step.id, step.run_id, step.approval_request_id):
-                    remember(step_identifier)
+                remember(step.approval_request_id)
 
             for approval in uow.approvals.list_for_run(run.id):
-                for approval_identifier in (
-                    approval.id,
-                    approval.run_id,
-                    approval.step_id,
-                    approval.subject_id,
-                    approval.authorization_fingerprint,
-                ):
-                    remember(approval_identifier)
+                remember(approval.id)
+                remember(approval.authorization_fingerprint)
 
             for invocation in uow.tool_invocations.list_for_run(run.id):
-                for invocation_identifier in (
-                    invocation.id,
-                    invocation.run_id,
-                    invocation.step_id,
-                    invocation.approval_request_id,
-                ):
-                    remember(invocation_identifier)
+                # Invocation and linked approval references are authority
+                # handles; run/step IDs are merely provenance.
+                remember(invocation.id)
+                remember(invocation.approval_request_id)
                 if invocation.provenance is not None:
-                    for handle in (
-                        invocation.provenance.target,
-                        invocation.provenance.remote_name,
-                        invocation.provenance.binding_fingerprint,
-                    ):
-                        remember(handle)
+                    # The binding fingerprint participates in the exact
+                    # authorization scope.  Target and remote name are
+                    # ordinary, useful external-resource provenance.
+                    remember(invocation.provenance.binding_fingerprint)
 
             for nested in uow.delegation_requests.list_for_run(run.id):
                 if nested.id in seen_requests:
                     continue
                 seen_requests.add(nested.id)
-                for identifier in (
-                    nested.id,
-                    nested.authorization_fingerprint,
-                    nested.parent_run_step_id,
-                    nested.root_delegation_id,
-                    nested.child_task_id,
-                    nested.child_run_id,
-                ):
-                    remember(identifier)
+                remember(nested.authorization_fingerprint)
                 if nested.child_run_id is not None:
                     nested_child = uow.runs.get(nested.child_run_id)
                     if nested_child is not None:

@@ -111,3 +111,41 @@ def test_actual_authority_literals_are_redacted_without_sensitive_labels() -> No
     nested = safe_details["nested"]
     assert isinstance(nested, dict)
     assert nested["ordinary"] == REDACTED_DELEGATION_AUTHORITY
+
+
+def test_authority_projection_preserves_ordinary_provenance_and_config_collisions() -> None:
+    authority = "f" * 64
+    details: JsonValue = {
+        "proof": authority,
+        "count": 1,
+        "runtime": "claude_cli",
+        "task": "task-ordinary",
+        "run": "run-ordinary",
+        "agent": "agent-ordinary",
+        "revision": "revision-ordinary",
+        "revision_sha": "revision-sha-ordinary",
+        "target": "github",
+        "remote_name": "create_issue",
+        "runtime_config": {"model": "claude_cli", "max_parallel": 1},
+    }
+
+    _safe_summary, safe_details = project_delegated_result(
+        None,
+        details,
+        authority_values=(authority,),
+    )
+
+    assert isinstance(safe_details, dict)
+    assert safe_details["proof"] == REDACTED_DELEGATION_AUTHORITY
+    assert safe_details["count"] == 1
+    assert safe_details["runtime"] == "claude_cli"
+    assert safe_details["task"] == "task-ordinary"
+    assert safe_details["run"] == "run-ordinary"
+    assert safe_details["agent"] == "agent-ordinary"
+    assert safe_details["revision"] == "revision-ordinary"
+    assert safe_details["revision_sha"] == "revision-sha-ordinary"
+    assert safe_details["target"] == "github"
+    assert safe_details["remote_name"] == "create_issue"
+    config = safe_details["runtime_config"]
+    assert isinstance(config, dict)
+    assert config == {"model": "claude_cli", "max_parallel": 1}

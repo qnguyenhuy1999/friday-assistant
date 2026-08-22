@@ -868,6 +868,16 @@ def test_workflow_delegated_tool_authority_stays_local_and_result_is_redacted(
                     "finding": "keep this child finding",
                     "artifact_id": "ordinary-artifact-id",
                     "token_count": 23,
+                    "count": 1,
+                    "runtime": revision_c.runtime_kind,
+                    "runtime_config": {"model": revision_c.runtime_kind, "max_parallel": 1},
+                    "task": str(bc.child_task_id),
+                    "run": str(run_c),
+                    "agent": str(agent_c.id),
+                    "revision": str(revision_c.id),
+                    "revision_sha": revision_c.content_sha256,
+                    "target": "github",
+                    "remote_name": "create_issue",
                     "proof": fingerprint,
                     "debug": approval_id,
                     "nested": {"ordinary": invocation_id},
@@ -904,6 +914,16 @@ def test_workflow_delegated_tool_authority_stays_local_and_result_is_redacted(
         assert "keep this child finding" in b_context
         assert '"artifact_id":"ordinary-artifact-id"' in b_context
         assert '"token_count":23' in b_context
+        assert '"count":1' in b_context
+        assert f'"runtime":"{revision_c.runtime_kind}"' in b_context
+        assert '"max_parallel":1' in b_context
+        assert f'"task":"{bc.child_task_id}"' in b_context
+        assert f'"run":"{run_c}"' in b_context
+        assert f'"agent":"{agent_c.id}"' in b_context
+        assert f'"revision":"{revision_c.id}"' in b_context
+        assert f'"revision_sha":"{revision_c.content_sha256}"' in b_context
+        assert '"target":"github"' in b_context
+        assert '"remote_name":"create_issue"' in b_context
         assert "[redacted]" in b_context
         for forbidden in (
             approval_id,

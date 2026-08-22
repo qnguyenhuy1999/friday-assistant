@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 
@@ -43,6 +44,17 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "Approvals" }),
     ).toBeInTheDocument();
+  });
+
+  it("navigates to the first-class Agents registry", async () => {
+    renderApp();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Agents" }));
+    expect(
+      await screen.findByRole("heading", { name: "Agents" }),
+    ).toBeInTheDocument();
+    expect(window.location.search).toBe("?view=agents");
   });
 
   it("renders no detail view when the route carries no id", () => {

@@ -3,6 +3,8 @@ import { RunDetailPage } from "./pages/run-detail-page";
 import { TasksPage } from "./pages/tasks-page";
 import { SchedulesPage } from "./pages/schedules-page";
 import { ConversationPage } from "./pages/conversation-page";
+import { AgentDetailPage } from "./pages/agent-detail-page";
+import { AgentsPage } from "./pages/agents-page";
 import { useRoute } from "./router/use-route";
 export function App() {
   const [route, navigate] = useRoute();
@@ -21,6 +23,12 @@ export function App() {
           onClick={() => navigate({ view: "tasks", id: null })}
         >
           Tasks
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate({ view: "agents", id: null })}
+        >
+          Agents
         </button>
       </nav>
       {route.view === "conversation" && (
@@ -51,6 +59,15 @@ export function App() {
           taskId={route.id}
           onBack={() => navigate({ view: "tasks", id: null })}
           onViewRun={(id) => navigate({ view: "run", id })}
+        />
+      )}
+      {route.view === "agents" && (
+        <AgentsPage onViewAgent={(id) => navigate({ view: "agent", id })} />
+      )}
+      {route.view === "agent" && route.id && (
+        <AgentDetailPage
+          agentId={route.id}
+          onBack={() => navigate({ view: "agents", id: null })}
         />
       )}
     </main>

@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-export type View = "conversation" | "tasks" | "run" | "approvals" | "schedules";
+export type View =
+  | "conversation"
+  | "tasks"
+  | "run"
+  | "approvals"
+  | "schedules"
+  | "agents"
+  | "agent";
 export interface Route {
   view: View;
   id: string | null;
@@ -11,7 +18,9 @@ function readRoute(): Route {
     view === "tasks" ||
     view === "run" ||
     view === "approvals" ||
-    view === "schedules"
+    view === "schedules" ||
+    view === "agents" ||
+    view === "agent"
     ? { view, id: p.get("id") }
     : { view: "conversation", id: null };
 }

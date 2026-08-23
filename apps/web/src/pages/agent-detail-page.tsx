@@ -134,8 +134,8 @@ export function AgentDetailPage({
         <dd>{current.description || "No description"}</dd>
         <dt>Lifecycle status</dt>
         <dd>{current.status}</dd>
-        <dt>Active revision</dt>
-        <dd>{current.active_revision_id ?? "No active revision"}</dd>
+        <dt>Selected revision pointer</dt>
+        <dd>{current.active_revision_id ?? "No selected revision"}</dd>
         <dt>Created</dt>
         <dd>{formatTime(current.created_at)}</dd>
         <dt>Updated</dt>
@@ -173,12 +173,18 @@ export function AgentDetailPage({
       {revisions.data?.length === 0 && <p>No revisions yet.</p>}
       <ol>
         {revisions.data?.map((revision) => {
-          const active = revision.id === current.active_revision_id;
+          const isSelectedRevision = revision.id === current.active_revision_id;
+          const isEffectivelyActive =
+            current.status === "active" && isSelectedRevision;
           return (
             <li key={revision.id}>
               <strong>
                 v{revision.version}
-                {active ? " — active" : ""}
+                {isEffectivelyActive
+                  ? " — active"
+                  : isSelectedRevision
+                    ? " — selected"
+                    : ""}
               </strong>
               <dl>
                 <dt>Revision ID</dt>
@@ -194,7 +200,7 @@ export function AgentDetailPage({
                 <dt>Instructions</dt>
                 <dd>{revision.instructions}</dd>
               </dl>
-              {!active && current.status !== "archived" && (
+              {!isEffectivelyActive && current.status !== "archived" && (
                 <button
                   type="button"
                   disabled={activateRevision.isPending}
@@ -214,57 +220,69 @@ export function AgentDetailPage({
         Activation affects future Run resolution only; it does not rewrite
         revisions or frozen existing Runs.
       </p>
-      <h3>Create immutable revision</h3>
-      <form onSubmit={submitRevision} aria-label="Create agent revision">
-        <label htmlFor="revision-instructions">Instructions</label>
-        <textarea
-          id="revision-instructions"
-          value={instructions}
-          maxLength={MAX_INSTRUCTIONS_LENGTH}
-          onChange={(event) => setInstructions(event.target.value)}
-          required
-        />
-        <label htmlFor="revision-runtime-kind">Runtime kind</label>
-        <input
-          id="revision-runtime-kind"
-          value={runtimeKind}
-          maxLength={MAX_RUNTIME_KIND_LENGTH}
-          onChange={(event) => setRuntimeKind(event.target.value)}
-          required
-        />
-        <label htmlFor="revision-runtime-config">
-          Runtime configuration (JSON object)
-        </label>
-        <textarea
-          id="revision-runtime-config"
-          value={runtimeConfig}
-          onChange={(event) => setRuntimeConfig(event.target.value)}
-        />
+      {current.status === "archived" ? (
         <p>
-          Runtime configuration is not authority. Credentials and secrets are
-          not accepted here.
+          This Agent is archived and read-only. Its immutable revision history
+          remains available for inspection.
         </p>
-        <label htmlFor="revision-source-kind">Source</label>
-        <select
-          id="revision-source-kind"
-          value={sourceKind}
-          onChange={(event) =>
-            setSourceKind(event.target.value as "operator" | "imported")
-          }
-        >
-          <option value="operator">Operator</option>
-          <option value="imported">Imported</option>
-        </select>
-        <button type="submit" disabled={createRevision.isPending}>
-          Create immutable revision
-        </button>
-      </form>
-      {validationError && <p role="alert">{validationError}</p>}
-      {createRevision.isError && <p role="alert">Failed to create revision.</p>}
-      {createdRevision !== null && (
-        <p role="status">
-          Created revision v{createdRevision}. It is not active until activated.
-        </p>
+      ) : (
+        <>
+          <h3>Create immutable revision</h3>
+          <form onSubmit={submitRevision} aria-label="Create agent revision">
+            <label htmlFor="revision-instructions">Instructions</label>
+            <textarea
+              id="revision-instructions"
+              value={instructions}
+              maxLength={MAX_INSTRUCTIONS_LENGTH}
+              onChange={(event) => setInstructions(event.target.value)}
+              required
+            />
+            <label htmlFor="revision-runtime-kind">Runtime kind</label>
+            <input
+              id="revision-runtime-kind"
+              value={runtimeKind}
+              maxLength={MAX_RUNTIME_KIND_LENGTH}
+              onChange={(event) => setRuntimeKind(event.target.value)}
+              required
+            />
+            <label htmlFor="revision-runtime-config">
+              Runtime configuration (JSON object)
+            </label>
+            <textarea
+              id="revision-runtime-config"
+              value={runtimeConfig}
+              onChange={(event) => setRuntimeConfig(event.target.value)}
+            />
+            <p>
+              Runtime configuration is not authority. Credentials and secrets
+              are not accepted here.
+            </p>
+            <label htmlFor="revision-source-kind">Source</label>
+            <select
+              id="revision-source-kind"
+              value={sourceKind}
+              onChange={(event) =>
+                setSourceKind(event.target.value as "operator" | "imported")
+              }
+            >
+              <option value="operator">Operator</option>
+              <option value="imported">Imported</option>
+            </select>
+            <button type="submit" disabled={createRevision.isPending}>
+              Create immutable revision
+            </button>
+          </form>
+          {validationError && <p role="alert">{validationError}</p>}
+          {createRevision.isError && (
+            <p role="alert">Failed to create revision.</p>
+          )}
+          {createdRevision !== null && (
+            <p role="status">
+              Created revision v{createdRevision}. It is not active until
+              activated.
+            </p>
+          )}
+        </>
       )}
     </section>
   );

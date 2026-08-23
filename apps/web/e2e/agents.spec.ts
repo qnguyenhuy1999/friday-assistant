@@ -30,4 +30,16 @@ test("an operator creates, activates, and reloads an immutable Agent revision", 
   await expect(page.getByText("v1 — active")).toBeVisible();
   await page.reload();
   await expect(page.getByText("v1 — active")).toBeVisible();
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Disable Agent" }).click();
+  await expect(page.getByText("Lifecycle status").locator("..")).toContainText(
+    "disabled",
+  );
+  await expect(page.getByText("v1 — selected")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Activate v1" })).toBeVisible();
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Activate v1" }).click();
+  await expect(page.getByText("v1 — active")).toBeVisible();
 });

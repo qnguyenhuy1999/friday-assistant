@@ -190,4 +190,97 @@ describe("AgentDetailPage", () => {
       ).toBe(true),
     );
   });
+
+  it("re-enables a disabled Agent with its existing selected revision", async () => {
+    const fetchMock = vi.spyOn(global, "fetch");
+    let currentAgent = agent;
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init as RequestInit | undefined)?.method ?? "GET";
+      if (url.endsWith("/revisions") && method === "GET")
+        return response([revision]);
+      if (url.endsWith("/agents/a-1") && method === "GET")
+        return response(currentAgent);
+      if (url.endsWith("/agents/a-1/disable") && method === "POST") {
+        currentAgent = { ...currentAgent, status: "disabled" };
+        return response(currentAgent);
+      }
+      if (url.endsWith("/revisions/r-1/activate") && method === "POST") {
+        currentAgent = { ...currentAgent, status: "active" };
+        return response(currentAgent);
+      }
+      return response({ error: { type: "unexpected", message: url } }, 500);
+    });
+    renderPage();
+    const user = userEvent.setup();
+
+    await screen.findByText("v1 — active");
+    expect(
+      screen.queryByRole("button", { name: "Activate v1" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Disable Agent" }));
+    await waitFor(() =>
+      expect(screen.getByText("v1 — selected")).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText("Lifecycle status").nextElementSibling,
+    ).toHaveTextContent("disabled");
+
+    await user.click(screen.getByRole("button", { name: "Activate v1" }));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).endsWith("/revisions/r-1/activate"),
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() =>
+      expect(screen.getByText("v1 — active")).toBeInTheDocument(),
+    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input).endsWith("/revisions") &&
+          (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps archived Agents read-only while showing immutable history", async () => {
+    const fetchMock = vi
+      .spyOn(global, "fetch")
+      .mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.endsWith("/revisions")) return response([revision]);
+        if (url.endsWith("/agents/a-1"))
+          return response({ ...agent, status: "archived" });
+        return response({ error: { type: "unexpected", message: url } }, 500);
+      });
+    renderPage();
+
+    expect(
+      await screen
+        .findByText("Lifecycle status")
+        .then((label) => label.nextElementSibling),
+    ).toHaveTextContent("archived");
+    expect(screen.getByText("v1 — selected")).toBeInTheDocument();
+    expect(screen.getByText(/archived and read-only/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Activate v1" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Disable Agent" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Archive Agent" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Create immutable revision" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("form", { name: "Create agent revision" }),
+    ).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });

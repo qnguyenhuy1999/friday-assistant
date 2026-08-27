@@ -8,6 +8,7 @@ import { isTerminalRunStatus, useRun } from "../hooks/use-run";
 import { useRunEventStream } from "../hooks/use-run-event-stream";
 import { useRunSteps } from "../hooks/use-run-steps";
 import { useRunToolInvocations } from "../hooks/use-tool-invocations";
+import { useRunAgent } from "../hooks/use-run-agent";
 export function RunDetailPage({
   runId,
   onViewApprovals,
@@ -21,6 +22,7 @@ export function RunDetailPage({
   const artifacts = useRunArtifacts(runId);
   const approvals = useRunApprovals(runId);
   const eventStream = useRunEventStream(runId);
+  const agentResolution = useRunAgent(runId);
   if (isLoading) return <p>Loading run…</p>;
   if (isError || !run) return <p role="alert">Failed to load run.</p>;
   const pending = approvals.data?.items.filter(
@@ -31,6 +33,24 @@ export function RunDetailPage({
     <section>
       <h2>Run {run.id}</h2>
       <p>Status: {run.status}</p>
+      <h3>Frozen Agent provenance</h3>
+      {agentResolution.isLoading && <p>Loading Agent provenance…</p>}
+      {agentResolution.isError && (
+        <p role="alert">Failed to load Agent provenance.</p>
+      )}
+      {agentResolution.data &&
+        (agentResolution.data.resolved ? (
+          <dl>
+            <dt>Agent</dt>
+            <dd>{agentResolution.data.agent_id}</dd>
+            <dt>Frozen revision</dt>
+            <dd>{agentResolution.data.revision_id}</dd>
+            <dt>Resolved at</dt>
+            <dd>{agentResolution.data.resolved_at}</dd>
+          </dl>
+        ) : (
+          <p>This Run has no resolved Agent revision.</p>
+        ))}
       {approvals.isLoading && <p>Loading approval state…</p>}
       {approvals.isError && (
         <p role="alert">

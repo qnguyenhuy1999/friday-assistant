@@ -77,6 +77,14 @@ function mockApi(run: unknown, approvals: unknown[] = []) {
     if (url.includes("/artifacts")) return jsonResponse(page([artifact]));
     if (url.includes("/approvals")) return jsonResponse(page(approvals));
     if (url.includes("/events")) return jsonResponse(page([]));
+    if (url.endsWith("/agent"))
+      return jsonResponse({
+        run_id: "r-1",
+        resolved: true,
+        resolved_at: "2026-01-01T00:00:00Z",
+        agent_id: "a-1",
+        revision_id: "r-3",
+      });
     return jsonResponse(run as object);
   });
 }
@@ -113,6 +121,16 @@ describe("RunDetailPage", () => {
     expect(await screen.findByText(/clone repo/)).toBeInTheDocument();
     expect(await screen.findByText(/shell\.run/)).toBeInTheDocument();
     expect(await screen.findByText(/\/tmp\/repo/)).toBeInTheDocument();
+  });
+
+  it("renders existing frozen Agent provenance read-only", async () => {
+    mockApi(runningRun);
+    renderPage();
+    expect(
+      await screen.findByText("Frozen Agent provenance"),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("a-1")).toBeInTheDocument();
+    expect(screen.getByText("r-3")).toBeInTheDocument();
   });
 
   it("links to the approvals view only while an approval is pending", async () => {

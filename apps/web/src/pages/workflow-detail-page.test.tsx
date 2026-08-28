@@ -204,6 +204,9 @@ describe("WorkflowDetailPage", () => {
     renderPage();
     const user = userEvent.setup();
     await screen.findByRole("heading", { name: "Release pipeline" });
+    expect(
+      screen.getByText(/Agent status and selected revision are advisory/),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Add node" }));
     await user.click(screen.getByRole("button", { name: "Add node" }));
     const keys = screen.getAllByLabelText("Node key");
@@ -214,11 +217,6 @@ describe("WorkflowDetailPage", () => {
     const targetAgents = screen.getAllByLabelText("Target Agent");
     await user.selectOptions(targetAgents[0]!, "a-1");
     await user.selectOptions(targetAgents[1]!, "a-2");
-    expect(
-      screen.getByText(
-        /Warning: Coder is disabled and has no selected revision\./,
-      ),
-    ).toBeInTheDocument();
     const objectives = screen.getAllByLabelText("Objective");
     await user.type(objectives[0]!, "Analyze the change.");
     await user.type(objectives[1]!, "Implement the change.");

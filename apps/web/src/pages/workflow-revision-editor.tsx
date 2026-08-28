@@ -47,15 +47,6 @@ function agentLabel(agent: Agent): string {
   return `${agent.display_name} · ${agent.key} · ${agent.status} · ${revision}`;
 }
 
-function agentEligibilityWarning(agent: Agent): string | null {
-  const issues: string[] = [];
-  if (agent.status !== "active") issues.push(`is ${agent.status}`);
-  if (!agent.active_revision_id) issues.push("has no selected revision");
-  return issues.length === 0
-    ? null
-    : `${agent.display_name} ${issues.join(" and ")}. Future Workflow execution may not be able to resolve this Agent.`;
-}
-
 function previewPayload(value: string): string {
   const parsed = parseWorkflowInputPayload(value);
   return parsed.error ? value : JSON.stringify(parsed.value, null, 2);
@@ -195,6 +186,11 @@ export function WorkflowRevisionEditor({
           Workflow revision.
         </p>
       )}
+      <p role="status">
+        Agent status and selected revision are advisory while authoring. A
+        disabled Agent or an Agent without a selected revision can still be
+        targeted, but future Workflow execution may fail to resolve it.
+      </p>
       {agentsHasNextPage && (
         <p>
           More Agents are available. Load additional pages if the target Agent
@@ -218,96 +214,83 @@ export function WorkflowRevisionEditor({
             <p>No draft nodes yet. Add at least one node.</p>
           )}
           <ol>
-            {nodes.map((node, index) => {
-              const selectedAgent = agents.find(
-                (agent) => agent.id === node.target_agent_id,
-              );
-              const eligibilityWarning = selectedAgent
-                ? agentEligibilityWarning(selectedAgent)
-                : null;
-              return (
-                <li key={node.id}>
-                  <strong>Draft node {index + 1}</strong>
-                  <label htmlFor={`${node.id}-key`}>Node key</label>
-                  <input
-                    id={`${node.id}-key`}
-                    value={node.node_key}
-                    maxLength={128}
-                    onChange={(event) =>
-                      updateNode(node.id, { node_key: event.target.value })
-                    }
-                    required
-                  />
-                  <label htmlFor={`${node.id}-agent`}>Target Agent</label>
-                  <select
-                    id={`${node.id}-agent`}
-                    value={node.target_agent_id}
-                    onChange={(event) =>
-                      updateNode(node.id, {
-                        target_agent_id: event.target.value,
-                      })
-                    }
-                    required
-                    disabled={agentsLoading || agents.length === 0}
-                  >
-                    <option value="">Select an Agent</option>
-                    {agents.map((agent) => (
-                      <option key={agent.id} value={agent.id}>
-                        {agentLabel(agent)}
-                      </option>
-                    ))}
-                  </select>
-                  {eligibilityWarning && (
-                    <p role="status">Warning: {eligibilityWarning}</p>
-                  )}
-                  <label htmlFor={`${node.id}-objective`}>Objective</label>
-                  <textarea
-                    id={`${node.id}-objective`}
-                    value={node.objective}
-                    maxLength={MAX_WORKFLOW_NODE_OBJECTIVE_LENGTH}
-                    onChange={(event) =>
-                      updateNode(node.id, { objective: event.target.value })
-                    }
-                    required
-                  />
-                  <label htmlFor={`${node.id}-input`}>Input payload (JSON)</label>
-                  <textarea
-                    id={`${node.id}-input`}
-                    value={node.input_payload}
-                    maxLength={MAX_WORKFLOW_INPUT_LENGTH}
-                    onChange={(event) =>
-                      updateNode(node.id, { input_payload: event.target.value })
-                    }
-                    required
-                  />
-                  <p>Do not put credentials or secrets in Workflow payloads.</p>
-                  <label htmlFor={`${node.id}-output`}>
-                    Expected output contract
-                  </label>
-                  <textarea
-                    id={`${node.id}-output`}
-                    value={node.expected_output_contract}
-                    maxLength={MAX_WORKFLOW_OUTPUT_CONTRACT_LENGTH}
-                    onChange={(event) =>
-                      updateNode(node.id, {
-                        expected_output_contract: event.target.value,
-                      })
-                    }
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setNodes((current) =>
-                        current.filter((item) => item.id !== node.id),
-                      )
-                    }
-                  >
-                    Remove node
-                  </button>
-                </li>
-              );
-            })}
+            {nodes.map((node, index) => (
+              <li key={node.id}>
+                <strong>Draft node {index + 1}</strong>
+                <label htmlFor={`${node.id}-key`}>Node key</label>
+                <input
+                  id={`${node.id}-key`}
+                  value={node.node_key}
+                  maxLength={128}
+                  onChange={(event) =>
+                    updateNode(node.id, { node_key: event.target.value })
+                  }
+                  required
+                />
+                <label htmlFor={`${node.id}-agent`}>Target Agent</label>
+                <select
+                  id={`${node.id}-agent`}
+                  value={node.target_agent_id}
+                  onChange={(event) =>
+                    updateNode(node.id, { target_agent_id: event.target.value })
+                  }
+                  required
+                  disabled={agentsLoading || agents.length === 0}
+                >
+                  <option value="">Select an Agent</option>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agentLabel(agent)}
+                    </option>
+                  ))}
+                </select>
+                <label htmlFor={`${node.id}-objective`}>Objective</label>
+                <textarea
+                  id={`${node.id}-objective`}
+                  value={node.objective}
+                  maxLength={MAX_WORKFLOW_NODE_OBJECTIVE_LENGTH}
+                  onChange={(event) =>
+                    updateNode(node.id, { objective: event.target.value })
+                  }
+                  required
+                />
+                <label htmlFor={`${node.id}-input`}>Input payload (JSON)</label>
+                <textarea
+                  id={`${node.id}-input`}
+                  value={node.input_payload}
+                  maxLength={MAX_WORKFLOW_INPUT_LENGTH}
+                  onChange={(event) =>
+                    updateNode(node.id, { input_payload: event.target.value })
+                  }
+                  required
+                />
+                <p>Do not put credentials or secrets in Workflow payloads.</p>
+                <label htmlFor={`${node.id}-output`}>
+                  Expected output contract
+                </label>
+                <textarea
+                  id={`${node.id}-output`}
+                  value={node.expected_output_contract}
+                  maxLength={MAX_WORKFLOW_OUTPUT_CONTRACT_LENGTH}
+                  onChange={(event) =>
+                    updateNode(node.id, {
+                      expected_output_contract: event.target.value,
+                    })
+                  }
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    setNodes((current) =>
+                      current.filter((item) => item.id !== node.id),
+                    )
+                  }
+                >
+                  Remove node
+                </button>
+              </li>
+            ))}
           </ol>
         </fieldset>
         <fieldset>

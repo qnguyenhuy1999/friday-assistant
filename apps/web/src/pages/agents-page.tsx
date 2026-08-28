@@ -44,6 +44,7 @@ export function AgentsPage({
     );
   }
 
+  const items = agents.data?.pages.flatMap((page) => page.items) ?? [];
   return (
     <section>
       <h2>Agents</h2>
@@ -82,22 +83,31 @@ export function AgentsPage({
       {create.isError && <p role="alert">Failed to create agent.</p>}
       {agents.isLoading && <p>Loading agents…</p>}
       {agents.isError && <p role="alert">Failed to load agents.</p>}
-      {agents.data?.items.length === 0 && (
+      {!agents.isLoading && !agents.isError && items.length === 0 && (
         <p>
           No Agents yet. Create one to begin its immutable revision history.
         </p>
       )}
       <ul aria-label="Agent registry">
-        {agents.data?.items.map((agent) => (
+        {items.map((agent) => (
           <li key={agent.id}>
             <button type="button" onClick={() => onViewAgent(agent.id)}>
               {agent.display_name}
             </button>{" "}
-            — key: {agent.key} — status: {agent.status} — active revision:{" "}
+            — key: {agent.key} — status: {agent.status} — selected revision:{" "}
             {agent.active_revision_id ?? "none"}
           </li>
         ))}
       </ul>
+      {agents.hasNextPage && (
+        <button
+          type="button"
+          disabled={agents.isFetchingNextPage}
+          onClick={() => void agents.fetchNextPage()}
+        >
+          {agents.isFetchingNextPage ? "Loading more…" : "Load more Agents"}
+        </button>
+      )}
     </section>
   );
 }

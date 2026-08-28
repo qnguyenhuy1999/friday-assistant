@@ -4,7 +4,7 @@ Phase 1–21 completed Friday Agent OS's core architecture. Phase 22 is product
 expansion: it exposes existing, Friday-owned control-plane capabilities to
 operators without changing the authority model.
 
-## Step 1 — Agent Registry Operator UI + navigation
+## Step 1 — Agent Registry Operator UI + navigation ✅ complete
 
 Step 1 adds the Agent registry to the web control plane. Operators can list
 and inspect Agents, create an Agent, inspect immutable revisions, create a
@@ -25,5 +25,37 @@ they do not grant authority. All side effects remain on the existing Run →
 AgentRunProcessor → proposed action → risk → ApprovalRequest (when required)
 → ToolInvocation → ToolGateway path.
 
-Workflow authoring is not part of Step 1. Future Phase 22 steps: TBD after
-Step 1 review.
+Workflow authoring is not part of Step 1.
+
+## Step 2 — Workflow Registry Operator UI + Structured DAG Revision Authoring
+
+Step 2 exposes the existing Workflow registry and immutable DAG revision model
+to operators. The web control plane supports Workflow listing and creation,
+detail and revision provenance inspection, deterministic structured node/edge
+drafting, local feedback for malformed JSON and obvious DAG errors, exact
+revision activation, and the supported disable/archive lifecycle.
+
+There is no graphical DAG canvas or drag-and-drop editor in Step 2. Task ↔
+Workflow binding is intentionally deferred until the Workflow operator surface
+has been reviewed; no binding UI is exposed here.
+
+Workflow definitions influence orchestration only. They do not grant tool,
+filesystem, shell, MCP, browser/computer, messaging, provider, approval, claim,
+or execution-fencing authority. Revisions are immutable, version allocation is
+server-owned, and Workflow execution freezes the exact revision and content
+SHA used for that execution. A selected revision pointer is distinct from an
+effectively active Workflow, so a disabled Workflow can activate its existing
+selected revision without creating a new revision. Archived Workflows are
+read-only while their metadata, revisions, DAGs, and provenance remain
+inspectable.
+
+Operator collection loading is bounded. The Agent registry uses cursor pages,
+and the Workflow editor can load additional Agent pages rather than silently
+stopping at the first 100 records. Workflow revision history is requested in
+bounded newest-first pages keyed by immutable server-owned revision versions.
+Target Agent status remains advisory in the authoring UI: disabled Agents or
+Agents without a selected revision are visibly warned about because future
+execution may fail to resolve them, but the UI does not invent a stronger
+authority or eligibility rule than Friday's backend owns.
+
+Future Phase 22 steps remain TBD after Step 2 review.

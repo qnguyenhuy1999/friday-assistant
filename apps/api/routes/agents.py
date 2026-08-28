@@ -3,9 +3,10 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from apps.api.dependencies import get_brain_runtime_registry, get_clock, get_uow_factory
+from apps.api.pagination import MAX_PAGE_SIZE, cursor_int, decode_cursor, encode_cursor
 from apps.api.schemas.agents import (
     AgentPageResponse,
     AgentResponse,
@@ -73,9 +74,33 @@ def create(body: CreateAgentBody, uow: Uow, clock: ClockDep) -> AgentResponse:
 
 
 @router.get("", response_model=AgentPageResponse, operation_id="listAgents")
-def list_agents(uow: Uow) -> AgentPageResponse:
+def list_agents(
+    uow: Uow,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = MAX_PAGE_SIZE,
+    cursor: str | None = None,
+) -> AgentPageResponse:
+    after = decode_cursor(
+        cursor,
+        collection="agents",
+        parent_id=None,
+        order="offset_asc",
+        parts=1,
+    )
+    offset = cursor_int(after.after[0]) if after else 0
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="Invalid pagination cursor")
     with uow() as tx:
-        return AgentPageResponse(items=[_agent(x) for x in tx.agents.list(100)])
+        rows = tx.agents.list(offset + limit + 1)
+    page = rows[offset : offset + limit]
+    next_cursor = None
+    if len(rows) > offset + limit:
+        next_cursor = encode_cursor(
+            collection="agents",
+            parent_id=None,
+            order="offset_asc",
+            after=[offset + limit],
+        )
+    return AgentPageResponse(items=[_agent(x) for x in page], next_cursor=next_cursor)
 
 
 @router.get("/{agent_id}", response_model=AgentResponse, operation_id="getAgent")

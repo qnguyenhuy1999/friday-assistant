@@ -16,6 +16,10 @@ export interface ListWorkflowsParams {
   limit?: number;
   cursor?: string;
 }
+export interface ListWorkflowRevisionsPageParams {
+  limit?: number;
+  beforeVersion?: number;
+}
 export class WorkflowsResource {
   constructor(private readonly http: FridayHttpClient) {}
   create(input: CreateWorkflowBody) {
@@ -53,6 +57,20 @@ export class WorkflowsResource {
     return this.http.requestJson<WorkflowRevision[]>({
       method: "GET",
       path: `/v1/workflows/${workflowId}/revisions`,
+      validate: validateWorkflowRevisions,
+    });
+  }
+  listRevisionsPage(
+    workflowId: string,
+    params: ListWorkflowRevisionsPageParams = {},
+  ) {
+    return this.http.requestJson<WorkflowRevision[]>({
+      method: "GET",
+      path: `/v1/workflows/${workflowId}/revisions`,
+      query: {
+        limit: params.limit,
+        before_version: params.beforeVersion,
+      },
       validate: validateWorkflowRevisions,
     });
   }

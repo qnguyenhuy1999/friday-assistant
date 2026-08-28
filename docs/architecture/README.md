@@ -42,8 +42,8 @@ Agent/Workflow/Delegation runtime.
   layer, domain layer, and worker loop must never import it. MCP is a
   transport behind Friday's authority model, not a second way to reach one.
 - **`apps/web`** — React/Vite browser control plane for tasks, runs,
-  approvals, artifacts, events, final results, schedules, and the Agent
-  registry/revision operator surface.
+  approvals, artifacts, events, final results, schedules, and the Agent and
+  Workflow registry/revision operator surfaces.
 - **`apps/web/src/voice`** — browser-native speech adapters and controller;
   voice is delivery only and has no server-side execution surface.
 - **`packages/contracts`** — language-neutral schemas and cross-process

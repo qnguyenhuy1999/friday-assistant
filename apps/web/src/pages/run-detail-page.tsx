@@ -9,6 +9,16 @@ import { useRunEventStream } from "../hooks/use-run-event-stream";
 import { useRunSteps } from "../hooks/use-run-steps";
 import { useRunToolInvocations } from "../hooks/use-tool-invocations";
 import { useRunAgent } from "../hooks/use-run-agent";
+import {
+  isMissingWorkflowExecution,
+  useRunWorkflow,
+  useRunWorkflowNodes,
+} from "../hooks/use-run-workflow";
+
+function prettyJson(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
 export function RunDetailPage({
   runId,
   onViewApprovals,
@@ -23,6 +33,11 @@ export function RunDetailPage({
   const approvals = useRunApprovals(runId);
   const eventStream = useRunEventStream(runId);
   const agentResolution = useRunAgent(runId);
+  const workflowResolution = useRunWorkflow(runId);
+  const workflowNodes = useRunWorkflowNodes(
+    runId,
+    workflowResolution.data !== undefined,
+  );
   if (isLoading) return <p>Loading run…</p>;
   if (isError || !run) return <p role="alert">Failed to load run.</p>;
   const pending = approvals.data?.items.filter(
@@ -51,6 +66,90 @@ export function RunDetailPage({
         ) : (
           <p>This Run has no resolved Agent revision.</p>
         ))}
+      <h3>Frozen Workflow provenance</h3>
+      {workflowResolution.isLoading && <p>Loading Workflow provenance…</p>}
+      {workflowResolution.isError &&
+        (isMissingWorkflowExecution(workflowResolution.error) ? (
+          <p>This Run is not backed by a Workflow execution.</p>
+        ) : (
+          <p role="alert">Failed to load Workflow provenance.</p>
+        ))}
+      {workflowResolution.data && (
+        <>
+          <dl>
+            <dt>Workflow execution ID</dt>
+            <dd>{workflowResolution.data.workflow_execution_id}</dd>
+            <dt>Workflow ID</dt>
+            <dd>{workflowResolution.data.workflow_id}</dd>
+            <dt>Frozen Workflow revision</dt>
+            <dd>{workflowResolution.data.workflow_revision_id}</dd>
+            <dt>Frozen Workflow revision SHA-256</dt>
+            <dd>{workflowResolution.data.workflow_revision_sha256}</dd>
+            <dt>Execution status</dt>
+            <dd>{workflowResolution.data.status}</dd>
+          </dl>
+          {workflowResolution.data.failure_message && (
+            <p role="alert">
+              {workflowResolution.data.failure_code}:{" "}
+              {workflowResolution.data.failure_message}
+            </p>
+          )}
+          <h4>Workflow node execution provenance</h4>
+          {workflowNodes.isLoading && <p>Loading Workflow node provenance…</p>}
+          {workflowNodes.isError && (
+            <p role="alert">Failed to load Workflow node provenance.</p>
+          )}
+          <ul>
+            {workflowNodes.data?.map((node) => (
+              <li key={node.node_execution_id}>
+                <strong>{node.node_key}</strong> — {node.status}
+                <dl>
+                  <dt>Target Agent ID</dt>
+                  <dd>{node.target_agent_id}</dd>
+                  <dt>Frozen target Agent revision ID</dt>
+                  <dd>{node.target_agent_revision_id}</dd>
+                  <dt>Frozen target Agent revision SHA-256</dt>
+                  <dd>{node.target_agent_revision_sha256}</dd>
+                  {node.child_task_id && (
+                    <>
+                      <dt>Child Task ID</dt>
+                      <dd>{node.child_task_id}</dd>
+                    </>
+                  )}
+                  {node.child_run_id && (
+                    <>
+                      <dt>Child Run ID</dt>
+                      <dd>{node.child_run_id}</dd>
+                    </>
+                  )}
+                  {node.child_execution_id && (
+                    <>
+                      <dt>Child execution ID</dt>
+                      <dd>{node.child_execution_id}</dd>
+                    </>
+                  )}
+                  {node.result_payload !== null && (
+                    <>
+                      <dt>Result payload</dt>
+                      <dd>
+                        <pre>{prettyJson(node.result_payload)}</pre>
+                      </dd>
+                    </>
+                  )}
+                  {node.failure_message && (
+                    <>
+                      <dt>Failure</dt>
+                      <dd>
+                        {node.failure_code}: {node.failure_message}
+                      </dd>
+                    </>
+                  )}
+                </dl>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       {approvals.isLoading && <p>Loading approval state…</p>}
       {approvals.isError && (
         <p role="alert">

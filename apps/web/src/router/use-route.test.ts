@@ -24,6 +24,17 @@ describe("useRoute", () => {
     expect(result.current[0]).toEqual({ view: "agent", id: "a-1" });
   });
 
+  it("reads Workflow registry and detail routes", () => {
+    window.history.replaceState({}, "", "/?view=workflows");
+    const registry = renderHook(() => useRoute());
+    expect(registry.result.current[0]).toEqual({ view: "workflows", id: null });
+    registry.unmount();
+
+    window.history.replaceState({}, "", "/?view=workflow&id=w-1");
+    const detail = renderHook(() => useRoute());
+    expect(detail.result.current[0]).toEqual({ view: "workflow", id: "w-1" });
+  });
+
   it("falls back to conversation for an unknown view", () => {
     window.history.replaceState({}, "", "/?view=nonsense&id=r-1");
     const { result } = renderHook(() => useRoute());

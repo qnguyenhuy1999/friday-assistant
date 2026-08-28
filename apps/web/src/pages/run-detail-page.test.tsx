@@ -71,6 +71,8 @@ const approval = {
 function mockApi(run: unknown, approvals: unknown[] = []) {
   vi.spyOn(global, "fetch").mockImplementation(async (input) => {
     const url = String(input);
+    if (url.endsWith("/workflow"))
+      return jsonResponse({ detail: "workflow_execution_not_found" }, 404);
     if (url.includes("/steps")) return jsonResponse(page([step]));
     if (url.includes("/tool-invocations"))
       return jsonResponse(page([invocation]));
@@ -111,6 +113,37 @@ const runningRun = {
   execution_id: "exec-1",
 };
 
+const workflowExecution = {
+  root_run_id: "r-1",
+  workflow_execution_id: "wexec-1",
+  workflow_id: "w-1",
+  workflow_revision_id: "wr-1",
+  workflow_revision_sha256: "b".repeat(64),
+  status: "running",
+  started_at: "2026-01-01T00:00:00Z",
+  completed_at: null,
+  failure_code: null,
+  failure_message: null,
+};
+
+const workflowNode = {
+  node_execution_id: "wnexec-1",
+  node_key: "analyze",
+  target_agent_id: "a-1",
+  target_agent_revision_id: "ar-1",
+  target_agent_revision_sha256: "c".repeat(64),
+  status: "succeeded",
+  child_task_id: "t-child",
+  child_run_id: "r-child",
+  child_execution_id: "exec-child",
+  result_payload: { summary: "done" },
+  failure_code: null,
+  failure_message: null,
+  created_at: "2026-01-01T00:00:00Z",
+  started_at: "2026-01-01T00:00:00Z",
+  completed_at: "2026-01-01T00:01:00Z",
+};
+
 describe("RunDetailPage", () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -131,6 +164,43 @@ describe("RunDetailPage", () => {
     ).toBeInTheDocument();
     expect(await screen.findByText("a-1")).toBeInTheDocument();
     expect(screen.getByText("r-3")).toBeInTheDocument();
+  });
+
+  it("renders frozen Workflow and node provenance when present", async () => {
+    vi.spyOn(global, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/workflow/nodes")) return jsonResponse([workflowNode]);
+      if (url.endsWith("/workflow")) return jsonResponse(workflowExecution);
+      if (url.endsWith("/agent"))
+        return jsonResponse({
+          run_id: "r-1",
+          resolved: true,
+          resolved_at: "2026-01-01T00:00:00Z",
+          agent_id: "a-1",
+          revision_id: "r-3",
+        });
+      return jsonResponse(runningRun);
+    });
+    renderPage();
+    expect(await screen.findByText("wexec-1")).toBeInTheDocument();
+    expect(
+      screen.getByText("Frozen Workflow revision").nextElementSibling,
+    ).toHaveTextContent("wr-1");
+    expect(
+      (await screen.findByText("analyze")).closest("li"),
+    ).toHaveTextContent("analyze — succeeded");
+    expect(screen.getByText("r-child")).toBeInTheDocument();
+    expect(screen.getByText(/"summary": "done"/)).toBeInTheDocument();
+  });
+
+  it("shows a neutral state for a non-Workflow Run", async () => {
+    mockApi(runningRun);
+    renderPage();
+    expect(
+      await screen.findByText(
+        "This Run is not backed by a Workflow execution.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("links to the approvals view only while an approval is pending", async () => {

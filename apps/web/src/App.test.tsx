@@ -57,6 +57,64 @@ describe("App", () => {
     expect(window.location.search).toBe("?view=agents");
   });
 
+  it("navigates to the first-class Workflows registry and exact detail route", async () => {
+    renderApp();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Workflows" }));
+    expect(
+      await screen.findByRole("heading", { name: "Workflows" }),
+    ).toBeInTheDocument();
+    expect(window.location.search).toBe("?view=workflows");
+  });
+
+  it("reads and navigates a Workflow detail route", async () => {
+    window.history.replaceState({}, "", "/?view=workflow&id=w-1");
+    renderApp();
+    expect(
+      await screen.findByText("Failed to load Workflow."),
+    ).toBeInTheDocument();
+  });
+
+  it("navigates back from Workflow detail to the registry", async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(global, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/workflows/w-1"))
+        return new Response(
+          JSON.stringify({
+            id: "w-1",
+            key: "release.pipeline",
+            display_name: "Release pipeline",
+            description: "",
+            status: "active",
+            active_revision_id: null,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      if (url.endsWith("/revisions"))
+        return new Response("[]", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      return new Response(JSON.stringify({ items: [], next_cursor: null }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    window.history.replaceState({}, "", "/?view=workflow&id=w-1");
+    renderApp();
+    await screen.findByRole("heading", { name: "Release pipeline" });
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Back to Workflows" }));
+    expect(
+      await screen.findByRole("heading", { name: "Workflows" }),
+    ).toBeInTheDocument();
+    expect(window.location.search).toBe("?view=workflows");
+  });
+
   it("renders no detail view when the route carries no id", () => {
     window.history.replaceState({}, "", "/?view=run");
     renderApp();

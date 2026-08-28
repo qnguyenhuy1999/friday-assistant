@@ -72,6 +72,7 @@ export default async function globalSetup() {
   const [apiPort, webPort] = await dynamicPorts();
   const apiUrl = `http://127.0.0.1:${apiPort}`;
   const webUrl = `http://127.0.0.1:${webPort}`;
+  process.env.FRIDAY_E2E_API_URL = apiUrl;
   process.env.FRIDAY_E2E_WEB_URL = webUrl;
   const databaseUrl = `sqlite:///${join(directory, "friday.db")}`;
   const env = {

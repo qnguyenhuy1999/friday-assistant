@@ -40,10 +40,11 @@ export function useWorkflows() {
   });
 }
 
-export function useWorkflow(workflowId: string) {
+export function useWorkflow(workflowId: string | null) {
   return useQuery({
-    queryKey: workflowQueryKey(workflowId),
-    queryFn: () => friday.workflows.get(workflowId),
+    queryKey: workflowQueryKey(workflowId ?? "none"),
+    queryFn: () => friday.workflows.get(workflowId!),
+    enabled: workflowId !== null,
   });
 }
 

@@ -24,6 +24,12 @@ describe("useRoute", () => {
     expect(result.current[0]).toEqual({ view: "agent", id: "a-1" });
   });
 
+  it("reads an exact Task detail route", () => {
+    window.history.replaceState({}, "", "/?view=task&id=t-1");
+    const { result } = renderHook(() => useRoute());
+    expect(result.current[0]).toEqual({ view: "task", id: "t-1" });
+  });
+
   it("reads Workflow registry and detail routes", () => {
     window.history.replaceState({}, "", "/?view=workflows");
     const registry = renderHook(() => useRoute());

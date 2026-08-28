@@ -75,6 +75,43 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("reads an exact Task detail route", async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(global, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/v1/tasks/t-1"))
+        return new Response(
+          JSON.stringify({
+            id: "t-1",
+            title: "Ship it",
+            description: "A task to inspect.",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            failure: null,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      if (
+        url.endsWith("/v1/tasks/t-1/agent") ||
+        url.endsWith("/v1/tasks/t-1/workflow")
+      )
+        return new Response("null", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      return new Response(JSON.stringify({ items: [], next_cursor: null }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    window.history.replaceState({}, "", "/?view=task&id=t-1");
+    renderApp();
+    expect(
+      await screen.findByRole("heading", { name: "Ship it" }),
+    ).toBeInTheDocument();
+    expect(window.location.search).toBe("?view=task&id=t-1");
+  });
+
   it("navigates back from Workflow detail to the registry", async () => {
     vi.restoreAllMocks();
     vi.spyOn(global, "fetch").mockImplementation(async (input) => {

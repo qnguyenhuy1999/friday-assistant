@@ -27,7 +27,7 @@ AgentRunProcessor → proposed action → risk → ApprovalRequest (when require
 
 Workflow authoring is not part of Step 1.
 
-## Step 2 — Workflow Registry Operator UI + Structured DAG Revision Authoring
+## Step 2 — Workflow Registry Operator UI + Structured DAG Revision Authoring ✅ complete
 
 Step 2 exposes the existing Workflow registry and immutable DAG revision model
 to operators. The web control plane supports Workflow listing and creation,
@@ -58,4 +58,44 @@ Agents without a selected revision are visibly warned about because future
 execution may fail to resolve them, but the UI does not invent a stronger
 authority or eligibility rule than Friday's backend owns.
 
-Future Phase 22 steps remain TBD after Step 2 review.
+## Step 3 — Task Execution Target Binding & Launch Readiness
+
+Step 3 adds the first-class Task Detail route
+`?view=task&id=<task-id>`. From that surface, an operator can inspect a Task's
+mutable execution-target configuration, bind or clear its existing Agent or
+Workflow binding, review launch readiness, start an ordinary Run, and navigate
+to its Schedules. The Tasks registry remains available and opens the exact
+Task Detail page.
+
+A Task has exactly one logical execution-target state: Default Friday runtime,
+Agent, Workflow, or Inconsistent. Default Friday runtime means that both
+`TaskAgentBinding` and `TaskWorkflowBinding` are absent; the UI does not
+fabricate an Agent identity. Agent and Workflow bindings remain mutually
+exclusive, and cross-kind changes are explicit: the current binding must be
+cleared in one operation before the other kind can be bound. The UI does not
+pretend that two non-atomic requests are one switch.
+
+Agent binding eligibility remains the backend-owned rule: an Agent must be
+`active` and have a selected revision. Disabled, archived, and unselected
+Agents remain visible where practical with the reason they cannot be newly
+bound. Archived Workflows cannot be newly bound. Disabled Workflows and
+Workflows without a selected revision may still be selected as the backend
+allows, but the UI surfaces a launch-readiness warning rather than inventing a
+stronger client-side authority rule.
+
+Task binding is mutable future configuration, not frozen Run provenance.
+Binding changes affect unresolved Runs, including queued Runs that have not
+yet frozen their Agent or Workflow resolution. Once a worker publishes
+`RunAgentResolution` or `RunWorkflowResolution`, that exact frozen provenance
+is immutable and Task binding changes never rewrite it. Task Detail therefore
+shows configuration while Run Detail shows frozen execution truth.
+
+Starting a Run continues to use Friday's ordinary `tasks.startRun` path. The
+browser queues the Run and never chooses Agent processing versus Workflow
+orchestration; Friday's worker owns resolution, authority, risk assessment,
+approval, ToolInvocation, and ToolGateway execution. The authority model
+remains unchanged: Agent decides/reasons, Friday orchestrates, and Friday owns
+authority. An observed state with both bindings present is treated as an
+integrity error, fails closed, and is never repaired automatically.
+
+Future Phase 22 work remains TBD after Step 3 review.

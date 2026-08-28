@@ -1,6 +1,7 @@
 import { ApprovalsPage } from "./pages/approvals-page";
 import { RunDetailPage } from "./pages/run-detail-page";
 import { TasksPage } from "./pages/tasks-page";
+import { TaskDetailPage } from "./pages/task-detail-page";
 import { SchedulesPage } from "./pages/schedules-page";
 import { ConversationPage } from "./pages/conversation-page";
 import { AgentDetailPage } from "./pages/agent-detail-page";
@@ -46,6 +47,15 @@ export function App() {
       )}
       {route.view === "tasks" && (
         <TasksPage
+          onRunStarted={(id) => navigate({ view: "run", id })}
+          onViewTask={(id) => navigate({ view: "task", id })}
+          onViewSchedules={(id) => navigate({ view: "schedules", id })}
+        />
+      )}
+      {route.view === "task" && route.id && (
+        <TaskDetailPage
+          taskId={route.id}
+          onBack={() => navigate({ view: "tasks", id: null })}
           onRunStarted={(id) => navigate({ view: "run", id })}
           onViewSchedules={(id) => navigate({ view: "schedules", id })}
         />

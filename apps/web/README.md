@@ -11,7 +11,9 @@
 ## Current Status
 
 Vite + React + TanStack Query control plane. Query-parameter routing serves
-Tasks, Run Detail, and the run-scoped Approvals view. The app talks to the API
-only through `@friday/sdk`'s `FridayClient`, uses named SSE events plus
-bounded polling for live state, and renders approval authorization intent
-verbatim before an explicit human decision.
+Tasks, mutable Task execution-target Detail, Run Detail, and the run-scoped
+Approvals view. The app talks to the API only through `@friday/sdk`'s
+`FridayClient`, uses named SSE events plus bounded polling for live state, and
+renders approval authorization intent verbatim before an explicit human
+decision. Task Detail configures future routing; Run Detail remains the source
+of frozen execution provenance.

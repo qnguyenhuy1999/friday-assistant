@@ -2,10 +2,18 @@ import type { CreateTaskBody } from "@friday/contracts";
 import {
   useInfiniteQuery,
   useMutation,
+  useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
 import { friday } from "../friday-client";
 export const tasksQueryKey = ["tasks"] as const;
+
+export const taskQueryKey = (taskId: string) => ["task", taskId] as const;
+export const taskAgentBindingQueryKey = (taskId: string) =>
+  ["task-agent-binding", taskId] as const;
+export const taskWorkflowBindingQueryKey = (taskId: string) =>
+  ["task-workflow-binding", taskId] as const;
+
 export function useTasks() {
   return useInfiniteQuery({
     queryKey: tasksQueryKey,
@@ -15,6 +23,80 @@ export function useTasks() {
     getNextPageParam: (page) => page.next_cursor ?? undefined,
   });
 }
+
+export function useTask(taskId: string) {
+  return useQuery({
+    queryKey: taskQueryKey(taskId),
+    queryFn: () => friday.tasks.get(taskId),
+  });
+}
+
+export function useTaskAgentBinding(taskId: string) {
+  return useQuery({
+    queryKey: taskAgentBindingQueryKey(taskId),
+    queryFn: () => friday.tasks.getAgent(taskId),
+    retry: false,
+  });
+}
+
+export function useTaskWorkflowBinding(taskId: string) {
+  return useQuery({
+    queryKey: taskWorkflowBindingQueryKey(taskId),
+    queryFn: () => friday.tasks.getWorkflow(taskId),
+    retry: false,
+  });
+}
+
+function invalidateTaskExecutionTarget(
+  queryClient: ReturnType<typeof useQueryClient>,
+  taskId: string,
+) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: tasksQueryKey }),
+    queryClient.invalidateQueries({ queryKey: taskQueryKey(taskId) }),
+    queryClient.invalidateQueries({
+      queryKey: taskAgentBindingQueryKey(taskId),
+    }),
+    queryClient.invalidateQueries({
+      queryKey: taskWorkflowBindingQueryKey(taskId),
+    }),
+  ]);
+}
+
+export function usePutTaskAgent(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (agentId: string) =>
+      friday.tasks.putAgent(taskId, { agent_id: agentId }),
+    onSuccess: () => invalidateTaskExecutionTarget(queryClient, taskId),
+  });
+}
+
+export function useClearTaskAgent(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => friday.tasks.putAgent(taskId, { agent_id: null }),
+    onSuccess: () => invalidateTaskExecutionTarget(queryClient, taskId),
+  });
+}
+
+export function useBindTaskWorkflow(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (workflowId: string) =>
+      friday.tasks.bindWorkflow(taskId, workflowId),
+    onSuccess: () => invalidateTaskExecutionTarget(queryClient, taskId),
+  });
+}
+
+export function useUnbindTaskWorkflow(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => friday.tasks.unbindWorkflow(taskId),
+    onSuccess: () => invalidateTaskExecutionTarget(queryClient, taskId),
+  });
+}
+
 export function useCreateTask() {
   const q = useQueryClient();
   return useMutation({
@@ -26,6 +108,10 @@ export function useStartRun() {
   const q = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => friday.tasks.startRun(id),
-    onSuccess: () => q.invalidateQueries({ queryKey: tasksQueryKey }),
+    onSuccess: (_response, taskId) =>
+      Promise.all([
+        q.invalidateQueries({ queryKey: tasksQueryKey }),
+        q.invalidateQueries({ queryKey: taskQueryKey(taskId) }),
+      ]),
   });
 }

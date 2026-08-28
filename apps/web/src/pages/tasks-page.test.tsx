@@ -20,17 +20,17 @@ const task = {
   failure: null,
 };
 
-function renderPage() {
+function renderPage(onViewTask = vi.fn()) {
   const onRunStarted = vi.fn();
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <TasksPage onRunStarted={onRunStarted} />
+      <TasksPage onRunStarted={onRunStarted} onViewTask={onViewTask} />
     </QueryClientProvider>,
   );
-  return { onRunStarted };
+  return { onRunStarted, onViewTask };
 }
 
 describe("TasksPage", () => {
@@ -42,6 +42,17 @@ describe("TasksPage", () => {
     );
     renderPage();
     expect(await screen.findByText(/Ship it/)).toBeInTheDocument();
+  });
+
+  it("opens the exact Task from the registry", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      jsonResponse({ items: [task], next_cursor: null }),
+    );
+    const { onViewTask } = renderPage();
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Ship it" }));
+    expect(onViewTask).toHaveBeenCalledWith("t-1");
   });
 
   it("loads later task pages on demand", async () => {

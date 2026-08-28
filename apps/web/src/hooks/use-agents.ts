@@ -39,10 +39,11 @@ export function useAgents() {
   });
 }
 
-export function useAgent(agentId: string) {
+export function useAgent(agentId: string | null) {
   return useQuery({
-    queryKey: agentQueryKey(agentId),
-    queryFn: () => friday.agents.get(agentId),
+    queryKey: agentQueryKey(agentId ?? "none"),
+    queryFn: () => friday.agents.get(agentId!),
+    enabled: agentId !== null,
   });
 }
 

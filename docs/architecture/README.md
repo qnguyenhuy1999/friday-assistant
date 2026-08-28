@@ -41,9 +41,11 @@ Agent/Workflow/Delegation runtime.
   `infrastructure/tools/mcp_composition.py`; the brain runtime, application
   layer, domain layer, and worker loop must never import it. MCP is a
   transport behind Friday's authority model, not a second way to reach one.
-- **`apps/web`** — React/Vite browser control plane for tasks, runs,
-  approvals, artifacts, events, final results, schedules, and the Agent and
-  Workflow registry/revision operator surfaces.
+- **`apps/web`** — React/Vite browser control plane for tasks, mutable Task
+  execution-target configuration, runs, approvals, artifacts, events, final
+  results, schedules, and the Agent and Workflow registry/revision operator
+  surfaces. It does not select an execution path or own execution authority;
+  Run Detail is the read-only surface for frozen execution provenance.
 - **`apps/web/src/voice`** — browser-native speech adapters and controller;
   voice is delivery only and has no server-side execution surface.
 - **`packages/contracts`** — language-neutral schemas and cross-process

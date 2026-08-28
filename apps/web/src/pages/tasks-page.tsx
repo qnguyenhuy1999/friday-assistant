@@ -2,9 +2,11 @@ import { useState, type FormEvent } from "react";
 import { useCreateTask, useStartRun, useTasks } from "../hooks/use-tasks";
 export function TasksPage({
   onRunStarted,
+  onViewTask = () => undefined,
   onViewSchedules = () => undefined,
 }: {
   onRunStarted: (runId: string) => void;
+  onViewTask?: (taskId: string) => void;
   onViewSchedules?: (taskId: string) => void;
 }) {
   const {
@@ -47,7 +49,10 @@ export function TasksPage({
           .flatMap((page) => page.items)
           .map((task) => (
             <li key={task.id}>
-              {task.title} — {task.status}{" "}
+              <button type="button" onClick={() => onViewTask(task.id)}>
+                {task.title}
+              </button>{" "}
+              — {task.status}{" "}
               <button
                 disabled={start.isPending}
                 onClick={() =>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 export type View =
   | "conversation"
   | "tasks"
+  | "task"
   | "run"
   | "approvals"
   | "schedules"
@@ -18,6 +19,7 @@ function readRoute(): Route {
   const view = p.get("view");
   return view === "conversation" ||
     view === "tasks" ||
+    view === "task" ||
     view === "run" ||
     view === "approvals" ||
     view === "schedules" ||

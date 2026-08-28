@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentsPage } from "./agents-page";
@@ -49,7 +49,7 @@ describe("AgentsPage", () => {
       "key: coder",
     );
     expect(screen.getByLabelText("Agent registry")).toHaveTextContent(
-      "active revision: r-1",
+      "selected revision: r-1",
     );
     expect(onViewAgent).toHaveBeenCalledWith("a-1");
   });
@@ -91,5 +91,31 @@ describe("AgentsPage", () => {
       display_name: "Coder",
       description: "Writes code",
     });
+  });
+
+  it("loads additional Agent pages instead of stopping at the first page", async () => {
+    const fetchMock = vi
+      .spyOn(global, "fetch")
+      .mockResolvedValueOnce(
+        response({ items: [agent], next_cursor: "agent-page-2" }),
+      )
+      .mockResolvedValueOnce(
+        response({
+          items: [{ ...agent, id: "a-2", display_name: "Reviewer" }],
+          next_cursor: null,
+        }),
+      );
+    renderPage();
+    expect(await screen.findByRole("button", { name: "Coder" })).toBeInTheDocument();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Load more Agents" }));
+    expect(
+      await screen.findByRole("button", { name: "Reviewer" }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "cursor=agent-page-2",
+    );
   });
 });

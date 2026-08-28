@@ -2,9 +2,15 @@ import type {
   CreateAgentBody,
   CreateAgentRevisionBody,
 } from "@friday/contracts";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { friday } from "../friday-client";
 
+export const AGENT_PAGE_SIZE = 50;
 export const agentsQueryKey = ["agents"] as const;
 export const agentQueryKey = (agentId: string) => ["agent", agentId] as const;
 export const agentRevisionsQueryKey = (agentId: string) =>
@@ -24,9 +30,12 @@ function invalidateAgent(
 }
 
 export function useAgents() {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: agentsQueryKey,
-    queryFn: () => friday.agents.list(),
+    queryFn: ({ pageParam }) =>
+      friday.agents.list({ limit: AGENT_PAGE_SIZE, cursor: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
   });
 }
 

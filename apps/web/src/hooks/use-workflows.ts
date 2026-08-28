@@ -10,6 +10,7 @@ import {
 } from "@tanstack/react-query";
 import { friday } from "../friday-client";
 
+export const WORKFLOW_REVISION_PAGE_SIZE = 10;
 export const workflowsQueryKey = ["workflows"] as const;
 export const workflowQueryKey = (workflowId: string) =>
   ["workflow", workflowId] as const;
@@ -47,9 +48,18 @@ export function useWorkflow(workflowId: string) {
 }
 
 export function useWorkflowRevisions(workflowId: string) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: workflowRevisionsQueryKey(workflowId),
-    queryFn: () => friday.workflows.listRevisions(workflowId),
+    queryFn: ({ pageParam }) =>
+      friday.workflows.listRevisionsPage(workflowId, {
+        limit: WORKFLOW_REVISION_PAGE_SIZE,
+        beforeVersion: pageParam,
+      }),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (page) =>
+      page.length === WORKFLOW_REVISION_PAGE_SIZE
+        ? page.at(-1)?.version
+        : undefined,
   });
 }
 

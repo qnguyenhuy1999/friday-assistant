@@ -109,11 +109,11 @@ function mockDetailApi(
   return vi.spyOn(global, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
     const method = (init as RequestInit | undefined)?.method ?? "GET";
-    if (url.endsWith("/agents") && method === "GET")
+    if ((url.endsWith("/agents") || url.includes("/agents?")) && method === "GET")
       return response({ items: [agentA, agentB], next_cursor: null });
     if (url.endsWith("/revisions") && method === "POST")
       return response(createResponse, 201);
-    if (url.endsWith("/revisions") && method === "GET")
+    if (url.includes("/revisions?") && method === "GET")
       return response(revisions);
     if (url.endsWith("/activate") && method === "POST")
       return response({
@@ -211,6 +211,11 @@ describe("WorkflowDetailPage", () => {
     const targetAgents = screen.getAllByLabelText("Target Agent");
     await user.selectOptions(targetAgents[0]!, "a-1");
     await user.selectOptions(targetAgents[1]!, "a-2");
+    expect(
+      screen.getByText(
+        /Warning: Coder is disabled and has no selected revision\./,
+      ),
+    ).toBeInTheDocument();
     const objectives = screen.getAllByLabelText("Objective");
     await user.type(objectives[0]!, "Analyze the change.");
     await user.type(objectives[1]!, "Implement the change.");
@@ -300,6 +305,37 @@ describe("WorkflowDetailPage", () => {
           (init as RequestInit | undefined)?.method === "POST",
       ),
     ).toBe(false);
+  });
+
+  it("loads older Workflow revisions in bounded pages", async () => {
+    const revisions = Array.from({ length: 10 }, (_, index) => ({
+      ...revision,
+      id: `wr-${20 - index}`,
+      version: 20 - index,
+    }));
+    const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/workflows/w-1")) return response(workflow);
+      if (url.endsWith("/agents") || url.includes("/agents?"))
+        return response({ items: [agentA], next_cursor: null });
+      if (url.includes("before_version=11"))
+        return response([{ ...revision, id: "wr-10", version: 10 }]);
+      if (url.includes("/revisions?")) return response(revisions);
+      return response({ error: { type: "unexpected", message: url } }, 500);
+    });
+    renderPage();
+    expect(await screen.findByText("v20")).toBeInTheDocument();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Load older revisions" }));
+    expect(await screen.findByText("v10")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("before_version=11"),
+        ),
+      ).toBe(true),
+    );
   });
 
   it("keeps archived Workflows read-only while showing immutable history", async () => {

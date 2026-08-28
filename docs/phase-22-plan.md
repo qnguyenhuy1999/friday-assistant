@@ -49,4 +49,13 @@ selected revision without creating a new revision. Archived Workflows are
 read-only while their metadata, revisions, DAGs, and provenance remain
 inspectable.
 
+Operator collection loading is bounded. The Agent registry uses cursor pages,
+and the Workflow editor can load additional Agent pages rather than silently
+stopping at the first 100 records. Workflow revision history is requested in
+bounded newest-first pages keyed by immutable server-owned revision versions.
+Target Agent status remains advisory in the authoring UI: disabled Agents or
+Agents without a selected revision are visibly warned about because future
+execution may fail to resolve them, but the UI does not invent a stronger
+authority or eligibility rule than Friday's backend owns.
+
 Future Phase 22 steps remain TBD after Step 2 review.

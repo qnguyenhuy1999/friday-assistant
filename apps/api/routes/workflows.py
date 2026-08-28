@@ -182,10 +182,23 @@ def create_revision(
     response_model=list[WorkflowRevisionResponse],
     operation_id="listWorkflowRevisions",
 )
-def list_revisions(workflow_id: UUID, uow: Uow) -> list[WorkflowRevisionResponse]:
-    return [
-        _revision(x) for x in GetWorkflow(uow).list_revisions(WorkflowId.parse(str(workflow_id)))
-    ]
+def list_revisions(
+    workflow_id: UUID,
+    uow: Uow,
+    limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+    before_version: Annotated[int | None, Query(ge=1)] = None,
+) -> list[WorkflowRevisionResponse]:
+    values = GetWorkflow(uow).list_revisions(WorkflowId.parse(str(workflow_id)))
+    if limit is None and before_version is None:
+        selected = values
+    else:
+        page_limit = limit or DEFAULT_PAGE_SIZE
+        selected = [
+            revision
+            for revision in reversed(values)
+            if before_version is None or revision.version < before_version
+        ][:page_limit]
+    return [_revision(x) for x in selected]
 
 
 @router.get(

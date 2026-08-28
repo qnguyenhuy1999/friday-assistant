@@ -12,6 +12,12 @@ import {
   validateAgentRevisions,
 } from "@friday/contracts";
 import type { FridayHttpClient } from "../http";
+
+export interface ListAgentsParams {
+  limit?: number;
+  cursor?: string;
+}
+
 export class AgentsResource {
   constructor(private readonly http: FridayHttpClient) {}
   create(input: CreateAgentBody) {
@@ -22,10 +28,11 @@ export class AgentsResource {
       validate: validateAgent,
     });
   }
-  list() {
+  list(params: ListAgentsParams = {}) {
     return this.http.requestJson<AgentPage>({
       method: "GET",
       path: "/v1/agents",
+      query: { limit: params.limit, cursor: params.cursor },
       validate: validateAgentPage,
     });
   }

@@ -93,7 +93,7 @@ describe("App", () => {
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
-      if (url.endsWith("/revisions"))
+      if (url.includes("/revisions?"))
         return new Response("[]", {
           status: 200,
           headers: { "content-type": "application/json" },

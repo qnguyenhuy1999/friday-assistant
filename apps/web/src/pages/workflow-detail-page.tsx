@@ -145,7 +145,8 @@ export function WorkflowDetailPage({
   if (workflow.isError || !workflow.data)
     return <p role="alert">Failed to load Workflow.</p>;
   const current = workflow.data;
-  const agentItems = agents.data?.items ?? [];
+  const agentItems = agents.data?.pages.flatMap((page) => page.items) ?? [];
+  const revisionItems = revisions.data?.pages.flatMap((page) => page) ?? [];
   return (
     <section>
       <button type="button" onClick={onBack}>
@@ -194,15 +195,18 @@ export function WorkflowDetailPage({
       <h3>Immutable revision history</h3>
       <p>
         Revisions cannot be edited in place. A selected revision pointer and an
-        effectively active Workflow are separate states.
+        effectively active Workflow are separate states. History is loaded in
+        bounded newest-first pages.
       </p>
       {revisions.isLoading && <p>Loading Workflow revisions…</p>}
       {revisions.isError && (
         <p role="alert">Failed to load Workflow revisions.</p>
       )}
-      {revisions.data?.length === 0 && <p>No revisions yet.</p>}
+      {!revisions.isLoading && !revisions.isError && revisionItems.length === 0 && (
+        <p>No revisions yet.</p>
+      )}
       <ol aria-label="Workflow revision history">
-        {revisions.data?.map((revision) => (
+        {revisionItems.map((revision) => (
           <RevisionInspection
             key={revision.id}
             revision={revision}
@@ -213,6 +217,17 @@ export function WorkflowDetailPage({
           />
         ))}
       </ol>
+      {revisions.hasNextPage && (
+        <button
+          type="button"
+          disabled={revisions.isFetchingNextPage}
+          onClick={() => void revisions.fetchNextPage()}
+        >
+          {revisions.isFetchingNextPage
+            ? "Loading older revisions…"
+            : "Load older revisions"}
+        </button>
+      )}
       {activateRevision.isError && (
         <p role="alert">Failed to activate Workflow revision.</p>
       )}
@@ -231,6 +246,9 @@ export function WorkflowDetailPage({
           agents={agentItems}
           agentsLoading={agents.isLoading}
           agentsError={agents.isError}
+          agentsHasNextPage={agents.hasNextPage}
+          agentsLoadingMore={agents.isFetchingNextPage}
+          onLoadMoreAgents={() => void agents.fetchNextPage()}
         />
       )}
     </section>

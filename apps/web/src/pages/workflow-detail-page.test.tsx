@@ -236,8 +236,12 @@ describe("WorkflowDetailPage", () => {
     await user.click(
       screen.getByRole("button", { name: "Create immutable revision" }),
     );
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Created revision v1",
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole("status")
+          .some((item) => item.textContent?.includes("Created revision v1")),
+      ).toBe(true),
     );
     const createCall = fetchMock.mock.calls.find(
       ([input, init]) =>

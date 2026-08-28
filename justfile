@@ -9,9 +9,7 @@ format:
 
 format-check:
     uv run ruff format --check .
-    pnpm exec prettier --write apps/web/src/pages/workflow-revision-editor.tsx
-    git diff -- apps/web/src/pages/workflow-revision-editor.tsx
-    false
+    pnpm exec prettier --check "**/*.{json,yaml,yml}" "apps/**/*.{ts,tsx}" "packages/**/*.{ts,tsx}" eslint.config.mjs
 
 lint:
     uv run ruff check .

@@ -296,11 +296,7 @@ export function WorkflowRevisionEditor({
         <fieldset>
           <legend>Edges</legend>
           <p>Edges reference draft nodes by their node keys.</p>
-          <button
-            type="button"
-            onClick={addEdge}
-            disabled={nodes.length === 0}
-          >
+          <button type="button" onClick={addEdge} disabled={nodes.length === 0}>
             Add edge
           </button>
           {edges.length === 0 && <p>No draft edges yet.</p>}

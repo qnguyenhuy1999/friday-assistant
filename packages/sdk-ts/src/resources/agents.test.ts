@@ -42,6 +42,7 @@ describe("AgentsResource", () => {
     expect(requestJson).toHaveBeenNthCalledWith(2, {
       method: "GET",
       path: "/v1/agents",
+      query: { limit: undefined, cursor: undefined },
       validate: validateAgentPage,
     });
     expect(requestJson).toHaveBeenNthCalledWith(3, {

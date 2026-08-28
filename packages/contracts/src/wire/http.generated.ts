@@ -374,7 +374,7 @@ export interface SkillRevision {
   version: number;
   instructions: string;
   content_sha256: string;
-  source_kind: "operator" | "imported";
+  source_kind: "operator" | "imported" | "generated";
   created_at: string;
 }
 
@@ -1787,7 +1787,7 @@ const schema = {
           type: "string",
         },
         source_kind: {
-          enum: ["operator", "imported"],
+          enum: ["operator", "imported", "generated"],
         },
         created_at: {
           type: "string",

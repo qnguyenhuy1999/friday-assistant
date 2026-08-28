@@ -67,6 +67,17 @@ describe("App", () => {
     expect(window.location.search).toBe("?view=workflows");
   });
 
+  it("navigates to the first-class Skills registry", async () => {
+    renderApp();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Skills" }));
+    expect(
+      await screen.findByRole("heading", { name: "Skills" }),
+    ).toBeInTheDocument();
+    expect(window.location.search).toBe("?view=skills");
+  });
+
   it("reads and navigates a Workflow detail route", async () => {
     window.history.replaceState({}, "", "/?view=workflow&id=w-1");
     renderApp();

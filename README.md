@@ -190,7 +190,13 @@ Phase 21 — Agents, Workflows & Delegation is complete: immutable Agent and
 Workflow revisions, frozen execution, bounded nested delegation, durable
 retry/recovery, result projection, and Run-local authority isolation.
 
-After Phase 21, additional work is considered product expansion rather than core architecture. Phase 22 begins that expansion with the Agent Registry Operator UI; see [docs/phase-22-plan.md](docs/phase-22-plan.md).
+After Phase 21, additional work is considered product expansion rather than core architecture.
+
+Phase 22 — Agent & Workflow Operator Studio ✅ complete
+Phase 23 — Skill Operator Studio — Step 1 in progress
+
+See [docs/phase-22-plan.md](docs/phase-22-plan.md) and
+[docs/phase-23-plan.md](docs/phase-23-plan.md).
 
 ## Development
 

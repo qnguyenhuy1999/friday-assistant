@@ -76,6 +76,7 @@ export type {
   ScheduleDeliveryPolicy,
   ScheduleFire,
   Skill,
+  SkillPage,
   SkillRevision,
   TaskSkillBinding,
   RunSkillAuditItem,

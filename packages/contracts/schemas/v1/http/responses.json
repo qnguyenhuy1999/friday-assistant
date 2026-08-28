@@ -760,7 +760,7 @@
         "version": { "type": "integer" },
         "instructions": { "type": "string" },
         "content_sha256": { "type": "string" },
-        "source_kind": { "enum": ["operator", "imported"] },
+        "source_kind": { "enum": ["operator", "imported", "generated"] },
         "created_at": { "type": "string" }
       }
     },

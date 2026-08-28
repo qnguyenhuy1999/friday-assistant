@@ -986,6 +986,27 @@ class SkillRepository:
             ).scalars()
         ]
 
+    def list_page(
+        self, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> builtins.list[Skill]:
+        stmt = select(SkillRow)
+        if after_created_at is not None and after_id is not None:
+            stmt = stmt.where(
+                or_(
+                    SkillRow.created_at > after_created_at,
+                    and_(
+                        SkillRow.created_at == after_created_at,
+                        SkillRow.id > after_id,
+                    ),
+                )
+            )
+        return [
+            skill_from_row(row)
+            for row in self._session.execute(
+                stmt.order_by(SkillRow.created_at, SkillRow.id).limit(limit)
+            ).scalars()
+        ]
+
 
 class SkillRevisionRepository:
     def __init__(self, session: Session) -> None:
@@ -1005,6 +1026,19 @@ class SkillRevisionRepository:
                 select(SkillRevisionRow)
                 .where(SkillRevisionRow.skill_id == str(skill_id))
                 .order_by(SkillRevisionRow.version)
+            ).scalars()
+        ]
+
+    def list_for_skill_page(
+        self, skill_id: SkillId, limit: int, before_version: int | None
+    ) -> list[SkillRevision]:
+        stmt = select(SkillRevisionRow).where(SkillRevisionRow.skill_id == str(skill_id))
+        if before_version is not None:
+            stmt = stmt.where(SkillRevisionRow.version < before_version)
+        return [
+            skill_revision_from_row(row)
+            for row in self._session.execute(
+                stmt.order_by(SkillRevisionRow.version.desc()).limit(limit)
             ).scalars()
         ]
 

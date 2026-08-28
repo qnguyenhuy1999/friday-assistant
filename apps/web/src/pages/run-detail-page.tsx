@@ -9,6 +9,7 @@ import { useRunEventStream } from "../hooks/use-run-event-stream";
 import { useRunSteps } from "../hooks/use-run-steps";
 import { useRunToolInvocations } from "../hooks/use-tool-invocations";
 import { useRunAgent } from "../hooks/use-run-agent";
+import { useRunSkills } from "../hooks/use-run-skills";
 import {
   isMissingWorkflowExecution,
   useRunWorkflow,
@@ -33,6 +34,7 @@ export function RunDetailPage({
   const approvals = useRunApprovals(runId);
   const eventStream = useRunEventStream(runId);
   const agentResolution = useRunAgent(runId);
+  const skillResolution = useRunSkills(runId);
   const workflowResolution = useRunWorkflow(runId);
   const workflowNodes = useRunWorkflowNodes(
     runId,
@@ -66,6 +68,68 @@ export function RunDetailPage({
         ) : (
           <p>This Run has no resolved Agent revision.</p>
         ))}
+      <h3>Frozen Skill provenance</h3>
+      {skillResolution.isLoading && <p>Loading Skill provenance...</p>}
+      {skillResolution.isError && (
+        <p role="alert">Failed to load Skill provenance.</p>
+      )}
+      {skillResolution.data && (
+        <>
+          <dl>
+            <dt>Resolved status</dt>
+            <dd>{String(skillResolution.data.resolved)}</dd>
+            <dt>Resolved timestamp</dt>
+            <dd>
+              {skillResolution.data.resolved_at ?? "Resolution not frozen"}
+            </dd>
+          </dl>
+          {!skillResolution.data.resolved && (
+            <p>Skill resolution has not been frozen yet.</p>
+          )}
+          {skillResolution.data.resolved &&
+            skillResolution.data.items.length === 0 && (
+              <p>This Run resolved with zero Skills.</p>
+            )}
+          {skillResolution.data.resolved &&
+            skillResolution.data.items.length > 0 && (
+              <ol aria-label="Frozen Skill provenance items">
+                {[...skillResolution.data.items]
+                  .sort((a, b) => a.position - b.position)
+                  .map((item) => (
+                    <li key={`${item.position}-${item.revision_id}`}>
+                      <article
+                        aria-label={`Frozen Skill ${item.position}: ${item.skill_key}`}
+                      >
+                        <h4>
+                          {item.position}. {item.skill_key}
+                        </h4>
+                        <dl>
+                          <dt>Skill ID</dt>
+                          <dd>{item.skill_id}</dd>
+                          <dt>Skill key</dt>
+                          <dd>{item.skill_key}</dd>
+                          <dt>Frozen revision ID</dt>
+                          <dd>{item.revision_id}</dd>
+                          <dt>Frozen version</dt>
+                          <dd>v{item.version}</dd>
+                          <dt>Frozen content SHA-256</dt>
+                          <dd>{item.content_sha256}</dd>
+                          <dt>Source kind</dt>
+                          <dd>{item.source_kind}</dd>
+                          <dt>Exact frozen instructions</dt>
+                          <dd>
+                            <pre style={{ whiteSpace: "pre-wrap" }}>
+                              {item.instructions}
+                            </pre>
+                          </dd>
+                        </dl>
+                      </article>
+                    </li>
+                  ))}
+              </ol>
+            )}
+        </>
+      )}
       <h3>Frozen Workflow provenance</h3>
       {workflowResolution.isLoading && <p>Loading Workflow provenance…</p>}
       {workflowResolution.isError &&

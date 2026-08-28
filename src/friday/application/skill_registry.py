@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from friday.application.errors import (
     ClaimLost,
     EntityConflict,
@@ -144,6 +146,25 @@ class GetSkill:
             if uow.skills.get(skill_id) is None:
                 raise SkillNotFound(skill_id)
             return uow.skill_revisions.list_for_skill(skill_id)
+
+    def list_revisions_page(
+        self, skill_id: SkillId, limit: int, before_version: int | None
+    ) -> list[SkillRevision]:
+        with self._uow_factory() as uow:
+            if uow.skills.get(skill_id) is None:
+                raise SkillNotFound(skill_id)
+            return uow.skill_revisions.list_for_skill_page(skill_id, limit, before_version)
+
+
+class ListSkills:
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def page(
+        self, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> list[Skill]:
+        with self._uow_factory() as uow:
+            return uow.skills.list_page(limit, after_created_at, after_id)
 
 
 class ReplaceTaskSkills:

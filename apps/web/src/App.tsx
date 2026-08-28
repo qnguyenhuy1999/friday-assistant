@@ -8,6 +8,8 @@ import { AgentDetailPage } from "./pages/agent-detail-page";
 import { AgentsPage } from "./pages/agents-page";
 import { WorkflowDetailPage } from "./pages/workflow-detail-page";
 import { WorkflowsPage } from "./pages/workflows-page";
+import { SkillDetailPage } from "./pages/skill-detail-page";
+import { SkillsPage } from "./pages/skills-page";
 import { useRoute } from "./router/use-route";
 export function App() {
   const [route, navigate] = useRoute();
@@ -38,6 +40,12 @@ export function App() {
           onClick={() => navigate({ view: "workflows", id: null })}
         >
           Workflows
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate({ view: "skills", id: null })}
+        >
+          Skills
         </button>
       </nav>
       {route.view === "conversation" && (
@@ -97,6 +105,15 @@ export function App() {
         <WorkflowDetailPage
           workflowId={route.id}
           onBack={() => navigate({ view: "workflows", id: null })}
+        />
+      )}
+      {route.view === "skills" && (
+        <SkillsPage onViewSkill={(id) => navigate({ view: "skill", id })} />
+      )}
+      {route.view === "skill" && route.id && (
+        <SkillDetailPage
+          skillId={route.id}
+          onBack={() => navigate({ view: "skills", id: null })}
         />
       )}
     </main>

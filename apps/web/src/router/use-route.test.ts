@@ -41,6 +41,17 @@ describe("useRoute", () => {
     expect(detail.result.current[0]).toEqual({ view: "workflow", id: "w-1" });
   });
 
+  it("reads Skill registry and detail routes", () => {
+    window.history.replaceState({}, "", "/?view=skills");
+    const registry = renderHook(() => useRoute());
+    expect(registry.result.current[0]).toEqual({ view: "skills", id: null });
+    registry.unmount();
+
+    window.history.replaceState({}, "", "/?view=skill&id=s-1");
+    const detail = renderHook(() => useRoute());
+    expect(detail.result.current[0]).toEqual({ view: "skill", id: "s-1" });
+  });
+
   it("falls back to conversation for an unknown view", () => {
     window.history.replaceState({}, "", "/?view=nonsense&id=r-1");
     const { result } = renderHook(() => useRoute());

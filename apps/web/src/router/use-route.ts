@@ -8,6 +8,8 @@ export type View =
   | "schedules"
   | "agents"
   | "agent"
+  | "skills"
+  | "skill"
   | "workflows"
   | "workflow";
 export interface Route {
@@ -25,6 +27,8 @@ function readRoute(): Route {
     view === "schedules" ||
     view === "agents" ||
     view === "agent" ||
+    view === "skills" ||
+    view === "skill" ||
     view === "workflows" ||
     view === "workflow"
     ? { view, id: p.get("id") }

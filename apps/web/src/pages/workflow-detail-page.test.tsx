@@ -109,7 +109,10 @@ function mockDetailApi(
   return vi.spyOn(global, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
     const method = (init as RequestInit | undefined)?.method ?? "GET";
-    if ((url.endsWith("/agents") || url.includes("/agents?")) && method === "GET")
+    if (
+      (url.endsWith("/agents") || url.includes("/agents?")) &&
+      method === "GET"
+    )
       return response({ items: [agentA, agentB], next_cursor: null });
     if (url.endsWith("/revisions") && method === "POST")
       return response(createResponse, 201);
@@ -313,16 +316,18 @@ describe("WorkflowDetailPage", () => {
       id: `wr-${20 - index}`,
       version: 20 - index,
     }));
-    const fetchMock = vi.spyOn(global, "fetch").mockImplementation(async (input) => {
-      const url = String(input);
-      if (url.endsWith("/workflows/w-1")) return response(workflow);
-      if (url.endsWith("/agents") || url.includes("/agents?"))
-        return response({ items: [agentA], next_cursor: null });
-      if (url.includes("before_version=11"))
-        return response([{ ...revision, id: "wr-10", version: 10 }]);
-      if (url.includes("/revisions?")) return response(revisions);
-      return response({ error: { type: "unexpected", message: url } }, 500);
-    });
+    const fetchMock = vi
+      .spyOn(global, "fetch")
+      .mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.endsWith("/workflows/w-1")) return response(workflow);
+        if (url.endsWith("/agents") || url.includes("/agents?"))
+          return response({ items: [agentA], next_cursor: null });
+        if (url.includes("before_version=11"))
+          return response([{ ...revision, id: "wr-10", version: 10 }]);
+        if (url.includes("/revisions?")) return response(revisions);
+        return response({ error: { type: "unexpected", message: url } }, 500);
+      });
     renderPage();
     expect(await screen.findByText("v20")).toBeInTheDocument();
     await userEvent

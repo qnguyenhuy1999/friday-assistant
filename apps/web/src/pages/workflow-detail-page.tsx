@@ -202,9 +202,9 @@ export function WorkflowDetailPage({
       {revisions.isError && (
         <p role="alert">Failed to load Workflow revisions.</p>
       )}
-      {!revisions.isLoading && !revisions.isError && revisionItems.length === 0 && (
-        <p>No revisions yet.</p>
-      )}
+      {!revisions.isLoading &&
+        !revisions.isError &&
+        revisionItems.length === 0 && <p>No revisions yet.</p>}
       <ol aria-label="Workflow revision history">
         {revisionItems.map((revision) => (
           <RevisionInspection

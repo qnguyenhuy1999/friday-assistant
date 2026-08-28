@@ -197,8 +197,8 @@ export function WorkflowRevisionEditor({
       )}
       {agentsHasNextPage && (
         <p>
-          More Agents are available. Load additional pages if the target Agent is
-          not shown yet.{" "}
+          More Agents are available. Load additional pages if the target Agent
+          is not shown yet.{" "}
           <button
             type="button"
             disabled={agentsLoadingMore}

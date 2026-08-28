@@ -106,7 +106,9 @@ describe("AgentsPage", () => {
         }),
       );
     renderPage();
-    expect(await screen.findByRole("button", { name: "Coder" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Coder" }),
+    ).toBeInTheDocument();
     await userEvent
       .setup()
       .click(screen.getByRole("button", { name: "Load more Agents" }));

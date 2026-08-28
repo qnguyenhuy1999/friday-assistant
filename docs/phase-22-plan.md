@@ -78,10 +78,20 @@ pretend that two non-atomic requests are one switch.
 Agent binding eligibility remains the backend-owned rule: an Agent must be
 `active` and have a selected revision. Disabled, archived, and unselected
 Agents remain visible where practical with the reason they cannot be newly
-bound. Archived Workflows cannot be newly bound. Disabled Workflows and
-Workflows without a selected revision may still be selected as the backend
-allows, but the UI surfaces a launch-readiness warning rather than inventing a
-stronger client-side authority rule.
+bound. A bound disabled Agent or active Agent without a selected revision is a
+repairable readiness warning; a bound archived Agent is terminal under the
+supported lifecycle and cannot resolve future unresolved Runs. Archived
+Workflows cannot be newly bound. A bound archived Workflow is likewise
+terminal and cannot be reactivated through the supported lifecycle. Disabled
+Workflows and Workflows without a selected revision may still be selected as
+the backend allows, but the UI surfaces a repairable launch-readiness warning
+rather than inventing a stronger client-side authority rule.
+
+Launch readiness also respects Task lifecycle: only `pending` and `active`
+Tasks can start another Run. Completed, failed, and cancelled Tasks remain
+inspectable and their bindings remain explicitly manageable, but starting a
+new Run is unavailable. Archived bound Agents and Workflows must be cleared or
+replaced before a new Run can resolve safely.
 
 Task binding is mutable future configuration, not frozen Run provenance.
 Binding changes affect unresolved Runs, including queued Runs that have not

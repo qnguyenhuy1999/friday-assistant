@@ -12,6 +12,7 @@ import {
   useUnbindTaskWorkflow,
 } from "../hooks/use-tasks";
 import { useWorkflow, useWorkflows } from "../hooks/use-workflows";
+import { calculateLaunchReadiness } from "./task-launch-readiness";
 
 function formatTime(value: string): string {
   const timestamp = new Date(value);
@@ -30,6 +31,15 @@ function agentBindingReason(agent: Agent): string | null {
   return null;
 }
 
+function agentReadinessWarning(agent: Agent): string | null {
+  if (agent.status === "archived")
+    return "This Agent is archived and cannot be reactivated through the supported lifecycle. Future unresolved Runs cannot resolve this binding. Clear or replace the Task binding before starting another Run.";
+  const reason = agentBindingReason(agent);
+  return reason
+    ? `${reason} A future unresolved Run may fail Agent resolution while this Agent remains unavailable.`
+    : null;
+}
+
 function workflowBindingReason(workflow: Workflow): string | null {
   return workflow.status === "archived"
     ? "Archived — cannot be newly bound."
@@ -38,7 +48,7 @@ function workflowBindingReason(workflow: Workflow): string | null {
 
 function workflowReadinessWarning(workflow: Workflow): string | null {
   if (workflow.status === "archived")
-    return "This Workflow is archived and cannot be newly bound. A future unresolved Run cannot resolve it until the Workflow becomes active with a selected revision.";
+    return "This Workflow is archived and cannot be reactivated through the supported lifecycle. Future unresolved Runs cannot resolve this binding. Clear or replace the Task binding before starting another Run.";
   if (workflow.status !== "active" || workflow.active_revision_id === null)
     return "Binding is allowed, but a future unresolved Run may fail Workflow resolution until this Workflow becomes active with a selected revision.";
   return null;
@@ -169,11 +179,17 @@ export function TaskDetailPage({
     (workflow) => workflow.id === selectedWorkflowId,
   );
   const bindingLoadError = agentBinding.isError || workflowBinding.isError;
-  const bindingsLoading = agentBinding.isLoading || workflowBinding.isLoading;
+  const bindingsLoading =
+    agentBinding.isLoading ||
+    agentBinding.isFetching ||
+    workflowBinding.isLoading ||
+    workflowBinding.isFetching;
   const inconsistent = boundAgentId !== null && boundWorkflowId !== null;
   const targetDetailsLoading =
-    (boundAgentId !== null && boundAgent.isLoading) ||
-    (boundWorkflowId !== null && boundWorkflow.isLoading);
+    (boundAgentId !== null &&
+      (boundAgent.isLoading || boundAgent.isFetching)) ||
+    (boundWorkflowId !== null &&
+      (boundWorkflow.isLoading || boundWorkflow.isFetching));
   const targetDetailsError =
     (boundAgentId !== null && boundAgent.isError) ||
     (boundWorkflowId !== null && boundWorkflow.isError);
@@ -183,13 +199,18 @@ export function TaskDetailPage({
     clearAgent.isPending ||
     bindWorkflow.isPending ||
     unbindWorkflow.isPending;
-  const canStartRun =
-    bindingsReady &&
-    !inconsistent &&
-    !targetDetailsLoading &&
-    !targetDetailsError &&
-    !mutationPending &&
-    !startRun.isPending;
+  const launchReadiness = calculateLaunchReadiness({
+    taskStatus: currentTask.status,
+    bindingsLoading,
+    bindingLoadError,
+    inconsistent,
+    targetDetailsLoading,
+    targetDetailsError,
+    archivedAgent: currentAgent?.status === "archived",
+    archivedWorkflow: currentWorkflow?.status === "archived",
+    mutationPending,
+    startRunPending: startRun.isPending,
+  });
 
   function bindSelectedAgent() {
     if (selectedAgent && agentBindingReason(selectedAgent) === null)
@@ -202,6 +223,7 @@ export function TaskDetailPage({
   }
 
   function start() {
+    if (!launchReadiness.canStartRun) return;
     startRun.mutate(taskId, {
       onSuccess: (result) => onRunStarted(result.run_id),
     });
@@ -286,11 +308,9 @@ export function TaskDetailPage({
           {targetDetailsError && (
             <p role="alert">Failed to load the bound Agent details.</p>
           )}
-          {currentAgent && agentBindingReason(currentAgent) !== null && (
+          {currentAgent && agentReadinessWarning(currentAgent) !== null && (
             <p role="alert">
-              Launch-readiness warning: {agentBindingReason(currentAgent)} A
-              future unresolved Run may fail Agent resolution while this Agent
-              remains unavailable.
+              Launch-readiness warning: {agentReadinessWarning(currentAgent)}
             </p>
           )}
         </article>
@@ -354,7 +374,18 @@ export function TaskDetailPage({
             Agent or Workflow resolution; the browser never chooses an execution
             path.
           </p>
-          <button type="button" disabled={!canStartRun} onClick={start}>
+          {!launchReadiness.canStartRun && (
+            <p role="alert">
+              <strong>Launch readiness: unavailable</strong>
+              <br />
+              {launchReadiness.unavailableReason}
+            </p>
+          )}
+          <button
+            type="button"
+            disabled={!launchReadiness.canStartRun}
+            onClick={start}
+          >
             {startRun.isPending ? "Starting Run…" : "Start Run"}
           </button>
           {startRun.isError && (

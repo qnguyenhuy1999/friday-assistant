@@ -264,6 +264,37 @@ describe("TaskDetailPage", () => {
     ).toBeInTheDocument();
   });
 
+  it.each(["completed", "failed", "cancelled"] as const)(
+    "does not advertise launch readiness for a %s Task",
+    async (status) => {
+      const fetchMock = installApi({
+        taskValue: { ...task, status },
+      });
+      renderPage();
+      expect(
+        await screen.findByText(status, { exact: true }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Launch readiness: unavailable", { exact: true }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          `This Task is ${status} and cannot start another Run.`,
+          { exact: true },
+        ),
+      ).toBeInTheDocument();
+      const startButton = screen.getByRole("button", { name: "Start Run" });
+      expect(startButton).toBeDisabled();
+      await userEvent.setup().click(startButton);
+      expect(
+        fetchMock.mock.calls.some(
+          ([input, init]) =>
+            init?.method === "POST" && String(input).endsWith("/runs"),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("binds an eligible Agent and shows its mutable execution preview", async () => {
     installApi();
     renderPage();
@@ -346,6 +377,140 @@ describe("TaskDetailPage", () => {
         name: /Release Pipeline.*archived.*Archived — cannot be newly bound/,
       }),
     ).toBeDisabled();
+  });
+
+  it("blocks a permanently unresolvable archived Agent until it is cleared", async () => {
+    const fetchMock = installApi({
+      agentBinding: {
+        task_id: task.id,
+        agent_id: archivedAgent.id,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      agentItems: [archivedAgent],
+    });
+    renderPage();
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Agent" });
+    expect(
+      screen.getByText(
+        /This Agent is archived and cannot be reactivated through the supported lifecycle\./,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Future unresolved Runs cannot resolve this binding\. Clear or replace the Task binding before starting another Run\./,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Clear Agent binding" }),
+    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start Run" })).toBeDisabled();
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === "PUT"),
+    ).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Start Run" }));
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          init?.method === "POST" && String(input).endsWith("/runs"),
+      ),
+    ).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === "PUT"),
+    ).toBe(false);
+
+    await user.click(
+      screen.getByRole("button", { name: "Clear Agent binding" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Default Friday runtime" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a disabled bound Agent advisory and explicitly clearable", async () => {
+    const fetchMock = installApi({
+      agentBinding: {
+        task_id: task.id,
+        agent_id: disabledAgent.id,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      agentItems: [disabledAgent],
+    });
+    renderPage();
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Agent" });
+    expect(
+      screen.getByText(
+        /Disabled — cannot be newly bound\. A future unresolved Run may fail Agent resolution/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/archived and cannot be reactivated/),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start Run" })).toBeEnabled();
+    await user.click(
+      screen.getByRole("button", { name: "Clear Agent binding" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Default Friday runtime" }),
+    ).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT"),
+    ).toHaveLength(1);
+  });
+
+  it("blocks a permanently unresolvable archived Workflow until it is cleared", async () => {
+    const fetchMock = installApi({
+      workflowBinding: {
+        task_id: task.id,
+        workflow_id: archivedWorkflow.id,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+      workflowItems: [archivedWorkflow],
+    });
+    renderPage();
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Workflow" });
+    expect(
+      screen.getAllByText(
+        /This Workflow is archived and cannot be reactivated through the supported lifecycle\./,
+      ),
+    ).not.toHaveLength(0);
+    expect(
+      screen.getAllByText(
+        /Future unresolved Runs cannot resolve this binding\. Clear or replace the Task binding before starting another Run\./,
+      ),
+    ).not.toHaveLength(0);
+    expect(
+      screen.queryByText(/until this Workflow becomes active/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Clear Workflow binding" }),
+    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start Run" })).toBeDisabled();
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE"),
+    ).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Start Run" }));
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          init?.method === "POST" && String(input).endsWith("/runs"),
+      ),
+    ).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE"),
+    ).toBe(false);
+
+    await user.click(
+      screen.getByRole("button", { name: "Clear Workflow binding" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Default Friday runtime" }),
+    ).toBeInTheDocument();
   });
 
   it("requires clearing an Agent before the explicit Workflow transition", async () => {

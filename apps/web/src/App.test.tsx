@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Skill, Task, TaskSkillBinding } from "@friday/contracts";
 import { App } from "./App";
 
 function renderApp() {
@@ -121,6 +122,197 @@ describe("App", () => {
       await screen.findByRole("heading", { name: "Ship it" }),
     ).toBeInTheDocument();
     expect(window.location.search).toBe("?view=task&id=t-1");
+  });
+
+  it("isolates unsaved Skill drafts when the Task route changes", async () => {
+    vi.restoreAllMocks();
+    const taskA: Task = {
+      id: "task-a",
+      title: "Task A",
+      description: "First task.",
+      status: "active",
+      created_at: "2026-01-01T00:00:00Z",
+      failure: null,
+    };
+    const taskB: Task = {
+      ...taskA,
+      id: "task-b",
+      title: "Task B",
+      description: "Second task.",
+    };
+    const skills: Record<string, Skill> = {
+      "skill-a": {
+        id: "skill-a",
+        key: "review.a",
+        display_name: "Review A",
+        description: "Reviews A.",
+        status: "active",
+        active_revision_id: "revision-a",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+      "skill-b": {
+        id: "skill-b",
+        key: "review.b",
+        display_name: "Review B",
+        description: "Reviews B.",
+        status: "active",
+        active_revision_id: "revision-b",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+      "skill-c": {
+        id: "skill-c",
+        key: "review.c",
+        display_name: "Review C",
+        description: "Reviews C.",
+        status: "active",
+        active_revision_id: "revision-c",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+      "skill-d": {
+        id: "skill-d",
+        key: "review.d",
+        display_name: "Review D",
+        description: "Reviews D.",
+        status: "active",
+        active_revision_id: "revision-d",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    };
+    const tasks: Record<string, Task> = {
+      [taskA.id]: taskA,
+      [taskB.id]: taskB,
+    };
+    const skillIdsByTask: Record<string, string[]> = {
+      [taskA.id]: ["skill-a"],
+      [taskB.id]: ["skill-c"],
+    };
+    const writes: Array<{
+      taskId: string;
+      path: string;
+      body: unknown;
+    }> = [];
+    const binding = (taskId: string, skillId: string, position: number) =>
+      ({
+        task_id: taskId,
+        skill_id: skillId,
+        position,
+        created_at: "2026-01-02T00:00:00Z",
+      }) satisfies TaskSkillBinding;
+
+    vi.spyOn(global, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      const path = url.pathname;
+      const taskMatch = path.match(/^\/v1\/tasks\/(task-a|task-b)$/);
+      if (taskMatch) {
+        const taskId = taskMatch[1];
+        if (!taskId) throw new Error("Task route did not include an ID");
+        return new Response(JSON.stringify(tasks[taskId]));
+      }
+
+      const bindingMatch = path.match(
+        /^\/v1\/tasks\/(task-a|task-b)\/(agent|workflow)$/,
+      );
+      if (bindingMatch) return new Response("null");
+
+      const skillBindingMatch = path.match(
+        /^\/v1\/tasks\/(task-a|task-b)\/skills$/,
+      );
+      if (skillBindingMatch) {
+        const taskId = skillBindingMatch[1];
+        if (!taskId)
+          throw new Error("Skill binding route did not include an ID");
+        if (method === "PUT") {
+          const body = JSON.parse(String(init?.body)) as {
+            skill_ids: string[];
+          };
+          writes.push({ taskId, path, body });
+          skillIdsByTask[taskId] = body.skill_ids;
+        }
+        const skillIds = skillIdsByTask[taskId];
+        if (!skillIds) throw new Error(`No Skill composition for ${taskId}`);
+        return new Response(
+          JSON.stringify(
+            skillIds.map((skillId, index) =>
+              binding(taskId, skillId, index + 1),
+            ),
+          ),
+        );
+      }
+
+      if (path === "/v1/agents" || path === "/v1/workflows")
+        return new Response(JSON.stringify({ items: [], next_cursor: null }));
+      if (path === "/v1/skills")
+        return new Response(
+          JSON.stringify({ items: Object.values(skills), next_cursor: null }),
+        );
+      const exactSkillMatch = path.match(/^\/v1\/skills\/(.+)$/);
+      if (exactSkillMatch) {
+        const skillId = exactSkillMatch[1];
+        if (!skillId) throw new Error("Skill route did not include an ID");
+        return new Response(JSON.stringify(skills[skillId]));
+      }
+      return new Response(JSON.stringify({ items: [], next_cursor: null }));
+    });
+
+    window.history.replaceState({}, "", "/?view=task&id=task-a");
+    renderApp();
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Task A" });
+    await user.selectOptions(screen.getByLabelText("Skill"), "skill-b");
+    await user.click(
+      screen.getByRole("button", { name: "Add selected Skill" }),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Skill composition has unsaved changes",
+    );
+    expect(
+      within(
+        screen.getByRole("list", { name: "Task Skill composition" }),
+      ).getAllByRole("listitem"),
+    ).toHaveLength(2);
+    expect(writes).toHaveLength(0);
+
+    window.history.pushState({}, "", "/?view=task&id=task-b");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await screen.findByRole("heading", { name: "Task B" });
+    const taskBComposition = await screen.findByRole("list", {
+      name: "Task Skill composition",
+    });
+    expect(within(taskBComposition).getAllByRole("listitem")).toHaveLength(1);
+    expect(
+      within(taskBComposition).getByRole("heading", { name: /Review C/ }),
+    ).toBeInTheDocument();
+    expect(
+      within(taskBComposition).queryByText("Review A"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(taskBComposition).queryByText("Review B"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(writes).toHaveLength(0);
+
+    await user.selectOptions(screen.getByLabelText("Skill"), "skill-d");
+    await user.click(
+      screen.getByRole("button", { name: "Add selected Skill" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Save Skill composition" }),
+    );
+    await waitFor(() => {
+      expect(writes).toEqual([
+        {
+          taskId: taskB.id,
+          path: "/v1/tasks/task-b/skills",
+          body: { skill_ids: ["skill-c", "skill-d"] },
+        },
+      ]);
+    });
+    expect(writes.some((write) => write.taskId === taskA.id)).toBe(false);
   });
 
   it("navigates back from Workflow detail to the registry", async () => {

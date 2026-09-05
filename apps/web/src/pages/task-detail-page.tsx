@@ -513,37 +513,33 @@ export function TaskDetailPage({
                       {readinessWarning && (
                         <p role="alert">{readinessWarning}</p>
                       )}
-                      {!inconsistent && (
-                        <>
-                          <button
-                            type="button"
-                            aria-label={`Move ${displayName} up`}
-                            disabled={skillEditingDisabled || index === 0}
-                            onClick={() => moveSkill(index, -1)}
-                          >
-                            Move up
-                          </button>
-                          <button
-                            type="button"
-                            aria-label={`Move ${displayName} down`}
-                            disabled={
-                              skillEditingDisabled ||
-                              index === displayedSkillIds.length - 1
-                            }
-                            onClick={() => moveSkill(index, 1)}
-                          >
-                            Move down
-                          </button>
-                          <button
-                            type="button"
-                            aria-label={`Remove ${displayName}`}
-                            disabled={skillEditingDisabled}
-                            onClick={() => removeSkill(skillId)}
-                          >
-                            Remove
-                          </button>
-                        </>
-                      )}
+                      <button
+                        type="button"
+                        aria-label={`Move ${displayName} up`}
+                        disabled={skillEditingDisabled || index === 0}
+                        onClick={() => moveSkill(index, -1)}
+                      >
+                        Move up
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Move ${displayName} down`}
+                        disabled={
+                          skillEditingDisabled ||
+                          index === displayedSkillIds.length - 1
+                        }
+                        onClick={() => moveSkill(index, 1)}
+                      >
+                        Move down
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${displayName}`}
+                        disabled={skillEditingDisabled}
+                        onClick={() => removeSkill(skillId)}
+                      >
+                        Remove
+                      </button>
                     </article>
                   </li>
                 );
@@ -551,116 +547,104 @@ export function TaskDetailPage({
             </ol>
             {displayedSkillIds.length === 0 && <p>No Skills are configured.</p>}
 
-            {!inconsistent && <h4>Add Skill</h4>}
-            {!inconsistent && (
-              <>
-                {skills.isLoading && <p>Loading Skills…</p>}
-                {skills.isError && (
-                  <p role="alert">
-                    Failed to load Skills. Load the Skill registry before adding
-                    a new binding.
-                  </p>
-                )}
-                <label htmlFor="task-skill-add">Skill</label>
-                <select
-                  id="task-skill-add"
-                  value={selectedSkillId}
-                  disabled={
-                    skillEditingDisabled ||
-                    skills.isError ||
-                    skills.isLoading ||
-                    displayedSkillIds.length >= MAX_TASK_SKILLS
-                  }
-                  onChange={(event) => setSelectedSkillId(event.target.value)}
-                >
-                  <option value="">Select a Skill</option>
-                  {registrySkillItems.map((skill) => {
-                    const reason = displayedSkillIds.includes(skill.id)
-                      ? "Already in draft composition — duplicate unavailable."
-                      : displayedSkillIds.length >= MAX_TASK_SKILLS
-                        ? `Maximum of ${MAX_TASK_SKILLS} Skills per Task reached.`
-                        : skillBindingReason(skill);
-                    return (
-                      <option
-                        key={skill.id}
-                        value={skill.id}
-                        disabled={reason !== null}
-                      >
-                        {skillOptionLabel(skill, reason)}
-                      </option>
-                    );
-                  })}
-                </select>
-                <button
-                  type="button"
-                  disabled={
-                    skillEditingDisabled ||
-                    skills.isError ||
-                    skills.isLoading ||
-                    selectedSkillId === "" ||
-                    displayedSkillIds.length >= MAX_TASK_SKILLS ||
-                    (() => {
-                      const selected = registrySkillsById.get(selectedSkillId);
-                      return (
-                        selected === undefined ||
-                        skillBindingReason(selected) !== null
-                      );
-                    })()
-                  }
-                  onClick={addSelectedSkill}
-                >
-                  Add selected Skill
-                </button>
-                {skills.hasNextPage && (
-                  <button
-                    type="button"
-                    disabled={skills.isFetchingNextPage}
-                    onClick={() => void skills.fetchNextPage()}
-                  >
-                    {skills.isFetchingNextPage
-                      ? "Loading more Skills…"
-                      : "Load more Skills"}
-                  </button>
-                )}
-                <p>Maximum Skills per Task: {MAX_TASK_SKILLS}.</p>
-                <button
-                  type="button"
-                  disabled={
-                    skillEditingDisabled || displayedSkillIds.length === 0
-                  }
-                  onClick={clearAllSkills}
-                >
-                  Clear all Skills
-                </button>
-                <button
-                  type="button"
-                  disabled={skillEditingDisabled || !hasUnsavedSkillDraft}
-                  onClick={saveSkillComposition}
-                >
-                  {replaceSkills.isPending
-                    ? "Saving Skill composition…"
-                    : "Save Skill composition"}
-                </button>
-                <button
-                  type="button"
-                  disabled={skillEditingDisabled || !hasUnsavedSkillDraft}
-                  onClick={discardSkillChanges}
-                >
-                  Discard changes
-                </button>
-                {replaceSkills.isError && (
-                  <p role="alert">
-                    Failed to save Skill composition. The server rejected the
-                    atomic replacement; the local draft was kept and no partial
-                    Skill changes were applied.
-                  </p>
-                )}
-              </>
+            <h4>Add Skill</h4>
+            {skills.isLoading && <p>Loading Skills…</p>}
+            {skills.isError && (
+              <p role="alert">
+                Failed to load Skills. Load the Skill registry before adding a
+                new binding.
+              </p>
             )}
-            {inconsistent && (
-              <p>
-                Skill composition controls are unavailable while the
-                execution-target state is inconsistent.
+            <label htmlFor="task-skill-add">Skill</label>
+            <select
+              id="task-skill-add"
+              value={selectedSkillId}
+              disabled={
+                skillEditingDisabled ||
+                skills.isError ||
+                skills.isLoading ||
+                displayedSkillIds.length >= MAX_TASK_SKILLS
+              }
+              onChange={(event) => setSelectedSkillId(event.target.value)}
+            >
+              <option value="">Select a Skill</option>
+              {registrySkillItems.map((skill) => {
+                const reason = displayedSkillIds.includes(skill.id)
+                  ? "Already in draft composition — duplicate unavailable."
+                  : displayedSkillIds.length >= MAX_TASK_SKILLS
+                    ? `Maximum of ${MAX_TASK_SKILLS} Skills per Task reached.`
+                    : skillBindingReason(skill);
+                return (
+                  <option
+                    key={skill.id}
+                    value={skill.id}
+                    disabled={reason !== null}
+                  >
+                    {skillOptionLabel(skill, reason)}
+                  </option>
+                );
+              })}
+            </select>
+            <button
+              type="button"
+              disabled={
+                skillEditingDisabled ||
+                skills.isError ||
+                skills.isLoading ||
+                selectedSkillId === "" ||
+                displayedSkillIds.length >= MAX_TASK_SKILLS ||
+                (() => {
+                  const selected = registrySkillsById.get(selectedSkillId);
+                  return (
+                    selected === undefined ||
+                    skillBindingReason(selected) !== null
+                  );
+                })()
+              }
+              onClick={addSelectedSkill}
+            >
+              Add selected Skill
+            </button>
+            {skills.hasNextPage && (
+              <button
+                type="button"
+                disabled={skills.isFetchingNextPage}
+                onClick={() => void skills.fetchNextPage()}
+              >
+                {skills.isFetchingNextPage
+                  ? "Loading more Skills…"
+                  : "Load more Skills"}
+              </button>
+            )}
+            <p>Maximum Skills per Task: {MAX_TASK_SKILLS}.</p>
+            <button
+              type="button"
+              disabled={skillEditingDisabled || displayedSkillIds.length === 0}
+              onClick={clearAllSkills}
+            >
+              Clear all Skills
+            </button>
+            <button
+              type="button"
+              disabled={skillEditingDisabled || !hasUnsavedSkillDraft}
+              onClick={saveSkillComposition}
+            >
+              {replaceSkills.isPending
+                ? "Saving Skill composition…"
+                : "Save Skill composition"}
+            </button>
+            <button
+              type="button"
+              disabled={skillEditingDisabled || !hasUnsavedSkillDraft}
+              onClick={discardSkillChanges}
+            >
+              Discard changes
+            </button>
+            {replaceSkills.isError && (
+              <p role="alert">
+                Failed to save Skill composition. The server rejected the atomic
+                replacement; the local draft was kept and no partial Skill
+                changes were applied.
               </p>
             )}
           </>
@@ -754,15 +738,23 @@ export function TaskDetailPage({
         </article>
       )}
 
-      {bindingsReady && !inconsistent && (
+      {bindingsReady && (
         <>
           <h3>Execution preview</h3>
-          {boundAgentId === null && boundWorkflowId === null && (
+          {inconsistent && (
             <p>
-              Execution target: <strong>Default Friday runtime</strong>
+              Execution target: <strong>Unavailable</strong> — both Agent and
+              Workflow bindings are present.
             </p>
           )}
-          {boundAgentId !== null && (
+          {!inconsistent &&
+            boundAgentId === null &&
+            boundWorkflowId === null && (
+              <p>
+                Execution target: <strong>Default Friday runtime</strong>
+              </p>
+            )}
+          {!inconsistent && boundAgentId !== null && (
             <p>
               Execution target: <strong>Agent</strong> —{" "}
               {valueOrUnavailable(currentAgent?.display_name)}
@@ -771,7 +763,7 @@ export function TaskDetailPage({
               {valueOrUnavailable(currentAgent?.active_revision_id)}
             </p>
           )}
-          {boundWorkflowId !== null && (
+          {!inconsistent && boundWorkflowId !== null && (
             <p>
               Execution target: <strong>Workflow</strong> —{" "}
               {valueOrUnavailable(currentWorkflow?.display_name)}

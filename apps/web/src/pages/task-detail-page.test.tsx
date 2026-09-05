@@ -102,6 +102,13 @@ const secondActiveSkill: Skill = {
   display_name: "Security Review",
   active_revision_id: "sr-2",
 };
+const thirdActiveSkill: Skill = {
+  ...activeSkill,
+  id: "s-third",
+  key: "review.performance",
+  display_name: "Performance Review",
+  active_revision_id: "sr-3",
+};
 const disabledSkill: Skill = {
   ...activeSkill,
   id: "s-disabled",
@@ -1094,21 +1101,93 @@ describe("TaskDetailPage", () => {
     });
     renderPage();
     expect(
-      await screen.findByText(
-        "Task execution-target state is inconsistent. Both Agent and Workflow bindings are present.",
-      ),
+      await screen.findByRole("heading", { name: "Inconsistent" }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start Run" })).toBeDisabled();
     expect(
-      screen.queryByRole("button", { name: "Start Run" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /Clear/ }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: "Clear all Skills" }),
+    ).toBeDisabled();
     expect(
       fetchMock.mock.calls.some(([, init]) => init?.method === "PUT"),
     ).toBe(false);
     expect(
       fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE"),
+    ).toBe(false);
+  });
+
+  it("keeps Skill composition editing independent from an inconsistent execution target", async () => {
+    const fetchMock = installApi({
+      agentBinding: {
+        task_id: task.id,
+        agent_id: activeAgent.id,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      workflowBinding: {
+        task_id: task.id,
+        workflow_id: activeWorkflow.id,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+      taskSkillBindings: [
+        skillBinding(activeSkill.id, 1),
+        skillBinding(secondActiveSkill.id, 2),
+      ],
+      skillItems: [activeSkill, secondActiveSkill, thirdActiveSkill],
+      skillDetails: [activeSkill, secondActiveSkill],
+    });
+    renderPage();
+    const user = userEvent.setup();
+    expect(
+      await screen.findByRole("heading", { name: "Inconsistent" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start Run" })).toBeDisabled();
+
+    const composition = await screen.findByRole("list", {
+      name: "Task Skill composition",
+    });
+    expect(
+      within(composition).getByRole("heading", { name: /Code Review/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Move Security Review up" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Remove Code Review" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("option", { name: /Performance Review/ }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Clear all Skills" }),
+    ).toBeEnabled();
+
+    await user.click(
+      screen.getByRole("button", { name: "Move Security Review up" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Save Skill composition" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Discard changes" }),
+    ).toBeEnabled();
+    await user.click(
+      screen.getByRole("button", { name: "Save Skill composition" }),
+    );
+
+    await waitFor(() => {
+      const writes = fetchMock.mock.calls.filter(
+        ([, init]) => init?.method === "PUT",
+      );
+      expect(writes).toHaveLength(1);
+      expect(JSON.parse(String(writes[0]?.[1]?.body))).toEqual({
+        skill_ids: [secondActiveSkill.id, activeSkill.id],
+      });
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          init?.method === "POST" && String(input).endsWith("/runs"),
+      ),
     ).toBe(false);
   });
 

@@ -62,6 +62,7 @@ export function App() {
       )}
       {route.view === "task" && route.id && (
         <TaskDetailPage
+          key={route.id}
           taskId={route.id}
           onBack={() => navigate({ view: "tasks", id: null })}
           onRunStarted={(id) => navigate({ view: "run", id })}

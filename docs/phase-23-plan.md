@@ -76,9 +76,16 @@ loading and failures, deterministically unresolvable persisted Skills, Skill
 composition mutation pending, and unsaved local drafts. Start Run is disabled
 until persisted Skill configuration is verifiable and the displayed draft is
 either saved or discarded. Existing Agent/Workflow target rules and their
-mutual-exclusion integrity error remain unchanged. Skills coexist with the
-default runtime, Agent target, or Workflow target and are never an execution
-target themselves.
+mutual-exclusion integrity error remains unchanged and blocks launch only;
+it does not disable an otherwise-available Skill editor. Skill inspection,
+add, remove, reorder, clear, save, and discard remain governed by the Task
+Skill binding state. Skills coexist with the default runtime, Agent target, or
+Workflow target and are never an execution target themselves.
+
+The Task Detail route gives the editor an explicit React identity keyed by the
+exact Task ID. Changing from one Task route to another remounts the editor and
+resets its selected candidate, draft composition, and persisted-binding
+synchronization state, so an unsaved draft can never cross Task boundaries.
 
 Task Skill composition is mutable future configuration. It can affect an
 unresolved queued Run until the worker resolves it. Worker resolution freezes

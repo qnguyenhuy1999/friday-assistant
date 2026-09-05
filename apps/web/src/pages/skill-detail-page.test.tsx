@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillDetailPage } from "./skill-detail-page";
@@ -37,22 +37,28 @@ function revision(version: number, overrides: Record<string, unknown> = {}) {
   };
 }
 
-function renderPage() {
+function renderPage(onViewRun = vi.fn()) {
   render(
     <QueryClientProvider
       client={
         new QueryClient({ defaultOptions: { queries: { retry: false } } })
       }
     >
-      <SkillDetailPage skillId="s-1" onBack={() => undefined} />
+      <SkillDetailPage
+        skillId="s-1"
+        onBack={() => undefined}
+        onViewRun={onViewRun}
+      />
     </QueryClientProvider>,
   );
+  return { onViewRun };
 }
 
 function mockDetailApi(
   current = skill,
   firstPage: unknown[] = [revision(2), revision(1)],
   selectedRevision: unknown = revision(2),
+  usage: unknown[] = [],
 ) {
   return vi.spyOn(global, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
@@ -66,6 +72,7 @@ function mockDetailApi(
       return response(selectedRevision);
     if (method === "GET" && pathname.endsWith("/revisions"))
       return response(firstPage);
+    if (method === "GET" && pathname.endsWith("/usage")) return response(usage);
     if (method === "POST" && url.endsWith("/disable"))
       return response({ ...current, status: "disabled" });
     if (method === "POST" && url.endsWith("/archive"))
@@ -402,5 +409,157 @@ describe("SkillDetailPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Failed to load Skill.",
     );
+  });
+
+  it("shows a loading state for recent usage evidence without blocking Skill inspection", async () => {
+    let resolveUsage!: (value: Response) => void;
+    const usageResponse = new Promise<Response>((resolve) => {
+      resolveUsage = resolve;
+    });
+    vi.spyOn(global, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const pathname = new URL(url).pathname;
+      if (method === "GET" && pathname.endsWith("/usage")) return usageResponse;
+      if (method === "GET" && pathname.endsWith("/revisions/sr-2"))
+        return response(revision(2));
+      if (method === "GET" && pathname.endsWith("/revisions"))
+        return response([revision(2), revision(1)]);
+      return response(skill);
+    });
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Immutable revision history",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Loading recent Skill usage evidence..."),
+    ).toBeInTheDocument();
+    resolveUsage(response([]));
+  });
+
+  it("shows usage errors while keeping lifecycle and revision inspection usable", async () => {
+    vi.spyOn(global, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const pathname = new URL(url).pathname;
+      if (method === "GET" && pathname.endsWith("/usage"))
+        return response({ error: { type: "unavailable", message: "no" } }, 503);
+      if (method === "GET" && pathname.endsWith("/revisions/sr-2"))
+        return response(revision(2));
+      if (method === "GET" && pathname.endsWith("/revisions"))
+        return response([revision(2), revision(1)]);
+      return response(skill);
+    });
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        "Failed to load Skill usage evidence. Skill lifecycle and revision inspection remain available.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Immutable revision history" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Disable Skill" }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders the bounded empty usage state without claiming the Skill was never used", async () => {
+    mockDetailApi();
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        "No materialized usage evidence is available for this Skill.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/never been used/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Shows up to the 100 most recent materialized usage records currently exposed by the Skill usage API.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("renders exact factual usage fields and keeps a frozen historical revision", async () => {
+    const record = {
+      id: "usage-1",
+      run_id: "run-r",
+      task_id: "task-t",
+      skill_id: "s-1",
+      revision_id: "sr-1",
+      position: 2,
+      resolution_id: "resolution-r",
+      execution_id: "execution-e",
+      attempt_number: 2,
+      started_at: null,
+      outcome: "failed",
+      failure_code: "brain_timeout",
+      tool_call_count: 3,
+      approval_count: 1,
+      duration_ms: null,
+      completed_at: "2026-01-03T00:00:00Z",
+      created_at: "2026-01-03T00:00:01Z",
+    };
+    mockDetailApi(skill, [revision(2), revision(1)], revision(2), [record]);
+    renderPage();
+
+    const evidence = await screen.findByRole("article", {
+      name: "Usage evidence for Run run-r",
+    });
+    expect(evidence).toHaveTextContent("Run IDrun-r");
+    expect(evidence).toHaveTextContent("Task IDtask-t");
+    expect(evidence).toHaveTextContent("Frozen Skill revision IDsr-1");
+    expect(evidence).toHaveTextContent("Skill position2");
+    expect(evidence).toHaveTextContent("Resolution IDresolution-r");
+    expect(evidence).toHaveTextContent("Execution IDexecution-e");
+    expect(evidence).toHaveTextContent("Attempt number2");
+    expect(evidence).toHaveTextContent("Outcomefailed");
+    expect(evidence).toHaveTextContent("Failure codebrain_timeout");
+    expect(evidence).toHaveTextContent("Started atNot recorded");
+    expect(evidence).toHaveTextContent("DurationNot recorded");
+    expect(evidence).toHaveTextContent("Tool call count3");
+    expect(evidence).toHaveTextContent("Approval count1");
+    expect(evidence).toHaveTextContent("Evidence created at");
+    expect(evidence).not.toHaveTextContent(/caused|responsible|bad Skill/i);
+    expect(
+      screen.getByText("Selected revision pointer").nextElementSibling,
+    ).toHaveTextContent("sr-2");
+  });
+
+  it("navigates from exact usage evidence to its Run", async () => {
+    const record = {
+      id: "usage-1",
+      run_id: "run-exact",
+      task_id: "task-t",
+      skill_id: "s-1",
+      revision_id: "sr-1",
+      position: 1,
+      resolution_id: "resolution-r",
+      execution_id: "execution-e",
+      attempt_number: 1,
+      started_at: "2026-01-01T00:00:00Z",
+      outcome: "succeeded",
+      failure_code: null,
+      tool_call_count: 0,
+      approval_count: 0,
+      duration_ms: 10,
+      completed_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:01Z",
+    };
+    mockDetailApi(skill, [revision(2), revision(1)], revision(2), [record]);
+    const onViewRun = vi.fn();
+    renderPage(onViewRun);
+    const evidence = await screen.findByRole("article", {
+      name: "Usage evidence for Run run-exact",
+    });
+    await userEvent
+      .setup()
+      .click(within(evidence).getByRole("button", { name: "View Run" }));
+    expect(onViewRun).toHaveBeenCalledWith("run-exact");
   });
 });

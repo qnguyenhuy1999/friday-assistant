@@ -5,6 +5,7 @@ import type {
 import {
   useInfiniteQuery,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -49,6 +50,21 @@ export function useSkill(skillId: string | null) {
     queryKey: skillQueryKey(skillId ?? "none"),
     queryFn: () => friday.skills.get(skillId!),
     enabled: skillId !== null,
+  });
+}
+
+/**
+ * Read the current metadata for a bounded set of persisted Task bindings.
+ * Task bindings are capped by the server at 16, so this exact fan-out never
+ * requires loading the whole paginated Skill registry.
+ */
+export function useSkillDetails(skillIds: string[]) {
+  return useQueries({
+    queries: skillIds.map((skillId) => ({
+      queryKey: skillQueryKey(skillId),
+      queryFn: () => friday.skills.get(skillId),
+      retry: false,
+    })),
   });
 }
 

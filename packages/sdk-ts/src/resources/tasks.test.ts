@@ -90,4 +90,20 @@ describe("TasksResource", () => {
       body: { agent_id: "a-1" },
     });
   });
+
+  it("reads and atomically replaces a task's ordered Skill bindings", async () => {
+    const { http, request } = client();
+    const tasks = new TasksResource(http);
+    await tasks.listSkills("t-1");
+    await tasks.replaceSkills("t-1", ["s-2", "s-1"]);
+    expect(request).toHaveBeenNthCalledWith(1, {
+      method: "GET",
+      path: "/v1/tasks/t-1/skills",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, {
+      method: "PUT",
+      path: "/v1/tasks/t-1/skills",
+      body: { skill_ids: ["s-2", "s-1"] },
+    });
+  });
 });

@@ -15,6 +15,13 @@ export interface LaunchReadinessInput {
   archivedWorkflow: boolean;
   mutationPending: boolean;
   startRunPending: boolean;
+  skillBindingsLoading: boolean;
+  skillBindingLoadError: boolean;
+  skillDetailsLoading: boolean;
+  skillDetailsLoadError: boolean;
+  unresolvableSkillReason: string | null;
+  skillMutationPending: boolean;
+  unsavedSkillDraft: boolean;
 }
 
 export interface LaunchReadiness {
@@ -59,6 +66,47 @@ export function calculateLaunchReadiness(
       canStartRun: false,
       unavailableReason:
         "The bound Workflow is archived and cannot be reactivated through the supported lifecycle. Clear or replace the Task binding before starting another Run.",
+    };
+  if (input.skillBindingsLoading)
+    return {
+      canStartRun: false,
+      unavailableReason:
+        "Task Skill bindings are still loading. Run start is unavailable.",
+    };
+  if (input.skillBindingLoadError)
+    return {
+      canStartRun: false,
+      unavailableReason:
+        "The persisted Skill composition cannot be verified right now. Run start is unavailable.",
+    };
+  if (input.skillDetailsLoading)
+    return {
+      canStartRun: false,
+      unavailableReason:
+        "Bound Skill details are still loading. Run start is unavailable.",
+    };
+  if (input.skillDetailsLoadError)
+    return {
+      canStartRun: false,
+      unavailableReason:
+        "The persisted Skill composition cannot be verified right now. Run start is unavailable.",
+    };
+  if (input.unresolvableSkillReason)
+    return {
+      canStartRun: false,
+      unavailableReason: input.unresolvableSkillReason,
+    };
+  if (input.unsavedSkillDraft)
+    return {
+      canStartRun: false,
+      unavailableReason:
+        "Skill composition has unsaved changes. Save or discard changes before starting a Run.",
+    };
+  if (input.skillMutationPending)
+    return {
+      canStartRun: false,
+      unavailableReason:
+        "A Task Skill composition change is still in progress.",
     };
   if (input.mutationPending || input.startRunPending)
     return {

@@ -4,6 +4,7 @@ import {
   useActivateSkillRevision,
   useCreateSkillRevision,
   useSkill,
+  useSkillRevision,
   useSkillLifecycle,
   useSkillRevisions,
 } from "../hooks/use-skills";
@@ -43,8 +44,6 @@ function RevisionInspection({
   activationPending: boolean;
 }) {
   const isSelectedRevision = revision.id === skill.active_revision_id;
-  const selectedRevisionIsUnknown =
-    skill.active_revision_id !== null && selectedRevision === undefined;
   const isNewerRevision =
     skill.active_revision_id === null ||
     (selectedRevision !== undefined &&
@@ -88,12 +87,6 @@ function RevisionInspection({
         {!isSelectedRevision && isHistoricalRevision && (
           <p>Historical revision - rollback required.</p>
         )}
-        {!isSelectedRevision &&
-          revision.source_kind !== "generated" &&
-          !isHistoricalRevision &&
-          selectedRevisionIsUnknown && (
-            <p>Load older revisions to inspect activation eligibility.</p>
-          )}
         {canActivate && (
           <>
             {skill.status === "disabled" && (
@@ -124,6 +117,10 @@ export function SkillDetailPage({
   onBack: () => void;
 }) {
   const skill = useSkill(skillId);
+  const selectedRevisionLookup = useSkillRevision(
+    skillId,
+    skill.data?.active_revision_id ?? null,
+  );
   const revisions = useSkillRevisions(skillId);
   const createRevision = useCreateSkillRevision(skillId);
   const activateRevision = useActivateSkillRevision(skillId);
@@ -177,9 +174,20 @@ export function SkillDetailPage({
 
   const current = skill.data;
   const revisionItems = uniqueRevisions(revisions.data?.pages ?? []);
-  const selectedRevision = revisionItems.find(
-    (revision) => revision.id === current.active_revision_id,
-  );
+  const selectedRevisionResponse = selectedRevisionLookup.data;
+  const selectedRevision =
+    !selectedRevisionLookup.isError &&
+    selectedRevisionResponse?.id === current.active_revision_id &&
+    selectedRevisionResponse.skill_id === current.id
+      ? selectedRevisionResponse
+      : undefined;
+  const selectedRevisionVerificationPending =
+    current.active_revision_id !== null && selectedRevisionLookup.isPending;
+  const selectedRevisionVerificationFailed =
+    current.active_revision_id !== null &&
+    !selectedRevisionVerificationPending &&
+    (selectedRevisionLookup.isError ||
+      (selectedRevisionLookup.isSuccess && selectedRevision === undefined));
 
   return (
     <section>
@@ -226,6 +234,15 @@ export function SkillDetailPage({
       )}
       {lifecycle.isError && (
         <p role="alert">Failed to update Skill lifecycle.</p>
+      )}
+      {selectedRevisionVerificationPending && (
+        <p role="status">Verifying selected Skill revision...</p>
+      )}
+      {selectedRevisionVerificationFailed && (
+        <p role="alert">
+          Failed to verify the selected Skill revision. Revision activation is
+          unavailable.
+        </p>
       )}
 
       <h3>Immutable revision history</h3>

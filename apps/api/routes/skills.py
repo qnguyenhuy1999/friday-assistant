@@ -285,7 +285,9 @@ def create(body: CreateSkillBody, uow: Uow, clock: ClockDep) -> SkillResponse:
 @router.get("", response_model=SkillPageResponse, operation_id="listSkills")
 def list_skills(
     uow: Uow,
-    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    # Keep the legacy no-parameter response size while allowing the operator
+    # UI and new callers to opt into smaller cursor pages explicitly.
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = MAX_PAGE_SIZE,
     cursor: str | None = None,
 ) -> SkillPageResponse:
     after = decode_cursor(
@@ -356,6 +358,20 @@ def list_revisions(
             before_version,
         )
     return [_revision(x) for x in revisions]
+
+
+@router.get(
+    "/{skill_id}/revisions/{revision_id}",
+    response_model=SkillRevisionResponse,
+    operation_id="getSkillRevision",
+)
+def get_revision(skill_id: UUID, revision_id: UUID, uow: Uow) -> SkillRevisionResponse:
+    return _revision(
+        GetSkill(uow).get_revision(
+            SkillId.parse(str(skill_id)),
+            SkillRevisionId.parse(str(revision_id)),
+        )
+    )
 
 
 @router.post(

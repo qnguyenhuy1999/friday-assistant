@@ -39,10 +39,13 @@ Run → AgentRunProcessor → reasoning → proposed action → risk → approva
 required) → ToolInvocation → ToolGateway path is unchanged.
 
 The Skill collection uses bounded opaque keyset pagination ordered by
-`(created_at, id)` ascending. Revision history supports bounded newest-first
-loading with `before_version`, while the legacy unpaged revision endpoint
-remains compatible. The browser uses the TypeScript SDK for both collection and
-revision reads.
+`(created_at, id)` ascending. A no-parameter collection request retains the
+legacy default of up to 100 Skills, while the operator registry explicitly
+requests 25-item pages. Revision history supports bounded newest-first loading
+with `before_version`, while the legacy unpaged revision endpoint remains
+compatible. The browser uses the TypeScript SDK for both collection and
+revision reads. Activation eligibility verifies the selected immutable revision
+through an exact revision lookup and does not require loading historical pages.
 
 Task Skill composition, self-improvement controls, generated revision
 authoring, restore/unarchive, enable/re-enable redesign, and other future

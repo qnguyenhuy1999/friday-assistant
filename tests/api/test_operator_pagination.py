@@ -82,6 +82,50 @@ def test_skill_registry_uses_stable_keyset_pages_and_collection_bound_cursors(
         assert client.get("/v1/workflows", params={"cursor": first_cursor}).status_code == 422
 
 
+def test_skill_registry_preserves_legacy_default_and_supports_explicit_pages(
+    app: FastAPI,
+) -> None:
+    with TestClient(app) as client:
+        for index in range(30):
+            response = client.post(
+                "/v1/skills",
+                json={
+                    "key": f"pagination.compatibility-{index}",
+                    "display_name": f"Compatibility Skill {index}",
+                    "description": "",
+                },
+            )
+            assert response.status_code == 201
+
+        legacy = client.get("/v1/skills")
+        assert legacy.status_code == 200
+        legacy_body = legacy.json()
+        assert len(legacy_body["items"]) == 30
+        assert legacy_body["next_cursor"] is None
+
+        pages: list[dict[str, Any]] = []
+        cursor: str | None = None
+        for _ in range(3):
+            params: dict[str, str | int] = {"limit": 10}
+            if cursor is not None:
+                params["cursor"] = cursor
+            response = client.get("/v1/skills", params=params)
+            assert response.status_code == 200
+            body = response.json()
+            pages.append(body)
+            cursor = body["next_cursor"]
+
+        assert [len(page["items"]) for page in pages] == [10, 10, 10]
+        assert pages[0]["next_cursor"] is not None
+        assert pages[1]["next_cursor"] is not None
+        assert pages[2]["next_cursor"] is None
+        paged_items = [item for page in pages for item in page["items"]]
+        assert [item["id"] for item in paged_items] == [item["id"] for item in legacy_body["items"]]
+        assert [(item["created_at"], item["id"]) for item in paged_items] == sorted(
+            (item["created_at"], item["id"]) for item in paged_items
+        )
+
+
 def test_skill_revision_history_is_bounded_newest_first_and_legacy_compatible(
     app: FastAPI,
 ) -> None:

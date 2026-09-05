@@ -14,6 +14,10 @@ export const SKILL_PAGE_SIZE = 25;
 export const SKILL_REVISION_PAGE_SIZE = 25;
 export const skillsQueryKey = ["skills"] as const;
 export const skillQueryKey = (skillId: string) => ["skill", skillId] as const;
+export const skillRevisionQueryKey = (
+  skillId: string,
+  revisionId: string | null,
+) => ["skill-revision", skillId, revisionId ?? "none"] as const;
 export const skillRevisionsQueryKey = (skillId: string) =>
   ["skill-revisions", skillId] as const;
 
@@ -45,6 +49,14 @@ export function useSkill(skillId: string | null) {
     queryKey: skillQueryKey(skillId ?? "none"),
     queryFn: () => friday.skills.get(skillId!),
     enabled: skillId !== null,
+  });
+}
+
+export function useSkillRevision(skillId: string, revisionId: string | null) {
+  return useQuery({
+    queryKey: skillRevisionQueryKey(skillId, revisionId),
+    queryFn: () => friday.skills.getRevision(skillId, revisionId!),
+    enabled: revisionId !== null,
   });
 }
 

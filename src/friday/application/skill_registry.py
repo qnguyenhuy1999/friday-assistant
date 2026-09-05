@@ -155,6 +155,15 @@ class GetSkill:
                 raise SkillNotFound(skill_id)
             return uow.skill_revisions.list_for_skill_page(skill_id, limit, before_version)
 
+    def get_revision(self, skill_id: SkillId, revision_id: SkillRevisionId) -> SkillRevision:
+        with self._uow_factory() as uow:
+            if uow.skills.get(skill_id) is None:
+                raise SkillNotFound(skill_id)
+            revision = uow.skill_revisions.get(revision_id)
+            if revision is None or revision.skill_id != skill_id:
+                raise SkillRevisionNotFound(revision_id)
+            return revision
+
 
 class ListSkills:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:

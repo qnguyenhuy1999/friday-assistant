@@ -52,11 +52,19 @@ function renderPage() {
 function mockDetailApi(
   current = skill,
   firstPage: unknown[] = [revision(2), revision(1)],
+  selectedRevision: unknown = revision(2),
 ) {
   return vi.spyOn(global, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
     const method = init?.method ?? "GET";
-    if (method === "GET" && url.includes("/revisions"))
+    const pathname = new URL(url).pathname;
+    if (
+      method === "GET" &&
+      current.active_revision_id !== null &&
+      pathname.endsWith(`/revisions/${current.active_revision_id}`)
+    )
+      return response(selectedRevision);
+    if (method === "GET" && pathname.endsWith("/revisions"))
       return response(firstPage);
     if (method === "POST" && url.endsWith("/disable"))
       return response({ ...current, status: "disabled" });
@@ -108,7 +116,10 @@ describe("SkillDetailPage", () => {
       .mockImplementation(async (input, init) => {
         const url = String(input);
         const method = init?.method ?? "GET";
-        if (method === "GET" && url.includes("/revisions"))
+        const pathname = new URL(url).pathname;
+        if (method === "GET" && pathname.endsWith("/revisions/sr-2"))
+          return response(revision(2));
+        if (method === "GET" && pathname.endsWith("/revisions"))
           return response(created ? [newRevision] : []);
         if (method === "POST" && url.endsWith("/revisions")) {
           created = true;
@@ -160,7 +171,7 @@ describe("SkillDetailPage", () => {
 
     expect(await screen.findByText("v2 - active")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Activate v3" }),
+      await screen.findByRole("button", { name: "Activate v3" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Activate v1" }),
@@ -186,7 +197,7 @@ describe("SkillDetailPage", () => {
       screen.getByText("v2 - selected, Skill disabled"),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Activate v3" }),
+      await screen.findByRole("button", { name: "Activate v3" }),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/does not re-enable this disabled Skill/),
@@ -197,7 +208,7 @@ describe("SkillDetailPage", () => {
 
     await userEvent
       .setup()
-      .click(screen.getByRole("button", { name: "Activate v3" }));
+      .click(await screen.findByRole("button", { name: "Activate v3" }));
     expect(
       fetchMock.mock.calls.some(([input]) => String(input).includes("/enable")),
     ).toBe(false);
@@ -244,8 +255,12 @@ describe("SkillDetailPage", () => {
       .mockImplementation(async (input, init) => {
         const url = String(input);
         const method = init?.method ?? "GET";
-        if (method === "GET" && url.includes("/revisions")) {
-          const before = new URL(url).searchParams.get("before_version");
+        const requestUrl = new URL(url);
+        const pathname = requestUrl.pathname;
+        if (method === "GET" && pathname.endsWith("/revisions/sr-26"))
+          return response(revision(26));
+        if (method === "GET" && pathname.endsWith("/revisions")) {
+          const before = requestUrl.searchParams.get("before_version");
           return response(before === "2" ? secondPage : firstPage);
         }
         return response({ ...skill, active_revision_id: "sr-26" });
@@ -265,6 +280,116 @@ describe("SkillDetailPage", () => {
     expect(
       fetchMock.mock.calls.some(([input]) =>
         String(input).includes("before_version=2"),
+      ),
+    ).toBe(true);
+  });
+
+  it("uses exact selected revision lookup for long-history activation eligibility", async () => {
+    const current = { ...skill, active_revision_id: "sr-1" };
+    const firstPage = Array.from({ length: 25 }, (_, index) =>
+      revision(30 - index),
+    );
+    const fetchMock = mockDetailApi(current, firstPage, revision(1));
+    renderPage();
+
+    expect(
+      await screen.findByRole("button", { name: "Activate v30" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("article", { name: "Skill revision v30" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("article", { name: "Skill revision v1" }),
+    ).not.toBeInTheDocument();
+
+    const revisionCalls = fetchMock.mock.calls.filter(
+      ([input, init]) =>
+        (init as RequestInit | undefined)?.method !== "POST" &&
+        new URL(String(input)).pathname.includes("/revisions"),
+    );
+    expect(
+      revisionCalls.some(([input]) => {
+        const requestUrl = new URL(String(input));
+        return (
+          requestUrl.pathname.endsWith("/revisions") &&
+          !requestUrl.searchParams.has("limit")
+        );
+      }),
+    ).toBe(false);
+    expect(
+      revisionCalls.some(([input]) =>
+        new URL(String(input)).pathname.endsWith("/revisions/sr-1"),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails closed when the selected revision cannot be verified", async () => {
+    const fetchMock = vi
+      .spyOn(global, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        const pathname = new URL(url).pathname;
+        if (method === "GET" && pathname.endsWith("/revisions/sr-2")) {
+          return response(
+            { error: { type: "skill_revision_not_found", message: "missing" } },
+            404,
+          );
+        }
+        if (method === "GET" && pathname.endsWith("/revisions")) {
+          return response([revision(3), revision(2)]);
+        }
+        return response(skill);
+      });
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        "Failed to verify the selected Skill revision. Revision activation is unavailable.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Activate v3" }),
+    ).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        new URL(String(input)).pathname.endsWith("/revisions/sr-2"),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails closed when the exact selected revision has mismatched provenance", async () => {
+    const fetchMock = vi
+      .spyOn(global, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        const pathname = new URL(url).pathname;
+        if (method === "GET" && pathname.endsWith("/revisions/sr-2")) {
+          return response({
+            ...revision(2),
+            id: "sr-other-skill",
+            skill_id: "s-other",
+          });
+        }
+        if (method === "GET" && pathname.endsWith("/revisions")) {
+          return response([revision(3), revision(2)]);
+        }
+        return response(skill);
+      });
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        "Failed to verify the selected Skill revision. Revision activation is unavailable.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Activate v3" }),
+    ).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        new URL(String(input)).pathname.endsWith("/revisions/sr-2"),
       ),
     ).toBe(true);
   });

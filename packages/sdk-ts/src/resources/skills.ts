@@ -75,6 +75,13 @@ export class SkillsResource {
       validate: validateSkill,
     });
   }
+  getRevision(skillId: string, revisionId: string) {
+    return this.http.requestJson<SkillRevision>({
+      method: "GET",
+      path: `/v1/skills/${skillId}/revisions/${revisionId}`,
+      validate: validateSkillRevision,
+    });
+  }
   createRevision(skillId: string, input: CreateSkillRevisionBody) {
     return this.http.requestJson<SkillRevision>({
       method: "POST",

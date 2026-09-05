@@ -109,6 +109,21 @@ describe("SkillsResource", () => {
     });
   });
 
+  it("gets an exact revision with the runtime validator", async () => {
+    const requestJson = vi.fn().mockResolvedValue({});
+    const skills = new SkillsResource({
+      requestJson,
+    } as unknown as FridayHttpClient);
+
+    await skills.getRevision("s-1", "r-1");
+
+    expect(requestJson).toHaveBeenCalledWith({
+      method: "GET",
+      path: "/v1/skills/s-1/revisions/r-1",
+      validate: validateSkillRevision,
+    });
+  });
+
   it("uses contract validation for skill responses", async () => {
     const skills = new SkillsResource(
       new FridayHttpClient({

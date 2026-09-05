@@ -21,6 +21,8 @@ export const skillRevisionQueryKey = (
 ) => ["skill-revision", skillId, revisionId ?? "none"] as const;
 export const skillRevisionsQueryKey = (skillId: string) =>
   ["skill-revisions", skillId] as const;
+export const skillUsageQueryKey = (skillId: string) =>
+  ["skill-usage", skillId] as const;
 
 function invalidateSkill(
   queryClient: ReturnType<typeof useQueryClient>,
@@ -50,6 +52,14 @@ export function useSkill(skillId: string | null) {
     queryKey: skillQueryKey(skillId ?? "none"),
     queryFn: () => friday.skills.get(skillId!),
     enabled: skillId !== null,
+  });
+}
+
+export function useSkillUsage(skillId: string) {
+  return useQuery({
+    queryKey: skillUsageQueryKey(skillId),
+    queryFn: () => friday.skills.listUsage(skillId),
+    retry: false,
   });
 }
 

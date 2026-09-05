@@ -89,6 +89,37 @@ def test_missing_skill_returns_404_across_read_and_write_routes(app: FastAPI) ->
         assert response.json()["error"]["type"] == "skill_not_found"
 
 
+def test_get_exact_skill_revision_is_scoped_and_fails_closed(app: FastAPI) -> None:
+    app.state.clock = _Clock()
+    missing_skill = "00000000-0000-0000-0000-0000000000ff"
+    missing_revision = "00000000-0000-0000-0000-0000000000fe"
+    with TestClient(app) as client:
+        first = _create_skill(client, key="research.exact-first")
+        second = _create_skill(client, key="research.exact-second")
+        first_revision = _create_revision(client, str(first["id"]), instructions="First")
+        second_revision = _create_revision(client, str(second["id"]), instructions="Second")
+
+        found = client.get(f"/v1/skills/{first['id']}/revisions/{first_revision['id']}")
+        missing_skill_response = client.get(
+            f"/v1/skills/{missing_skill}/revisions/{first_revision['id']}"
+        )
+        missing_revision_response = client.get(
+            f"/v1/skills/{first['id']}/revisions/{missing_revision}"
+        )
+        cross_skill_response = client.get(
+            f"/v1/skills/{first['id']}/revisions/{second_revision['id']}"
+        )
+
+    assert found.status_code == 200
+    assert found.json() == first_revision
+    assert missing_skill_response.status_code == 404
+    assert missing_skill_response.json()["error"]["type"] == "skill_not_found"
+    assert missing_revision_response.status_code == 404
+    assert missing_revision_response.json()["error"]["type"] == "skill_revision_not_found"
+    assert cross_skill_response.status_code == 404
+    assert cross_skill_response.json()["error"]["type"] == "skill_revision_not_found"
+
+
 def test_activate_missing_revision_returns_404(app: FastAPI) -> None:
     app.state.clock = _Clock()
     with TestClient(app) as client:

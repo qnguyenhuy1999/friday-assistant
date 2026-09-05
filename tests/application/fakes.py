@@ -1817,6 +1817,19 @@ class FakeSkillRepository:
     def list(self, limit: int) -> list[Skill]:
         return list(self.items.values())[:limit]
 
+    def list_page(
+        self, limit: int, after_created_at: datetime | None, after_id: str | None
+    ) -> builtins.list[Skill]:
+        values = sorted(self.items.values(), key=lambda value: (value.created_at, str(value.id)))
+        if after_created_at is not None and after_id is not None:
+            values = [
+                value
+                for value in values
+                if value.created_at > after_created_at
+                or (value.created_at == after_created_at and str(value.id) > after_id)
+            ]
+        return values[:limit]
+
 
 class FakeSkillRevisionRepository:
     def __init__(self) -> None:
@@ -1832,6 +1845,18 @@ class FakeSkillRevisionRepository:
         return sorted(
             (x for x in self.items.values() if x.skill_id == skill_id), key=lambda x: x.version
         )
+
+    def list_for_skill_page(
+        self, skill_id: SkillId, limit: int, before_version: int | None
+    ) -> list[SkillRevision]:
+        values = sorted(
+            (x for x in self.items.values() if x.skill_id == skill_id),
+            key=lambda x: x.version,
+            reverse=True,
+        )
+        if before_version is not None:
+            values = [value for value in values if value.version < before_version]
+        return values[:limit]
 
     def next_version(self, skill_id: SkillId) -> int:
         return len(self.list_for_skill(skill_id)) + 1

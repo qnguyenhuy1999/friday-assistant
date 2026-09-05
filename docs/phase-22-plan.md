@@ -58,7 +58,7 @@ Agents without a selected revision are visibly warned about because future
 execution may fail to resolve them, but the UI does not invent a stronger
 authority or eligibility rule than Friday's backend owns.
 
-## Step 3 — Task Execution Target Binding & Launch Readiness
+## Step 3 — Task Execution Target Binding & Launch Readiness ✅ complete
 
 Step 3 adds the first-class Task Detail route
 `?view=task&id=<task-id>`. From that surface, an operator can inspect a Task's
@@ -108,4 +108,16 @@ remains unchanged: Agent decides/reasons, Friday orchestrates, and Friday owns
 authority. An observed state with both bindings present is treated as an
 integrity error, fails closed, and is never repaired automatically.
 
-Future Phase 22 work remains TBD after Step 3 review.
+Phase 22 is closed. Its delivered product surface is:
+
+```text
+Agent Registry
+      ↓
+Workflow Registry + DAG authoring
+      ↓
+Task execution-target configuration
+      ↓
+Run frozen provenance
+```
+
+No additional Phase 22 implementation steps are defined.

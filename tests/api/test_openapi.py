@@ -24,6 +24,7 @@ EXPECTED_OPERATIONS = {
     ("GET", "/v1/skills/{skill_id}", "getSkill"),
     ("POST", "/v1/skills/{skill_id}/revisions", "createSkillRevision"),
     ("GET", "/v1/skills/{skill_id}/revisions", "listSkillRevisions"),
+    ("GET", "/v1/skills/{skill_id}/revisions/{revision_id}", "getSkillRevision"),
     ("POST", "/v1/skills/{skill_id}/revisions/{revision_id}/activate", "activateSkillRevision"),
     ("POST", "/v1/skills/{skill_id}/disable", "disableSkill"),
     ("POST", "/v1/skills/{skill_id}/archive", "archiveSkill"),

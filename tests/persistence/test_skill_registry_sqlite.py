@@ -179,6 +179,39 @@ def test_duplicate_skill_key_is_rejected_by_persistence(tmp_path: Path) -> None:
         engine.dispose()
 
 
+def test_skill_collection_keyset_pages_are_stable_on_migrated_sqlite(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        factory = create_unit_of_work_factory(create_session_factory(engine))
+        clock = Clock()
+        expected = {
+            CreateSkill(factory, clock)
+            .execute(
+                key=f"pagination.sqlite-{index}",
+                display_name=f"Skill {index}",
+                description="",
+            )
+            .id
+            for index in range(7)
+        }
+
+        with factory() as uow:
+            first = uow.skills.list_page(2, None, None)
+            second = uow.skills.list_page(2, first[-1].created_at, str(first[-1].id))
+            third = uow.skills.list_page(2, second[-1].created_at, str(second[-1].id))
+            fourth = uow.skills.list_page(2, third[-1].created_at, str(third[-1].id))
+
+        pages = [first, second, third, fourth]
+        ids = [skill.id for page in pages for skill in page]
+        assert len(ids) == len(set(ids)) == len(expected)
+        assert set(ids) == expected
+        assert [(skill.created_at, str(skill.id)) for page in pages for skill in page] == sorted(
+            (skill.created_at, str(skill.id)) for page in pages for skill in page
+        )
+    finally:
+        engine.dispose()
+
+
 def test_revision_version_race_loser_is_rejected(tmp_path: Path) -> None:
     engine = _migrated_engine(tmp_path)
     factory = create_session_factory(engine)

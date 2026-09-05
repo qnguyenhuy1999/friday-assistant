@@ -3,9 +3,16 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 
 from apps.api.dependencies import get_clock, get_uow_factory
+from apps.api.pagination import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    cursor_datetime,
+    decode_cursor,
+    page_from_query,
+)
 from apps.api.schemas.skills import (
     CandidateEvaluationResponse,
     CreateEvaluationSuiteBody,
@@ -69,6 +76,7 @@ from friday.application.skill_registry import (
     CreateSkillRevision,
     DisableSkill,
     GetSkill,
+    ListSkills,
 )
 from friday.domain import (
     Skill,
@@ -275,9 +283,34 @@ def create(body: CreateSkillBody, uow: Uow, clock: ClockDep) -> SkillResponse:
 
 
 @router.get("", response_model=SkillPageResponse, operation_id="listSkills")
-def list_skills(uow: Uow) -> SkillPageResponse:
-    with uow() as tx:
-        return SkillPageResponse(items=[_skill(x) for x in tx.skills.list(100)])
+def list_skills(
+    uow: Uow,
+    # Keep the legacy no-parameter response size while allowing the operator
+    # UI and new callers to opt into smaller cursor pages explicitly.
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = MAX_PAGE_SIZE,
+    cursor: str | None = None,
+) -> SkillPageResponse:
+    after = decode_cursor(
+        cursor,
+        collection="skills",
+        parent_id=None,
+        order="created_at_id_asc",
+        parts=2,
+    )
+    results = ListSkills(uow).page(
+        limit + 1,
+        cursor_datetime(after.after[0]) if after else None,
+        after.after[1] if after else None,
+    )
+    page, next_cursor = page_from_query(
+        results,
+        limit=limit,
+        collection="skills",
+        parent_id=None,
+        order="created_at_id_asc",
+        key=lambda skill: (skill.created_at.isoformat(), str(skill.id)),
+    )
+    return SkillPageResponse(items=[_skill(x) for x in page], next_cursor=next_cursor)
 
 
 @router.get("/{skill_id}", response_model=SkillResponse, operation_id="getSkill")
@@ -308,8 +341,37 @@ def create_revision(
     response_model=list[SkillRevisionResponse],
     operation_id="listSkillRevisions",
 )
-def list_revisions(skill_id: UUID, uow: Uow) -> list[SkillRevisionResponse]:
-    return [_revision(x) for x in GetSkill(uow).list_revisions(SkillId.parse(str(skill_id)))]
+def list_revisions(
+    skill_id: UUID,
+    uow: Uow,
+    limit: Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)] = None,
+    before_version: Annotated[int | None, Query(ge=1)] = None,
+) -> list[SkillRevisionResponse]:
+    typed_skill_id = SkillId.parse(str(skill_id))
+    getter = GetSkill(uow)
+    if limit is None and before_version is None:
+        revisions = getter.list_revisions(typed_skill_id)
+    else:
+        revisions = getter.list_revisions_page(
+            typed_skill_id,
+            limit or DEFAULT_PAGE_SIZE,
+            before_version,
+        )
+    return [_revision(x) for x in revisions]
+
+
+@router.get(
+    "/{skill_id}/revisions/{revision_id}",
+    response_model=SkillRevisionResponse,
+    operation_id="getSkillRevision",
+)
+def get_revision(skill_id: UUID, revision_id: UUID, uow: Uow) -> SkillRevisionResponse:
+    return _revision(
+        GetSkill(uow).get_revision(
+            SkillId.parse(str(skill_id)),
+            SkillRevisionId.parse(str(revision_id)),
+        )
+    )
 
 
 @router.post(

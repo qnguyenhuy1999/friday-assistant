@@ -45,6 +45,7 @@ describe("SkillsResource", () => {
     expect(requestJson).toHaveBeenNthCalledWith(2, {
       method: "GET",
       path: "/v1/skills",
+      query: { limit: undefined, cursor: undefined },
       validate: validateSkillPage,
     });
     expect(requestJson).toHaveBeenNthCalledWith(3, {
@@ -77,6 +78,49 @@ describe("SkillsResource", () => {
       method: "POST",
       path: "/v1/skills/s-1/archive",
       validate: validateSkill,
+    });
+  });
+
+  it("passes bounded collection and revision pagination parameters", async () => {
+    const requestJson = vi
+      .fn()
+      .mockResolvedValue({ items: [], next_cursor: null });
+    const skills = new SkillsResource({
+      requestJson,
+    } as unknown as FridayHttpClient);
+
+    await skills.list({ limit: 2, cursor: "skills-page-2" });
+    await skills.listRevisionsPage("s-1", {
+      limit: 2,
+      beforeVersion: 5,
+    });
+
+    expect(requestJson).toHaveBeenNthCalledWith(1, {
+      method: "GET",
+      path: "/v1/skills",
+      query: { limit: 2, cursor: "skills-page-2" },
+      validate: validateSkillPage,
+    });
+    expect(requestJson).toHaveBeenNthCalledWith(2, {
+      method: "GET",
+      path: "/v1/skills/s-1/revisions",
+      query: { limit: 2, before_version: 5 },
+      validate: validateSkillRevisions,
+    });
+  });
+
+  it("gets an exact revision with the runtime validator", async () => {
+    const requestJson = vi.fn().mockResolvedValue({});
+    const skills = new SkillsResource({
+      requestJson,
+    } as unknown as FridayHttpClient);
+
+    await skills.getRevision("s-1", "r-1");
+
+    expect(requestJson).toHaveBeenCalledWith({
+      method: "GET",
+      path: "/v1/skills/s-1/revisions/r-1",
+      validate: validateSkillRevision,
     });
   });
 

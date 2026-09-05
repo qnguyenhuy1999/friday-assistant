@@ -19,7 +19,7 @@ from friday.application.skill_usage import AddSkillRunFeedback, MaterializeSkill
 from friday.domain.errors import DomainValidationError
 from friday.domain.identifiers import RunId, SkillId, SkillRevisionId
 from friday.domain.run import Run
-from friday.domain.skill import SkillRevisionSourceKind, SkillStatus
+from friday.domain.skill import SkillRevision, SkillRevisionSourceKind, SkillStatus
 from friday.domain.skill_usage import SkillFeedbackRating, SkillUsageOutcome
 from tests.application.fakes import CountingUnitOfWorkFactory, FakeClock, FakeUnitOfWork
 from tests.application.resolve_helpers import resolve_run_skills_without_claim
@@ -114,6 +114,36 @@ def test_missing_skill_and_revision_raise_not_found_errors() -> None:
         ActivateSkillRevision(factory, clock).execute(
             skill_id=skill.id, revision_id=SkillRevisionId.new()
         )
+
+
+def test_get_revision_uses_exact_lookup_without_enumerating_history() -> None:
+    class ExactRevisionRepository:
+        def __init__(self, revision: SkillRevision) -> None:
+            self.revision = revision
+            self.get_calls = 0
+
+        def get(self, revision_id: SkillRevisionId) -> SkillRevision | None:
+            self.get_calls += 1
+            return self.revision if revision_id == self.revision.id else None
+
+        def list_for_skill(self, skill_id: SkillId) -> list[SkillRevision]:
+            raise AssertionError("exact revision lookup must not enumerate history")
+
+    uow, clock = FakeUnitOfWork(), FakeClock()
+    factory = CountingUnitOfWorkFactory(uow)
+    skill = CreateSkill(factory, clock).execute(
+        key="research.exact-lookup", display_name="Exact", description=""
+    )
+    revision = CreateSkillRevision(factory, clock).execute(
+        skill_id=skill.id,
+        instructions="Exact persisted instructions",
+        source_kind=SkillRevisionSourceKind.OPERATOR,
+    )
+    repository = ExactRevisionRepository(revision)
+    uow.skill_revision_repo = repository  # type: ignore[assignment]
+
+    assert GetSkill(factory).get_revision(skill.id, revision.id) is revision
+    assert repository.get_calls == 1
 
 
 def test_task_bindings_freeze_active_revision_and_new_retry_resolves_current_state() -> None:

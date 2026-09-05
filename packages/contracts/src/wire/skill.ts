@@ -2,7 +2,7 @@
 import type { JsonValue } from "./json-value";
 
 export type SkillStatus = "active" | "disabled" | "archived";
-export type SkillRevisionSourceKind = "operator" | "imported";
+export type SkillRevisionSourceKind = "operator" | "imported" | "generated";
 export interface CreateSkillBody {
   key: string;
   display_name: string;
@@ -10,7 +10,7 @@ export interface CreateSkillBody {
 }
 export interface CreateSkillRevisionBody {
   instructions: string;
-  source_kind: SkillRevisionSourceKind;
+  source_kind: "operator" | "imported";
 }
 export type EvaluationGradingKind =
   | "exact_match"

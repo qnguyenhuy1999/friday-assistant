@@ -6,7 +6,7 @@ import type {
   EvaluationRun,
   EvaluationSuite,
   ImprovementProposal,
-  Page,
+  SkillPage,
   RequestRollbackBody,
   RunEvaluationBody,
   Skill,
@@ -40,6 +40,16 @@ import {
 } from "@friday/contracts";
 import type { FridayHttpClient } from "../http";
 
+export interface ListSkillsParams {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ListSkillRevisionsPageParams {
+  limit?: number;
+  beforeVersion?: number;
+}
+
 export class SkillsResource {
   constructor(private readonly http: FridayHttpClient) {}
   create(input: CreateSkillBody) {
@@ -50,10 +60,11 @@ export class SkillsResource {
       validate: validateSkill,
     });
   }
-  list() {
-    return this.http.requestJson<Page<Skill>>({
+  list(params: ListSkillsParams = {}) {
+    return this.http.requestJson<SkillPage>({
       method: "GET",
       path: "/v1/skills",
+      query: { limit: params.limit, cursor: params.cursor },
       validate: validateSkillPage,
     });
   }
@@ -62,6 +73,13 @@ export class SkillsResource {
       method: "GET",
       path: `/v1/skills/${skillId}`,
       validate: validateSkill,
+    });
+  }
+  getRevision(skillId: string, revisionId: string) {
+    return this.http.requestJson<SkillRevision>({
+      method: "GET",
+      path: `/v1/skills/${skillId}/revisions/${revisionId}`,
+      validate: validateSkillRevision,
     });
   }
   createRevision(skillId: string, input: CreateSkillRevisionBody) {
@@ -76,6 +94,20 @@ export class SkillsResource {
     return this.http.requestJson<SkillRevision[]>({
       method: "GET",
       path: `/v1/skills/${skillId}/revisions`,
+      validate: validateSkillRevisions,
+    });
+  }
+  listRevisionsPage(
+    skillId: string,
+    params: ListSkillRevisionsPageParams = {},
+  ) {
+    return this.http.requestJson<SkillRevision[]>({
+      method: "GET",
+      path: `/v1/skills/${skillId}/revisions`,
+      query: {
+        limit: params.limit,
+        before_version: params.beforeVersion,
+      },
       validate: validateSkillRevisions,
     });
   }

@@ -99,7 +99,7 @@ shell/process, MCP, browser/computer, messaging, provider, tool, approval,
 claim, scheduling, retry, or execution-fencing authority. No backend, domain,
 persistence, migration, or runtime-resolution changes were required for Step 2.
 
-## Step 3 — Skill Usage Evidence & Run Feedback Operator UI ✅ complete
+## Step 3 — Skill Usage Evidence & Run Feedback Operator UI
 
 Step 3 exposes the existing Skill evidence and feedback substrate as an
 operator observability and annotation surface. Skill Detail shows recent

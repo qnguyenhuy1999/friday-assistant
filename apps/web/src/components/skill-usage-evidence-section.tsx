@@ -81,6 +81,9 @@ export function SkillUsageEvidenceSection({
 }) {
   const usage = useSkillUsage(skillId);
   const records = usage.data ?? [];
+  const hasProvenanceMismatch = records.some(
+    (record) => record.skill_id !== skillId,
+  );
 
   return (
     <section aria-labelledby="skill-usage-evidence-heading">
@@ -103,20 +106,29 @@ export function SkillUsageEvidenceSection({
           inspection remain available.
         </p>
       )}
-      {!usage.isLoading && !usage.isError && records.length === 0 && (
-        <p>No materialized usage evidence is available for this Skill.</p>
+      {!usage.isLoading && !usage.isError && hasProvenanceMismatch && (
+        <p role="alert">Usage evidence provenance could not be verified.</p>
       )}
-      {!usage.isLoading && !usage.isError && records.length > 0 && (
-        <ol aria-label="Recent Skill usage evidence">
-          {records.map((record) => (
-            <UsageEvidenceRecord
-              key={record.id}
-              record={record}
-              onViewRun={onViewRun}
-            />
-          ))}
-        </ol>
-      )}
+      {!usage.isLoading &&
+        !usage.isError &&
+        !hasProvenanceMismatch &&
+        records.length === 0 && (
+          <p>No materialized usage evidence is available for this Skill.</p>
+        )}
+      {!usage.isLoading &&
+        !usage.isError &&
+        !hasProvenanceMismatch &&
+        records.length > 0 && (
+          <ol aria-label="Recent Skill usage evidence">
+            {records.map((record) => (
+              <UsageEvidenceRecord
+                key={record.id}
+                record={record}
+                onViewRun={onViewRun}
+              />
+            ))}
+          </ol>
+        )}
     </section>
   );
 }

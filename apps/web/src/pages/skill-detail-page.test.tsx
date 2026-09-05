@@ -531,6 +531,52 @@ describe("SkillDetailPage", () => {
     ).toHaveTextContent("sr-2");
   });
 
+  it("fails closed on cross-Skill usage evidence without blocking Skill inspection", async () => {
+    const crossSkillRecord = {
+      id: "usage-cross-skill",
+      run_id: "run-1",
+      task_id: "task-1",
+      skill_id: "skill-b",
+      revision_id: "revision-b1",
+      position: 1,
+      resolution_id: "resolution-1",
+      execution_id: "execution-1",
+      attempt_number: 1,
+      started_at: "2026-01-01T00:00:00Z",
+      completed_at: "2026-01-01T00:00:01Z",
+      outcome: "succeeded",
+      failure_code: null,
+      tool_call_count: 0,
+      approval_count: 0,
+      duration_ms: 1000,
+      created_at: "2026-01-01T00:00:02Z",
+    };
+    mockDetailApi(skill, [revision(2), revision(1)], revision(2), [
+      crossSkillRecord,
+    ]);
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        "Usage evidence provenance could not be verified.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("article", {
+        name: "Usage evidence for Run run-1",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "View Run" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Immutable revision history" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Disable Skill" }),
+    ).toBeInTheDocument();
+  });
+
   it("navigates from exact usage evidence to its Run", async () => {
     const record = {
       id: "usage-1",

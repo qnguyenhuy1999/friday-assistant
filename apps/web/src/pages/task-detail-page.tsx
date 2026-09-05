@@ -1,13 +1,23 @@
-import type { Agent, Failure, JsonValue, Workflow } from "@friday/contracts";
-import { useEffect, useState } from "react";
+import type {
+  Agent,
+  Failure,
+  JsonValue,
+  Skill,
+  TaskSkillBinding,
+  Workflow,
+} from "@friday/contracts";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAgent, useAgents } from "../hooks/use-agents";
+import { useSkillDetails, useSkills } from "../hooks/use-skills";
 import {
   useBindTaskWorkflow,
   useClearTaskAgent,
+  useReplaceTaskSkills,
   usePutTaskAgent,
   useStartRun,
   useTask,
   useTaskAgentBinding,
+  useTaskSkills,
   useTaskWorkflowBinding,
   useUnbindTaskWorkflow,
 } from "../hooks/use-tasks";
@@ -81,6 +91,51 @@ function workflowOptionLabel(workflow: Workflow): string {
     .join(" · ");
 }
 
+const MAX_TASK_SKILLS = 16;
+
+function sameSkillIds(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((skillId, index) => skillId === right[index])
+  );
+}
+
+function orderedSkillIds(bindings: TaskSkillBinding[]): string[] {
+  return [...bindings]
+    .sort((left, right) => left.position - right.position)
+    .map((binding) => binding.skill_id);
+}
+
+function skillBindingReason(skill: Skill): string | null {
+  if (skill.status === "archived") return "Archived — cannot be newly bound.";
+  if (skill.status === "disabled") return "Disabled — cannot be newly bound.";
+  if (skill.active_revision_id === null)
+    return "No selected revision — cannot be newly bound.";
+  return null;
+}
+
+function skillReadinessWarning(skill: Skill): string | null {
+  if (skill.status === "disabled")
+    return `The bound Skill "${skill.display_name}" is disabled and is not runtime-resolvable. Remove or replace this Skill before starting another Run.`;
+  if (skill.status === "archived")
+    return `The bound Skill "${skill.display_name}" is archived and cannot resolve for future unresolved Runs. Remove or replace this Skill before starting another Run.`;
+  if (skill.active_revision_id === null)
+    return `The bound Skill "${skill.display_name}" has no selected revision and cannot be resolved. Remove or replace this Skill before starting another Run.`;
+  return null;
+}
+
+function skillOptionLabel(skill: Skill, reason: string | null): string {
+  return [
+    skill.display_name,
+    skill.key,
+    skill.status,
+    `selected revision: ${skill.active_revision_id ?? "none"}`,
+    reason,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function valueOrUnavailable(value: string | null | undefined): string {
   return value ?? "Unavailable";
 }
@@ -121,8 +176,10 @@ export function TaskDetailPage({
   const task = useTask(taskId);
   const agentBinding = useTaskAgentBinding(taskId);
   const workflowBinding = useTaskWorkflowBinding(taskId);
+  const taskSkills = useTaskSkills(taskId);
   const agents = useAgents();
   const workflows = useWorkflows();
+  const skills = useSkills();
   const agentBindingData = agentBinding.data;
   const workflowBindingData = workflowBinding.data;
   const boundAgentId = agentBindingData?.agent_id ?? null;
@@ -133,9 +190,31 @@ export function TaskDetailPage({
   const clearAgent = useClearTaskAgent(taskId);
   const bindWorkflow = useBindTaskWorkflow(taskId);
   const unbindWorkflow = useUnbindTaskWorkflow(taskId);
+  const replaceSkills = useReplaceTaskSkills(taskId);
   const startRun = useStartRun();
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
+  const [selectedSkillId, setSelectedSkillId] = useState("");
+  const [draftSkillIds, setDraftSkillIds] = useState<string[] | null>(null);
+  const previousPersistedSkillIds = useRef<string[] | null>(null);
+
+  const persistedSkillIds = useMemo(
+    () => orderedSkillIds(taskSkills.data ?? []),
+    [taskSkills.data],
+  );
+  const boundSkillDetails = useSkillDetails(persistedSkillIds);
+
+  useEffect(() => {
+    const previous = previousPersistedSkillIds.current;
+    if (
+      draftSkillIds === null ||
+      previous === null ||
+      sameSkillIds(draftSkillIds, previous)
+    ) {
+      setDraftSkillIds(persistedSkillIds);
+    }
+    previousPersistedSkillIds.current = persistedSkillIds;
+  }, [draftSkillIds, persistedSkillIds]);
 
   useEffect(() => {
     if (agentBindingData !== undefined)
@@ -152,6 +231,42 @@ export function TaskDetailPage({
     return <p role="alert">Failed to load task.</p>;
 
   const currentTask = task.data;
+  const boundSkillDetailsById = new Map(
+    boundSkillDetails.flatMap((query) =>
+      query.data ? [[query.data.id, query.data] as const] : [],
+    ),
+  );
+  const registrySkillItems =
+    skills.data?.pages.flatMap((page) => page.items) ?? [];
+  const registrySkillsById = new Map(
+    registrySkillItems.map((skill) => [skill.id, skill] as const),
+  );
+  const persistedSkillIdSet = new Set(persistedSkillIds);
+  const displayedSkillIds = draftSkillIds ?? persistedSkillIds;
+  const hasUnsavedSkillDraft =
+    draftSkillIds !== null && !sameSkillIds(draftSkillIds, persistedSkillIds);
+  const skillBindingsLoading = taskSkills.isLoading || taskSkills.isFetching;
+  const skillBindingLoadError = taskSkills.isError;
+  const skillDetailsLoading = boundSkillDetails.some(
+    (query) => query.isLoading || query.isFetching,
+  );
+  const skillDetailsLoadError =
+    boundSkillDetails.some((query) => query.isError) ||
+    (!skillDetailsLoading &&
+      persistedSkillIds.some((skillId) => !boundSkillDetailsById.has(skillId)));
+  const unresolvableBoundSkill = persistedSkillIds
+    .map((skillId) => boundSkillDetailsById.get(skillId))
+    .find(
+      (skill): skill is Skill =>
+        skill !== undefined && skillReadinessWarning(skill) !== null,
+    );
+  const unresolvableSkillReason = unresolvableBoundSkill
+    ? skillReadinessWarning(unresolvableBoundSkill)
+    : null;
+  const boundSkillMetadata = (skillId: string): Skill | undefined =>
+    persistedSkillIdSet.has(skillId)
+      ? boundSkillDetailsById.get(skillId)
+      : (registrySkillsById.get(skillId) ?? boundSkillDetailsById.get(skillId));
   const agentItems = agents.data?.pages.flatMap((page) => page.items) ?? [];
   const workflowItems =
     workflows.data?.pages.flatMap((page) => page.items) ?? [];
@@ -199,6 +314,7 @@ export function TaskDetailPage({
     clearAgent.isPending ||
     bindWorkflow.isPending ||
     unbindWorkflow.isPending;
+  const skillMutationPending = replaceSkills.isPending;
   const launchReadiness = calculateLaunchReadiness({
     taskStatus: currentTask.status,
     bindingsLoading,
@@ -210,7 +326,76 @@ export function TaskDetailPage({
     archivedWorkflow: currentWorkflow?.status === "archived",
     mutationPending,
     startRunPending: startRun.isPending,
+    skillBindingsLoading,
+    skillBindingLoadError,
+    skillDetailsLoading,
+    skillDetailsLoadError,
+    unresolvableSkillReason,
+    skillMutationPending,
+    unsavedSkillDraft: hasUnsavedSkillDraft,
   });
+
+  const skillEditingDisabled =
+    skillBindingsLoading || skillBindingLoadError || skillMutationPending;
+
+  function draftSkillIdsForUpdate(): string[] {
+    return [...(draftSkillIds ?? persistedSkillIds)];
+  }
+
+  function addSelectedSkill() {
+    const selected = registrySkillsById.get(selectedSkillId);
+    const draft = draftSkillIdsForUpdate();
+    const reason = selected
+      ? draft.includes(selected.id)
+        ? "Already in draft composition — duplicate unavailable."
+        : draft.length >= MAX_TASK_SKILLS
+          ? `Maximum of ${MAX_TASK_SKILLS} Skills per Task reached.`
+          : skillBindingReason(selected)
+      : null;
+    if (!selected || reason !== null) return;
+    setDraftSkillIds([...draft, selected.id]);
+    setSelectedSkillId("");
+  }
+
+  function moveSkill(index: number, direction: -1 | 1) {
+    const draft = draftSkillIdsForUpdate();
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= draft.length) return;
+    const movedSkillId = draft[index];
+    const displacedSkillId = draft[nextIndex];
+    if (movedSkillId === undefined || displacedSkillId === undefined) return;
+    draft[index] = displacedSkillId;
+    draft[nextIndex] = movedSkillId;
+    setDraftSkillIds(draft);
+  }
+
+  function removeSkill(skillId: string) {
+    setDraftSkillIds(draftSkillIdsForUpdate().filter((id) => id !== skillId));
+  }
+
+  function clearAllSkills() {
+    if (
+      window.confirm(
+        "Clear all Skills from this Task? Save the composition to persist this atomic replacement.",
+      )
+    ) {
+      setDraftSkillIds([]);
+      setSelectedSkillId("");
+    }
+  }
+
+  function discardSkillChanges() {
+    setDraftSkillIds([...persistedSkillIds]);
+    setSelectedSkillId("");
+  }
+
+  function saveSkillComposition() {
+    const draft = draftSkillIdsForUpdate();
+    if (sameSkillIds(draft, persistedSkillIds)) return;
+    replaceSkills.mutate(draft, {
+      onSuccess: (bindings) => setDraftSkillIds(orderedSkillIds(bindings)),
+    });
+  }
 
   function bindSelectedAgent() {
     if (selectedAgent && agentBindingReason(selectedAgent) === null)
@@ -255,6 +440,216 @@ export function TaskDetailPage({
         not yet frozen their Agent or Workflow resolution. Once a worker freezes
         a Run resolution, that exact provenance is immutable.
       </p>
+
+      <section aria-labelledby="task-skill-composition-title">
+        <h3 id="task-skill-composition-title">Skill composition</h3>
+        <p>
+          Skills influence reasoning only. They never grant filesystem,
+          shell/process, MCP, browser/computer, messaging, provider, tool,
+          approval, scheduling, or execution authority.
+        </p>
+        <p>
+          Task Skill composition is mutable future configuration. Changes can
+          affect unresolved Runs, including queued Runs whose Skill resolution
+          has not yet been frozen. Once Friday freezes Run Skill resolution,
+          later Task Skill or selected revision changes do not rewrite that Run.
+        </p>
+        {skillBindingsLoading && <p>Loading persisted Skill bindings…</p>}
+        {skillBindingLoadError && (
+          <p role="alert">
+            Failed to load persisted Skill bindings. Skill composition controls
+            are unavailable until the Task bindings can be verified.
+          </p>
+        )}
+        {!skillBindingsLoading && !skillBindingLoadError && (
+          <>
+            {hasUnsavedSkillDraft && (
+              <p role="status">
+                Skill composition has unsaved changes. Save or discard changes
+                before starting a Run.
+              </p>
+            )}
+            {skillDetailsLoading && <p>Verifying bound Skill details…</p>}
+            {skillDetailsLoadError && (
+              <p role="alert">
+                Failed to verify bound Skill details. The persisted Skill
+                composition cannot be verified right now; Run start is
+                unavailable.
+              </p>
+            )}
+            <ol aria-label="Task Skill composition">
+              {displayedSkillIds.map((skillId, index) => {
+                const metadata = boundSkillMetadata(skillId);
+                const displayName =
+                  metadata?.display_name ?? `Skill ${skillId}`;
+                const readinessWarning = metadata
+                  ? skillReadinessWarning(metadata)
+                  : null;
+                return (
+                  <li key={skillId}>
+                    <article aria-label={`Skill ${index + 1}: ${displayName}`}>
+                      <h4>
+                        {index + 1}. {displayName}
+                      </h4>
+                      <dl>
+                        <dt>Skill ID</dt>
+                        <dd>{skillId}</dd>
+                        <dt>Key</dt>
+                        <dd>{valueOrUnavailable(metadata?.key)}</dd>
+                        <dt>Status</dt>
+                        <dd>{valueOrUnavailable(metadata?.status)}</dd>
+                        <dt>Selected revision ID</dt>
+                        <dd>
+                          {valueOrUnavailable(metadata?.active_revision_id)}
+                        </dd>
+                      </dl>
+                      {!metadata && persistedSkillIdSet.has(skillId) && (
+                        <p role="alert">
+                          Current Skill metadata is unavailable. Remove or
+                          replace this binding, then save the repaired
+                          composition.
+                        </p>
+                      )}
+                      {readinessWarning && (
+                        <p role="alert">{readinessWarning}</p>
+                      )}
+                      <button
+                        type="button"
+                        aria-label={`Move ${displayName} up`}
+                        disabled={skillEditingDisabled || index === 0}
+                        onClick={() => moveSkill(index, -1)}
+                      >
+                        Move up
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Move ${displayName} down`}
+                        disabled={
+                          skillEditingDisabled ||
+                          index === displayedSkillIds.length - 1
+                        }
+                        onClick={() => moveSkill(index, 1)}
+                      >
+                        Move down
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${displayName}`}
+                        disabled={skillEditingDisabled}
+                        onClick={() => removeSkill(skillId)}
+                      >
+                        Remove
+                      </button>
+                    </article>
+                  </li>
+                );
+              })}
+            </ol>
+            {displayedSkillIds.length === 0 && <p>No Skills are configured.</p>}
+
+            <h4>Add Skill</h4>
+            {skills.isLoading && <p>Loading Skills…</p>}
+            {skills.isError && (
+              <p role="alert">
+                Failed to load Skills. Load the Skill registry before adding a
+                new binding.
+              </p>
+            )}
+            <label htmlFor="task-skill-add">Skill</label>
+            <select
+              id="task-skill-add"
+              value={selectedSkillId}
+              disabled={
+                skillEditingDisabled ||
+                skills.isError ||
+                skills.isLoading ||
+                displayedSkillIds.length >= MAX_TASK_SKILLS
+              }
+              onChange={(event) => setSelectedSkillId(event.target.value)}
+            >
+              <option value="">Select a Skill</option>
+              {registrySkillItems.map((skill) => {
+                const reason = displayedSkillIds.includes(skill.id)
+                  ? "Already in draft composition — duplicate unavailable."
+                  : displayedSkillIds.length >= MAX_TASK_SKILLS
+                    ? `Maximum of ${MAX_TASK_SKILLS} Skills per Task reached.`
+                    : skillBindingReason(skill);
+                return (
+                  <option
+                    key={skill.id}
+                    value={skill.id}
+                    disabled={reason !== null}
+                  >
+                    {skillOptionLabel(skill, reason)}
+                  </option>
+                );
+              })}
+            </select>
+            <button
+              type="button"
+              disabled={
+                skillEditingDisabled ||
+                skills.isError ||
+                skills.isLoading ||
+                selectedSkillId === "" ||
+                displayedSkillIds.length >= MAX_TASK_SKILLS ||
+                (() => {
+                  const selected = registrySkillsById.get(selectedSkillId);
+                  return (
+                    selected === undefined ||
+                    skillBindingReason(selected) !== null
+                  );
+                })()
+              }
+              onClick={addSelectedSkill}
+            >
+              Add selected Skill
+            </button>
+            {skills.hasNextPage && (
+              <button
+                type="button"
+                disabled={skills.isFetchingNextPage}
+                onClick={() => void skills.fetchNextPage()}
+              >
+                {skills.isFetchingNextPage
+                  ? "Loading more Skills…"
+                  : "Load more Skills"}
+              </button>
+            )}
+            <p>Maximum Skills per Task: {MAX_TASK_SKILLS}.</p>
+            <button
+              type="button"
+              disabled={skillEditingDisabled || displayedSkillIds.length === 0}
+              onClick={clearAllSkills}
+            >
+              Clear all Skills
+            </button>
+            <button
+              type="button"
+              disabled={skillEditingDisabled || !hasUnsavedSkillDraft}
+              onClick={saveSkillComposition}
+            >
+              {replaceSkills.isPending
+                ? "Saving Skill composition…"
+                : "Save Skill composition"}
+            </button>
+            <button
+              type="button"
+              disabled={skillEditingDisabled || !hasUnsavedSkillDraft}
+              onClick={discardSkillChanges}
+            >
+              Discard changes
+            </button>
+            {replaceSkills.isError && (
+              <p role="alert">
+                Failed to save Skill composition. The server rejected the atomic
+                replacement; the local draft was kept and no partial Skill
+                changes were applied.
+              </p>
+            )}
+          </>
+        )}
+      </section>
 
       <h3>Current execution target</h3>
       {bindingsLoading && <p>Loading execution target…</p>}
@@ -343,15 +738,23 @@ export function TaskDetailPage({
         </article>
       )}
 
-      {bindingsReady && !inconsistent && (
+      {bindingsReady && (
         <>
           <h3>Execution preview</h3>
-          {boundAgentId === null && boundWorkflowId === null && (
+          {inconsistent && (
             <p>
-              Execution target: <strong>Default Friday runtime</strong>
+              Execution target: <strong>Unavailable</strong> — both Agent and
+              Workflow bindings are present.
             </p>
           )}
-          {boundAgentId !== null && (
+          {!inconsistent &&
+            boundAgentId === null &&
+            boundWorkflowId === null && (
+              <p>
+                Execution target: <strong>Default Friday runtime</strong>
+              </p>
+            )}
+          {!inconsistent && boundAgentId !== null && (
             <p>
               Execution target: <strong>Agent</strong> —{" "}
               {valueOrUnavailable(currentAgent?.display_name)}
@@ -360,7 +763,7 @@ export function TaskDetailPage({
               {valueOrUnavailable(currentAgent?.active_revision_id)}
             </p>
           )}
-          {boundWorkflowId !== null && (
+          {!inconsistent && boundWorkflowId !== null && (
             <p>
               Execution target: <strong>Workflow</strong> —{" "}
               {valueOrUnavailable(currentWorkflow?.display_name)}
@@ -369,6 +772,29 @@ export function TaskDetailPage({
               {valueOrUnavailable(currentWorkflow?.active_revision_id)}
             </p>
           )}
+          <h4>Skill composition</h4>
+          {persistedSkillIds.length === 0 ? (
+            <p>Skill composition: None</p>
+          ) : (
+            <ol aria-label="Persisted Skill execution preview">
+              {persistedSkillIds.map((skillId, index) => {
+                const metadata = boundSkillMetadata(skillId);
+                return (
+                  <li key={skillId}>
+                    {index + 1}. {metadata?.display_name ?? `Skill ${skillId}`}{" "}
+                    — selected revision{" "}
+                    {valueOrUnavailable(metadata?.active_revision_id)}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+          <p>
+            Execution preview shows the currently persisted Skill values, not
+            frozen Run provenance. Friday freezes the Skill revisions later
+            during worker resolution; until then, Task Skill bindings or
+            selected revisions may affect an unresolved Run.
+          </p>
           <p>
             Starting a Run queues it for Friday&apos;s worker. The worker owns
             Agent or Workflow resolution; the browser never chooses an execution

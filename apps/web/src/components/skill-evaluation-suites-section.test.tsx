@@ -70,6 +70,42 @@ const revisions = [
   },
 ];
 
+function evaluationRunResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "eval-run-123",
+    suite_id: "suite-1",
+    skill_id: "skill-1",
+    revision_id: "revision-v1",
+    proposal_id: null,
+    status: "succeeded",
+    aggregate_result: { case_count: 2, passed: 2, score: 1 },
+    runtime_fingerprint: "d".repeat(64),
+    target_content_sha256: "a".repeat(64),
+    runtime_metadata: { evaluator_version: "deterministic-v1" },
+    suite_snapshot: {
+      cases: suite.cases.map(
+        ({ id, position, input, expected_properties, grading_kind }) => ({
+          id,
+          position,
+          input,
+          expected_properties,
+          grading_kind,
+        }),
+      ),
+    },
+    case_results: suite.cases.map((item) => ({
+      evaluation_run_id: "eval-run-123",
+      case_id: item.id,
+      status: "succeeded",
+      score: 1,
+      reason_code: null,
+      bounded_details: "passed",
+      output_sha256: "c".repeat(64),
+    })),
+    ...overrides,
+  };
+}
+
 function renderForm(onCreated = vi.fn()) {
   render(
     <QueryClientProvider
@@ -320,6 +356,45 @@ describe("CreateEvaluationSuiteForm", () => {
     expect(within(group).getByLabelText("Case input")).toHaveValue("Input");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("retains the draft when a successful create response crosses Skill provenance", async () => {
+    const onCreated = vi.fn();
+    const fetchMock = vi
+      .spyOn(global, "fetch")
+      .mockResolvedValue(
+        response(
+          { ...suite, id: "suite-cross-skill", skill_id: "skill-2" },
+          201,
+        ),
+      );
+    renderForm(onCreated);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Suite name"), "Cross-skill suite");
+    await user.type(
+      screen.getByLabelText("Description"),
+      "Keep this description.",
+    );
+    const group = screen.getByRole("group", { name: "Evaluation case 1" });
+    await user.type(within(group).getByLabelText("Case input"), "Keep input");
+    await user.click(
+      screen.getByRole("button", { name: "Create evaluation suite" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Created evaluation suite provenance could not be verified.",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Suite name")).toHaveValue(
+      "Cross-skill suite",
+    );
+    expect(screen.getByLabelText("Description")).toHaveValue(
+      "Keep this description.",
+    );
+    expect(within(group).getByLabelText("Case input")).toHaveValue(
+      "Keep input",
+    );
+    expect(onCreated).not.toHaveBeenCalled();
+  });
 });
 
 describe("SkillEvaluationSuitesSection", () => {
@@ -338,38 +413,7 @@ describe("SkillEvaluationSuitesSection", () => {
 
   it("loads exact suite detail and grades outputs against the explicitly selected old revision", async () => {
     let created = false;
-    const evaluationRun = {
-      id: "eval-run-123",
-      suite_id: "suite-1",
-      skill_id: "skill-1",
-      revision_id: "revision-v1",
-      proposal_id: null,
-      status: "succeeded",
-      aggregate_result: { case_count: 2, passed: 2, score: 1 },
-      runtime_fingerprint: "d".repeat(64),
-      target_content_sha256: "a".repeat(64),
-      runtime_metadata: { evaluator_version: "deterministic-v1" },
-      suite_snapshot: {
-        cases: suite.cases.map(
-          ({ id, position, input, expected_properties, grading_kind }) => ({
-            id,
-            position,
-            input,
-            expected_properties,
-            grading_kind,
-          }),
-        ),
-      },
-      case_results: suite.cases.map((item) => ({
-        evaluation_run_id: "eval-run-123",
-        case_id: item.id,
-        status: "succeeded",
-        score: 1,
-        reason_code: null,
-        bounded_details: "passed",
-        output_sha256: "c".repeat(64),
-      })),
-    };
+    const evaluationRun = evaluationRunResponse();
     const fetchMock = vi
       .spyOn(global, "fetch")
       .mockImplementation(async (input, init) => {
@@ -419,6 +463,14 @@ describe("SkillEvaluationSuitesSection", () => {
       screen.getByRole("button", { name: "Grade supplied outputs" }),
     );
     expect(onViewEvaluationRun).toHaveBeenCalledWith("eval-run-123");
+    expect(onViewEvaluationRun).toHaveBeenCalledTimes(1);
+    expect(evaluationRun.skill_id).toBe("skill-1");
+    expect(evaluationRun.suite_id).toBe("suite-1");
+    expect(evaluationRun.revision_id).toBe("revision-v1");
+    expect(evaluationRun.proposal_id).toBeNull();
+    expect(evaluationRun.target_content_sha256).toBe(
+      revisions[1]!.content_sha256,
+    );
     const post = fetchMock.mock.calls.find(
       ([input, init]) =>
         new URL(String(input)).pathname ===
@@ -430,6 +482,103 @@ describe("SkillEvaluationSuitesSection", () => {
       outputs: { "case-a": "SAFE", "case-b": "normal response" },
     });
   });
+
+  const contextualMismatches: Array<{
+    name: string;
+    patch: Record<string, unknown>;
+  }> = [
+    { name: "wrong Skill", patch: { skill_id: "skill-2" } },
+    { name: "wrong suite", patch: { suite_id: "suite-2" } },
+    { name: "wrong revision", patch: { revision_id: "revision-v2" } },
+    {
+      name: "unexpected proposal target",
+      patch: { revision_id: null, proposal_id: "proposal-1" },
+    },
+    {
+      name: "target hash mismatch",
+      patch: { target_content_sha256: "b".repeat(64) },
+    },
+  ];
+
+  it.each(contextualMismatches)(
+    "fails closed for a $name grading response",
+    async ({ patch }) => {
+      const fetchMock = vi
+        .spyOn(global, "fetch")
+        .mockImplementation(async (input, init) => {
+          const url = new URL(String(input));
+          const method = init?.method ?? "GET";
+          if (
+            method === "GET" &&
+            url.pathname === "/v1/skills/skill-1/evaluation-suites"
+          )
+            return response([suite]);
+          if (
+            method === "GET" &&
+            url.pathname === "/v1/skills/evaluation-suites/suite-1"
+          )
+            return response(suite);
+          if (
+            method === "GET" &&
+            url.pathname === "/v1/skills/skill-1/revisions"
+          )
+            return response(revisions);
+          if (
+            method === "GET" &&
+            url.pathname === "/v1/skills/skill-1/revisions/revision-v2"
+          )
+            return response(revisions[0]);
+          if (
+            method === "POST" &&
+            url.pathname === "/v1/skills/evaluation-suites/suite-1/runs"
+          )
+            return response(evaluationRunResponse(patch), 201);
+          return response([]);
+        });
+      const onViewEvaluationRun = vi.fn();
+      renderSection(onViewEvaluationRun);
+      const user = userEvent.setup();
+      await user.click(
+        await screen.findByRole("button", { name: "Inspect suite" }),
+      );
+      await screen.findByRole("heading", {
+        name: "Selected evaluation suite",
+      });
+      await user.selectOptions(
+        await screen.findByLabelText("Target revision"),
+        "revision-v1",
+      );
+      const outputs = screen.getAllByLabelText("Supplied output");
+      await user.type(outputs[0]!, "SAFE");
+      await user.type(outputs[1]!, "normal response");
+      await user.click(
+        screen.getByRole("button", { name: "Grade supplied outputs" }),
+      );
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Evaluation Run provenance could not be verified.",
+      );
+      expect(onViewEvaluationRun).not.toHaveBeenCalled();
+      expect(
+        fetchMock.mock.calls.filter(
+          ([input, init]) =>
+            new URL(String(input)).pathname ===
+              "/v1/skills/evaluation-suites/suite-1/runs" &&
+            (init as RequestInit | undefined)?.method === "POST",
+        ),
+      ).toHaveLength(1);
+      expect(screen.getByLabelText("Target revision")).toHaveValue(
+        "revision-v1",
+      );
+      expect(screen.getByText("a".repeat(64))).toBeInTheDocument();
+      expect(screen.getAllByLabelText("Supplied output")[0]).toHaveValue(
+        "SAFE",
+      );
+      expect(screen.getAllByLabelText("Supplied output")[1]).toHaveValue(
+        "normal response",
+      );
+    },
+  );
 
   it("fails closed for a suite returned for another Skill", async () => {
     vi.spyOn(global, "fetch").mockResolvedValue(

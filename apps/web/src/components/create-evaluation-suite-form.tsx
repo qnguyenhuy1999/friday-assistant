@@ -190,6 +190,12 @@ export function CreateEvaluationSuiteForm({
       { name: normalizedName, description, cases: bodyCases },
       {
         onSuccess: (suite) => {
+          if (suite.skill_id !== skillId) {
+            setValidationError(
+              "Created evaluation suite provenance could not be verified.",
+            );
+            return;
+          }
           setName("");
           setDescription("");
           setCases([emptyDraftCase("draft-case-1")]);

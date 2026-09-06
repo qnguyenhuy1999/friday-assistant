@@ -26,6 +26,29 @@ function orderedCases(cases: EvaluationCase[]): EvaluationCase[] {
   return [...cases].sort((left, right) => left.position - right.position);
 }
 
+function matchesSubmittedEvaluationContext(
+  run: EvaluationRun,
+  {
+    skillId,
+    suiteId,
+    revisionId,
+    revisionSha256,
+  }: {
+    skillId: string;
+    suiteId: string;
+    revisionId: string;
+    revisionSha256: string;
+  },
+): boolean {
+  return (
+    run.skill_id === skillId &&
+    run.suite_id === suiteId &&
+    run.revision_id === revisionId &&
+    run.proposal_id === null &&
+    run.target_content_sha256 === revisionSha256
+  );
+}
+
 export function DeterministicEvaluationForm({
   skillId,
   activeRevisionId,
@@ -87,7 +110,24 @@ export function DeterministicEvaluationForm({
     setValidationError(null);
     run.mutate(
       { revision_id: selectedRevision.id, outputs: exactOutputs },
-      { onSuccess: onRunCreated },
+      {
+        onSuccess: (evaluationRun) => {
+          if (
+            !matchesSubmittedEvaluationContext(evaluationRun, {
+              skillId,
+              suiteId,
+              revisionId: selectedRevision.id,
+              revisionSha256: selectedRevision.content_sha256,
+            })
+          ) {
+            setValidationError(
+              "Evaluation Run provenance could not be verified.",
+            );
+            return;
+          }
+          onRunCreated(evaluationRun);
+        },
+      },
     );
   }
 

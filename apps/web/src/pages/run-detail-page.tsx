@@ -1,6 +1,7 @@
 import { ArtifactList } from "../components/artifact-list";
 import { EventTimeline } from "../components/event-timeline";
 import { FinalResultPanel } from "../components/final-result-panel";
+import { FrozenSkillFeedbackPanel } from "../components/frozen-skill-feedback-panel";
 import { ToolInvocationList } from "../components/tool-invocation-list";
 import { useRunArtifacts } from "../hooks/use-artifacts";
 import { useRunApprovals } from "../hooks/use-approvals";
@@ -123,6 +124,11 @@ export function RunDetailPage({
                             </pre>
                           </dd>
                         </dl>
+                        <FrozenSkillFeedbackPanel
+                          key={`${runId}:${item.skill_id}:${item.revision_id}`}
+                          runId={runId}
+                          skill={item}
+                        />
                       </article>
                     </li>
                   ))}

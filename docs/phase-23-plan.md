@@ -47,7 +47,7 @@ compatible. The browser uses the TypeScript SDK for both collection and
 revision reads. Activation eligibility verifies the selected immutable revision
 through an exact revision lookup and does not require loading historical pages.
 
-## Step 2 — Task Skill Composition & Skill-Aware Launch Readiness
+## Step 2 — Task Skill Composition & Skill-Aware Launch Readiness ✅ complete
 
 Step 2 extends Task Detail with an ordered Skill composition editor backed by
 the existing atomic `PUT /v1/tasks/{task_id}/skills` operation. The browser
@@ -99,4 +99,73 @@ shell/process, MCP, browser/computer, messaging, provider, tool, approval,
 claim, scheduling, retry, or execution-fencing authority. No backend, domain,
 persistence, migration, or runtime-resolution changes were required for Step 2.
 
-Future Phase 23 work remains TBD after Step 2 review.
+## Step 3 — Skill Usage Evidence & Run Feedback Operator UI
+
+Step 3 exposes the existing Skill evidence and feedback substrate as an
+operator observability and annotation surface. Skill Detail shows recent
+factual usage evidence through the existing bounded Skill usage API. The
+surface identifies the exact Run, Task, frozen Skill revision, position,
+resolution, execution attempt, outcome, failure code, timing, tool-call count,
+approval count, and evidence creation time. Nullable facts remain explicitly
+unrecorded rather than being invented.
+
+The usage surface is labelled as recent evidence and explains that the API
+currently exposes up to 100 most recent materialized records. The browser does
+not reconstruct evidence from Run history, read current Skill state into
+historical rows, or load full revision instructions for every row. A usage row
+can navigate to its exact Run through Friday's existing `?view=run&id=...`
+routing model without opening an external URL or reloading the application.
+
+Every usage record continues to show the immutable `revision_id` frozen on the
+Run. A later Skill activation, disable, or archive does not replace that
+historical revision or hide the usage ledger. Unresolved historical Runs remain
+consistent with the backend's materialization rules; an empty response is
+therefore described as no materialized evidence, not proof that a Skill was
+never used. Usage loading and errors are isolated from Skill lifecycle and
+revision inspection.
+
+Run Detail extends each actual resolved frozen Skill item with append-only
+operator feedback. Feedback is read and written only through the existing
+Run/Skill SDK methods and is eligible from the exact frozen binding, without a
+new terminal-Run restriction. Unresolved Skill resolution and resolved Runs
+with zero Skills do not render a feedback form. Each feedback item displays its
+rating, note, creator, timestamp, and frozen revision ID; all returned records
+remain visible, including multiple records for one Run/Skill use.
+
+The only ratings are `helpful`, `neutral`, and `harmful`. `created_by` is an
+explicit required operator field with the existing 128-character maximum; no
+fake authenticated identity is supplied. Notes remain optional and are sent
+without transformation with the existing 4,000-character maximum. Feedback
+creation retries are disabled, duplicate submission is disabled while pending,
+and successful writes invalidate/refetch the exact Run/Skill feedback query.
+The UI never inserts optimistic history. A keyed feedback panel owns local
+draft state for the exact `run_id`, `skill_id`, and frozen `revision_id`, so
+drafts cannot cross Skills or Runs.
+
+Feedback responses are verified against the surrounding Run, Skill, and frozen
+revision before display. A mismatch fails closed with an operator-visible
+provenance error rather than rewriting response identifiers. Feedback remains
+an annotation on the exact frozen use: it does not rewrite the Run outcome,
+frozen revision, or factual usage evidence. A failed usage outcome can coexist
+with helpful feedback; neither value is converted into the other, and no
+success-rate, quality, effectiveness, harmfulness, confidence, or causal score
+is calculated.
+
+Submitting feedback performs no improvement or lifecycle action. There is no
+proposal, evidence snapshot, evaluation, promotion, rollback, recommendation,
+automatic disable, activation, generated revision, or other self-improvement
+control in this Step. Historical feedback and provenance remain inspectable
+when the current Skill is later disabled, archived, or pointed at another
+revision. The distinction remains explicit: evidence is observation, feedback
+is annotation, and neither grants execution authority.
+
+No backend, domain, persistence, migration, worker, runtime, or SDK production
+changes were required for Step 3. The authority boundary remains unchanged:
+the Agent decides and reasons, Friday orchestrates and owns authority, Skills
+influence reasoning only, and the protected Run → AgentRunProcessor →
+reasoning → proposed action → risk assessment → ApprovalRequest when required
+→ ToolInvocation → ToolGateway → actual execution path is untouched. Skills
+never confer filesystem, process/shell, MCP, browser/computer, messaging,
+provider, tool, approval, scheduling, claim, retry, or execution authority.
+
+Future Phase 23 work remains TBD after Step 3 review.

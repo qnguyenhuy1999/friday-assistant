@@ -193,7 +193,7 @@ retry/recovery, result projection, and Run-local authority isolation.
 After Phase 21, additional work is considered product expansion rather than core architecture.
 
 Phase 22 — Agent & Workflow Operator Studio ✅ complete
-Phase 23 — Skill Operator Studio — Step 1 in progress
+Phase 23 — Skill Operator Studio — Step 3 in progress
 
 See [docs/phase-22-plan.md](docs/phase-22-plan.md) and
 [docs/phase-23-plan.md](docs/phase-23-plan.md).

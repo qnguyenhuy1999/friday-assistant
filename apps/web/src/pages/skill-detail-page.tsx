@@ -1,5 +1,6 @@
 import type { Skill, SkillRevision } from "@friday/contracts";
 import { useState, type FormEvent } from "react";
+import { SkillUsageEvidenceSection } from "../components/skill-usage-evidence-section";
 import {
   useActivateSkillRevision,
   useCreateSkillRevision,
@@ -112,9 +113,11 @@ function RevisionInspection({
 export function SkillDetailPage({
   skillId,
   onBack,
+  onViewRun,
 }: {
   skillId: string;
   onBack: () => void;
+  onViewRun?: (runId: string) => void;
 }) {
   const skill = useSkill(skillId);
   const selectedRevisionLookup = useSkillRevision(
@@ -285,6 +288,11 @@ export function SkillDetailPage({
         Activation changes the selected pointer for future Run resolution only.
         It does not rewrite immutable revisions or frozen existing Runs.
       </p>
+
+      <SkillUsageEvidenceSection
+        skillId={current.id}
+        onViewRun={onViewRun ?? (() => undefined)}
+      />
 
       {current.status === "archived" ? (
         <p>

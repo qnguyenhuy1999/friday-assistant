@@ -79,6 +79,87 @@ describe("App", () => {
     expect(window.location.search).toBe("?view=skills");
   });
 
+  it("navigates from exact Skill usage evidence to its Run route", async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(global, "fetch").mockImplementation(async (input) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname === "/v1/skills/s-1")
+        return new Response(
+          JSON.stringify({
+            id: "s-1",
+            key: "review.security",
+            display_name: "Security review",
+            description: "",
+            status: "active",
+            active_revision_id: "sr-2",
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          }),
+        );
+      if (pathname.endsWith("/revisions/sr-2"))
+        return new Response(
+          JSON.stringify({
+            id: "sr-2",
+            skill_id: "s-1",
+            version: 2,
+            instructions: "Review security boundaries.",
+            content_sha256: "a".repeat(64),
+            source_kind: "operator",
+            created_at: "2026-01-01T00:00:00Z",
+          }),
+        );
+      if (pathname.endsWith("/revisions"))
+        return new Response(
+          JSON.stringify([
+            {
+              id: "sr-2",
+              skill_id: "s-1",
+              version: 2,
+              instructions: "Review security boundaries.",
+              content_sha256: "a".repeat(64),
+              source_kind: "operator",
+              created_at: "2026-01-01T00:00:00Z",
+            },
+          ]),
+        );
+      if (pathname.endsWith("/usage"))
+        return new Response(
+          JSON.stringify([
+            {
+              id: "usage-1",
+              run_id: "run-from-usage",
+              task_id: "task-1",
+              skill_id: "s-1",
+              revision_id: "sr-1",
+              position: 1,
+              resolution_id: "resolution-1",
+              execution_id: "execution-1",
+              attempt_number: 1,
+              started_at: null,
+              outcome: "succeeded",
+              failure_code: null,
+              tool_call_count: 0,
+              approval_count: 0,
+              duration_ms: null,
+              completed_at: "2026-01-01T00:00:00Z",
+              created_at: "2026-01-01T00:00:00Z",
+            },
+          ]),
+        );
+      return new Response(JSON.stringify({ items: [], next_cursor: null }));
+    });
+    window.history.replaceState({}, "", "/?view=skill&id=s-1");
+    renderApp();
+
+    const evidence = await screen.findByRole("article", {
+      name: "Usage evidence for Run run-from-usage",
+    });
+    await userEvent
+      .setup()
+      .click(within(evidence).getByRole("button", { name: "View Run" }));
+    expect(window.location.search).toBe("?view=run&id=run-from-usage");
+  });
+
   it("reads and navigates a Workflow detail route", async () => {
     window.history.replaceState({}, "", "/?view=workflow&id=w-1");
     renderApp();

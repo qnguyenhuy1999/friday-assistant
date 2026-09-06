@@ -71,6 +71,7 @@ export function App() {
       )}
       {route.view === "run" && route.id && (
         <RunDetailPage
+          key={route.id}
           runId={route.id}
           onViewApprovals={() => navigate({ view: "approvals", id: route.id })}
         />
@@ -113,8 +114,10 @@ export function App() {
       )}
       {route.view === "skill" && route.id && (
         <SkillDetailPage
+          key={route.id}
           skillId={route.id}
           onBack={() => navigate({ view: "skills", id: null })}
+          onViewRun={(id) => navigate({ view: "run", id })}
         />
       )}
     </main>

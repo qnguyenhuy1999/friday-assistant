@@ -9,6 +9,7 @@ import { AgentsPage } from "./pages/agents-page";
 import { WorkflowDetailPage } from "./pages/workflow-detail-page";
 import { WorkflowsPage } from "./pages/workflows-page";
 import { SkillDetailPage } from "./pages/skill-detail-page";
+import { SkillEvaluationRunDetailPage } from "./pages/skill-evaluation-run-detail-page";
 import { SkillsPage } from "./pages/skills-page";
 import { useRoute } from "./router/use-route";
 export function App() {
@@ -118,6 +119,16 @@ export function App() {
           skillId={route.id}
           onBack={() => navigate({ view: "skills", id: null })}
           onViewRun={(id) => navigate({ view: "run", id })}
+          onViewEvaluationRun={(id) =>
+            navigate({ view: "skill-evaluation-run", id })
+          }
+        />
+      )}
+      {route.view === "skill-evaluation-run" && route.id && (
+        <SkillEvaluationRunDetailPage
+          key={route.id}
+          runId={route.id}
+          onBackToSkill={(skillId) => navigate({ view: "skill", id: skillId })}
         />
       )}
     </main>

@@ -99,7 +99,7 @@ shell/process, MCP, browser/computer, messaging, provider, tool, approval,
 claim, scheduling, retry, or execution-fencing authority. No backend, domain,
 persistence, migration, or runtime-resolution changes were required for Step 2.
 
-## Step 3 — Skill Usage Evidence & Run Feedback Operator UI
+## Step 3 — Skill Usage Evidence & Run Feedback Operator UI ✅ complete
 
 Step 3 exposes the existing Skill evidence and feedback substrate as an
 operator observability and annotation surface. Skill Detail shows recent
@@ -168,4 +168,46 @@ reasoning → proposed action → risk assessment → ApprovalRequest when requi
 never confer filesystem, process/shell, MCP, browser/computer, messaging,
 provider, tool, approval, scheduling, claim, retry, or execution authority.
 
-Future Phase 23 work remains TBD after Step 3 review.
+## Step 4 — Skill Evaluation Suite & Deterministic Evaluation Operator UI
+
+Step 4 adds the operator surface for the existing Phase 20 evaluation
+substrate. Skill Detail independently loads evaluation suites, shows their
+persisted metadata and ordered cases, and provides one local draft form for
+creating a new suite. Operators author only the six typed, code-owned
+evaluators: `exact_match`, `contains_all`, `contains_none`, `json_schema`,
+`required_keys`, and `tool_proposal_shape`. Common expectation shapes have
+typed controls; JSON Schema is parsed locally as an object before the single
+create request. Persisted suites and cases remain inspect-only because no
+editing endpoint exists.
+
+Deterministic grading requires one explicitly supplied string output for every
+frozen case and targets an exact persisted Skill revision. The browser uses
+the existing SDK and sends no proposal target. Empty output strings remain
+present in the exact case-ID keyed request. The copy makes clear that this
+grades supplied outputs only: it does not call BrainRuntime, run a Skill,
+invoke ToolGateway, execute a proposed tool, or create production Tasks or
+Runs.
+
+Successful grading navigates to an exact Evaluation Run Detail route and
+reloads the immutable result from the existing run endpoint. The read-only
+detail displays the exact target provenance, target SHA-256, status, aggregate
+result, runtime fingerprint, runtime metadata, and the frozen suite snapshot.
+Case results are matched by exact case ID and verified against both the frozen
+case set and the Evaluation Run ID. Unknown, duplicate, or cross-run results
+fail the result section closed; missing results produce an integrity warning
+without fabricating pass/fail values. The live suite is never fetched to
+reconstruct historical results, and raw submitted outputs are never
+reconstructed from their output hashes.
+
+Evaluation remains offline evidence. It does not grant authority, change
+Skill lifecycle, activate a revision, affect launch readiness, or expose
+proposal, promotion, rollback, candidate, or improvement-policy controls.
+Skills influence reasoning only; they never confer authority. The protected
+Run → AgentRunProcessor → reasoning → proposed action → risk assessment →
+ApprovalRequest when required → ToolInvocation → ToolGateway → actual
+execution path remains unchanged. No backend, domain, persistence, migration,
+or production SDK changes are required for the operator surface.
+
+Step 4 is in progress and remains subject to review.
+
+Future Phase 23 work remains TBD after Step 4 review.

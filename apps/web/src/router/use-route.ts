@@ -10,6 +10,7 @@ export type View =
   | "agent"
   | "skills"
   | "skill"
+  | "skill-improvement-proposal"
   | "skill-evaluation-run"
   | "workflows"
   | "workflow";
@@ -30,6 +31,7 @@ function readRoute(): Route {
     view === "agent" ||
     view === "skills" ||
     view === "skill" ||
+    view === "skill-improvement-proposal" ||
     view === "skill-evaluation-run" ||
     view === "workflows" ||
     view === "workflow"

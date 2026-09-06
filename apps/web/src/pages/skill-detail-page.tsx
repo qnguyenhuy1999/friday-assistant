@@ -2,6 +2,8 @@ import type { Skill, SkillRevision } from "@friday/contracts";
 import { useState, type FormEvent } from "react";
 import { SkillUsageEvidenceSection } from "../components/skill-usage-evidence-section";
 import { SkillEvaluationSuitesSection } from "../components/skill-evaluation-suites-section";
+import { SkillImprovementPolicySection } from "../components/skill-improvement-policy-section";
+import { SkillImprovementProposalsSection } from "../components/skill-improvement-proposals-section";
 import {
   useActivateSkillRevision,
   useCreateSkillRevision,
@@ -116,11 +118,13 @@ export function SkillDetailPage({
   onBack,
   onViewRun,
   onViewEvaluationRun,
+  onViewImprovementProposal,
 }: {
   skillId: string;
   onBack: () => void;
   onViewRun?: (runId: string) => void;
   onViewEvaluationRun?: (runId: string) => void;
+  onViewImprovementProposal?: (proposalId: string) => void;
 }) {
   const skill = useSkill(skillId);
   const selectedRevisionLookup = useSkillRevision(
@@ -302,6 +306,14 @@ export function SkillDetailPage({
         skillId={current.id}
         activeRevisionId={current.active_revision_id}
         onViewEvaluationRun={onViewEvaluationRun ?? (() => undefined)}
+      />
+
+      <SkillImprovementPolicySection skillId={current.id} />
+
+      <SkillImprovementProposalsSection
+        key={`proposals-${skillId}`}
+        skillId={current.id}
+        onViewProposal={onViewImprovementProposal ?? (() => undefined)}
       />
 
       {current.status === "archived" ? (

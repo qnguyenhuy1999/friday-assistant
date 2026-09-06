@@ -168,7 +168,7 @@ reasoning → proposed action → risk assessment → ApprovalRequest when requi
 never confer filesystem, process/shell, MCP, browser/computer, messaging,
 provider, tool, approval, scheduling, claim, retry, or execution authority.
 
-## Step 4 — Skill Evaluation Suite & Deterministic Evaluation Operator UI
+## Step 4 — Skill Evaluation Suite & Deterministic Evaluation Operator UI ✅ complete
 
 Step 4 adds the operator surface for the existing Phase 20 evaluation
 substrate. Skill Detail independently loads evaluation suites, shows their
@@ -208,6 +208,64 @@ ApprovalRequest when required → ToolInvocation → ToolGateway → actual
 execution path remains unchanged. No backend, domain, persistence, migration,
 or production SDK changes are required for the operator surface.
 
-Step 4 is in progress and remains subject to review.
+Step 4 is complete after review and merge.
 
-Future Phase 23 work remains TBD after Step 4 review.
+## Step 5 — Safe Improvement Policy & Candidate Review Operator UI
+
+Step 5 exposes the existing safe Skill-improvement orchestration for operator
+review. Skill Detail can inspect or locally edit one persisted improvement
+policy, select only an exact suite belonging to that Skill, save the complete
+policy once, and request processing through `run-now`. The code-owned values
+`brain-candidate-generator-v2`, `comparison-v1`, and `max_open_proposals = 1`
+remain read-only in the browser. A `run-now` response reports only whether
+processing was due; it does not prove that a proposal or comparison exists.
+
+Policy reads treat only the canonical HTTP 404 as absence. Network, schema,
+timeout, and other HTTP failures remain errors. Policy drafts stay local until
+the explicit save action, writes do not retry, and successful responses are
+verified against the exact Skill, evaluation-suite set, and code-owned values.
+The current HTTP policy contract does not expose the domain's `created_at` and
+`updated_at` fields, so the UI reports that those timestamps are unavailable
+rather than inventing them; `last_triggered_at` remains canonical when present.
+
+Skill Detail independently loads the bounded proposal collection with explicit
+loading, error, empty, and non-empty states. Every proposal must belong to the
+exact Skill or the collection fails closed. The exact route
+`?view=skill-improvement-proposal&id=...` reloads the durable proposal, its
+exact base revision, and its frozen evidence snapshot. The review surface
+displays the immutable base instructions beside inert proposed instructions,
+candidate hash, rationale, generator version, and server status. A proposal is
+not a `SkillRevision` and is not used by production Runs.
+
+Evidence is parsed only for the small canonical version-1 snapshot shape. Entry
+IDs must be non-empty and unique, kinds must be `usage`, `feedback`, or
+`manual`, and usage/feedback contextual `skill_id` and `revision_id` values
+must match the proposal. Evidence is observation; it does not prove that a
+Skill caused a Run outcome. The browser does not calculate attribution, blame,
+harmfulness, confidence, or other derived scores.
+
+Candidate comparison is read-only. A canonical comparison 404 means that no
+comparison is available yet; other failures remain visible errors. Before a
+comparison is rendered as verified evidence, the UI checks proposal
+provenance, exact baseline and candidate Evaluation Run IDs, Skill and target
+hashes, baseline/candidate revision targets, matching suite IDs, and matching
+runtime fingerprints. Historical Evaluation Runs are used directly, never
+reconstructed from the current suite. Exact-run navigation reuses the Step 4
+route. A result or recommendation is Friday-owned evaluation evidence;
+recommendation is not approval and never activates a candidate.
+
+Open proposals can be cancelled with explicit confirmation when the server
+state is not a known closed state. Cancellation is a single non-retrying write,
+has no optimistic state, and verifies the returned proposal ID, Skill ID, and
+`cancelled` status before invalidating the exact proposal and Skill collection.
+
+Candidate generation and evaluation remain worker-owned and brain-only. The
+browser never accepts a candidate prompt, calls a model, executes tools, or
+creates production Tasks, Runs, approvals, invocations, or gateway actions.
+Promotion and rollback controls remain absent. The authority invariant is
+unchanged: the Agent decides and reasons, Friday orchestrates and owns
+authority, and Skills influence reasoning without conferring authority.
+
+Step 5 is in progress and remains subject to review.
+
+Future Phase 23 work remains TBD after Step 5 review.

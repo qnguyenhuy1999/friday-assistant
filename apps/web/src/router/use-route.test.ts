@@ -65,6 +65,19 @@ describe("useRoute", () => {
     });
   });
 
+  it("reads the exact Skill improvement proposal route", () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=skill-improvement-proposal&id=proposal-1",
+    );
+    const { result } = renderHook(() => useRoute());
+    expect(result.current[0]).toEqual({
+      view: "skill-improvement-proposal",
+      id: "proposal-1",
+    });
+  });
+
   it("falls back to conversation for an unknown view", () => {
     window.history.replaceState({}, "", "/?view=nonsense&id=r-1");
     const { result } = renderHook(() => useRoute());

@@ -128,6 +128,13 @@ describe("SkillDetailPage", () => {
           return response(revision(2));
         if (method === "GET" && pathname.endsWith("/revisions"))
           return response(created ? [newRevision] : []);
+        if (method === "GET" && pathname.endsWith("/improvement-policy"))
+          return response(
+            { error: { type: "skill_not_found", message: "missing" } },
+            404,
+          );
+        if (method === "GET" && pathname.endsWith("/improvement-proposals"))
+          return response([]);
         if (method === "POST" && url.endsWith("/revisions")) {
           created = true;
           return response(newRevision, 201);
@@ -143,9 +150,14 @@ describe("SkillDetailPage", () => {
       screen.getByRole("button", { name: "Create immutable revision" }),
     );
 
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Created revision v1. It is not selected until activated.",
-    );
+    const statuses = await screen.findAllByRole("status");
+    expect(
+      statuses.some((element) =>
+        element.textContent?.includes(
+          "Created revision v1. It is not selected until activated.",
+        ),
+      ),
+    ).toBe(true);
     const post = fetchMock.mock.calls.find(
       ([input, init]) =>
         String(input).endsWith("/revisions") &&

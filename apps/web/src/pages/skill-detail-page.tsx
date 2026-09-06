@@ -1,6 +1,7 @@
 import type { Skill, SkillRevision } from "@friday/contracts";
 import { useState, type FormEvent } from "react";
 import { SkillUsageEvidenceSection } from "../components/skill-usage-evidence-section";
+import { SkillEvaluationSuitesSection } from "../components/skill-evaluation-suites-section";
 import {
   useActivateSkillRevision,
   useCreateSkillRevision,
@@ -114,10 +115,12 @@ export function SkillDetailPage({
   skillId,
   onBack,
   onViewRun,
+  onViewEvaluationRun,
 }: {
   skillId: string;
   onBack: () => void;
   onViewRun?: (runId: string) => void;
+  onViewEvaluationRun?: (runId: string) => void;
 }) {
   const skill = useSkill(skillId);
   const selectedRevisionLookup = useSkillRevision(
@@ -292,6 +295,13 @@ export function SkillDetailPage({
       <SkillUsageEvidenceSection
         skillId={current.id}
         onViewRun={onViewRun ?? (() => undefined)}
+      />
+
+      <SkillEvaluationSuitesSection
+        key={skillId}
+        skillId={current.id}
+        activeRevisionId={current.active_revision_id}
+        onViewEvaluationRun={onViewEvaluationRun ?? (() => undefined)}
       />
 
       {current.status === "archived" ? (

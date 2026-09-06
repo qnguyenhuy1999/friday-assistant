@@ -79,6 +79,42 @@ describe("App", () => {
     expect(window.location.search).toBe("?view=skills");
   });
 
+  it("routes an exact Skill Evaluation Run detail URL to its durable fetch", async () => {
+    vi.restoreAllMocks();
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "eval-run-1",
+          suite_id: "suite-1",
+          skill_id: "skill-1",
+          revision_id: "revision-1",
+          proposal_id: null,
+          status: "succeeded",
+          aggregate_result: { case_count: 0, passed: 0, score: 0 },
+          runtime_fingerprint: "d".repeat(64),
+          target_content_sha256: "a".repeat(64),
+          runtime_metadata: {},
+          suite_snapshot: { cases: [] },
+          case_results: [],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=skill-evaluation-run&id=eval-run-1",
+    );
+    renderApp();
+    expect(
+      await screen.findByRole("heading", { name: "Evaluation Run Detail" }),
+    ).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/v1/skills/evaluation-runs/eval-run-1",
+    );
+  });
+
   it("navigates from exact Skill usage evidence to its Run route", async () => {
     vi.restoreAllMocks();
     vi.spyOn(global, "fetch").mockImplementation(async (input) => {

@@ -52,6 +52,19 @@ describe("useRoute", () => {
     expect(detail.result.current[0]).toEqual({ view: "skill", id: "s-1" });
   });
 
+  it("reads the exact Skill Evaluation Run route", () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?view=skill-evaluation-run&id=eval-run-1",
+    );
+    const { result } = renderHook(() => useRoute());
+    expect(result.current[0]).toEqual({
+      view: "skill-evaluation-run",
+      id: "eval-run-1",
+    });
+  });
+
   it("falls back to conversation for an unknown view", () => {
     window.history.replaceState({}, "", "/?view=nonsense&id=r-1");
     const { result } = renderHook(() => useRoute());

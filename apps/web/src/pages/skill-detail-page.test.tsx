@@ -468,6 +468,42 @@ describe("SkillDetailPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("isolates evaluation-suite loading failures from revision and usage inspection", async () => {
+    vi.spyOn(global, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const pathname = new URL(url).pathname;
+      if (method === "GET" && pathname.endsWith("/evaluation-suites"))
+        return response(
+          {
+            error: { type: "unavailable", message: "evaluations unavailable" },
+          },
+          503,
+        );
+      if (method === "GET" && pathname.endsWith("/revisions/sr-2"))
+        return response(revision(2));
+      if (method === "GET" && pathname.endsWith("/revisions"))
+        return response([revision(2), revision(1)]);
+      if (method === "GET" && pathname.endsWith("/usage")) return response([]);
+      return response(skill);
+    });
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        "Failed to load Skill evaluation suites. Skill lifecycle, revision history, and usage evidence remain available.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Immutable revision history" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "No materialized usage evidence is available for this Skill.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("renders the bounded empty usage state without claiming the Skill was never used", async () => {
     mockDetailApi();
     renderPage();
